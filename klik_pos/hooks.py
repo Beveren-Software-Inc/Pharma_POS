@@ -65,6 +65,7 @@ fixtures = [
 			]
 		],
 	},
+ 
 ]
 
 add_to_apps_screen = [
