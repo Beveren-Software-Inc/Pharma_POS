@@ -4,6 +4,9 @@ app_publisher = "Beveren Sooftware Inc"
 app_description = "KLiK PoS: A Modern Point of Sale for your Business"
 app_email = "info@beverensoftware.com"
 app_license = "mit"
+app_icon_url = "/assets/klik_pos/images/Logo-klik.png"
+app_icon_title = "KLiK PoS"
+app_icon_route = "/klik_pos"
 
 # Apps
 # ------------------
@@ -11,15 +14,14 @@ app_license = "mit"
 # required_apps = []
 
 # Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "klik_pos",
-# 		"logo": "/assets/klik_pos/logo.png",
-# 		"title": "KLiK PoS",
-# 		"route": "/klik_pos",
-# 		"has_permission": "klik_pos.api.permission.has_app_permission"
-# 	}
-# ]
+add_to_apps_screen = [
+	{
+		"name": "klik_pos",
+		"logo": "/assets/klik_pos/images/Logo-klik.png",
+		"title": "KLiK PoS",
+		"route": "/klik_pos",
+	}
+]
 
 
 fixtures = [
@@ -65,15 +67,7 @@ fixtures = [
 			]
 		],
 	},
-]
-
-add_to_apps_screen = [
-	{
-		"name": "klik_pos",
-		"logo": "/assets/klik_pos/logo.png",
-		"title": "KLiK PoS",
-		"route": "/klik_pos",
-	}
+ 
 ]
 
 doc_events = {

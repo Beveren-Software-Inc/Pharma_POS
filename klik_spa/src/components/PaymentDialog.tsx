@@ -964,9 +964,9 @@ export default function PaymentDialog({
     await processPayment(selectedDeliveryPersonnel, selectedDeliveryVia);
   };
 
-  const handleDeliveryPersonnelSelect = (selection: { personnelName: string; deliveryVia: string | null }) => {
+  const handleDeliveryPersonnelSelect = (selection: { personnelName: string | null; deliveryVia: string | null }) => {
     // Called from the footer-triggered modal only; just store selection
-    setSelectedDeliveryPersonnel(selection.personnelName);
+    setSelectedDeliveryPersonnel(selection.personnelName || null);
     setSelectedDeliveryVia(selection.deliveryVia);
     setShowDeliveryPersonnelModal(false);
   };

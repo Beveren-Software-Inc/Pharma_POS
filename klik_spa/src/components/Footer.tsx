@@ -16,7 +16,7 @@ export default function Footer() {
       <div className="w-full py-2 flex justify-between items-center px-4">
 
         <div className="text-sm text-beveren-600 dark:text-beveren-400 font-bold">
-          KLiK PoS
+          Pharma PoS
         </div>
 
         <div className="text-xs text-gray-600 dark:text-gray-400">

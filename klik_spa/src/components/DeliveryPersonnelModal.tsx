@@ -8,7 +8,7 @@ import { useDeliveryChannels } from "../hooks/useDeliveryChannels";
 interface DeliveryPersonnelModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelect: (selection: { personnelName: string; deliveryVia: string | null }) => void;
+  onSelect: (selection: { personnelName: string | null; deliveryVia: string | null }) => void;
 }
 
 export default function DeliveryPersonnelModal({
@@ -81,8 +81,11 @@ export default function DeliveryPersonnelModal({
   };
 
   const handleConfirm = () => {
-    if (selectedPersonnel) {
-      onSelect({ personnelName: selectedPersonnel, deliveryVia: selectedChannel || null });
+    if (selectedPersonnel || selectedChannel) {
+      onSelect({
+        personnelName: selectedPersonnel || null,
+        deliveryVia: selectedChannel || null,
+      });
       onClose();
     }
   };
@@ -318,7 +321,7 @@ export default function DeliveryPersonnelModal({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={!selectedPersonnel || loading || channelsLoading}
+            disabled={(!selectedPersonnel && !selectedChannel) || loading || channelsLoading}
             className="px-4 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
           >
             Confirm
