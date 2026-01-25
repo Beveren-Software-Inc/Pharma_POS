@@ -710,8 +710,19 @@ const getStatusBadge = (status: string) => {
     const hasReturnable = invoice.items.some(item => {
       const soldQty = item.qty || item.quantity || 0;
       const returnedQty = item.returned_qty || 0;
-      const canReturn = returnedQty < soldQty;
-      return canReturn;
+      const hasAvailableQty = returnedQty < soldQty;
+      
+      // Check if item is non-returnable
+      if (item.is_non_returnable) {
+        return false;
+      }
+      
+      // Check if item is refrigerated and overdue
+      if (item.is_refrigerated_overdue) {
+        return false;
+      }
+      
+      return hasAvailableQty;
     });
 
     return hasReturnable;
