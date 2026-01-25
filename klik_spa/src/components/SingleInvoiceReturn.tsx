@@ -126,6 +126,22 @@ export default function SingleInvoiceReturn({
         throw new Error(invoiceDetails.error || 'Failed to fetch invoice details from backend');
       }
 
+      // NEW RULE: Check invoice age first - all invoices older than 14 days cannot be returned
+      const invoiceDate = invoiceWithItems.posting_date || invoiceWithItems.date;
+      if (invoiceDate) {
+        const invoiceDateObj = new Date(invoiceDate);
+        const today = new Date();
+        const daysSinceInvoice = Math.floor((today.getTime() - invoiceDateObj.getTime()) / (1000 * 60 * 60 * 24));
+        
+        if (daysSinceInvoice > 14) {
+          // Invoice is too old - show message and return empty items
+          toast.warning(`This invoice is ${daysSinceInvoice} days old. Returns are only allowed within 14 days of the invoice date.`);
+          setReturnItems([]);
+          setLoadingReturnData(false);
+          return;
+        }
+      }
+
         const items: ReturnItem[] = [];
 
         // Handle different possible item structures
@@ -155,15 +171,16 @@ export default function SingleInvoiceReturn({
         const rate = Number(item.rate ?? item.unitPrice ?? 0);
         const amount = Number(item.amount ?? item.total ?? (qty * rate));
 
-        // Check if item is non-returnable or refrigerated and overdue
+        // For invoices <= 14 days, check item restrictions
+        // Check if item is non-returnable (Item Group flag) OR refrigerated (Item flag)
         // Handle both boolean and string/number values from backend
         const isNonReturnable = item.is_non_returnable === true || item.is_non_returnable === 1 || item.is_non_returnable === "1" || item.is_non_returnable === "true";
-        const isRefrigeratedOverdue = item.is_refrigerated_overdue === true || item.is_refrigerated_overdue === 1 || item.is_refrigerated_overdue === "1" || item.is_refrigerated_overdue === "true";
+        const isRefrigerated = item.is_refrigerated_overdue === true || item.is_refrigerated_overdue === 1 || item.is_refrigerated_overdue === "1" || item.is_refrigerated_overdue === "true";
         
         // Debug logging for all items
         console.log(`Processing item ${itemCode}:`, {
           isNonReturnable,
-          isRefrigeratedOverdue,
+          isRefrigerated,
           raw_is_non_returnable: item.is_non_returnable,
           raw_is_refrigerated_overdue: item.is_refrigerated_overdue,
           item_group: item.item_group,
@@ -172,8 +189,8 @@ export default function SingleInvoiceReturn({
           available_qty: qty - returnedQty
         });
         
-        // Skip items that cannot be returned
-        if (isNonReturnable || isRefrigeratedOverdue) {
+        // Skip items that cannot be returned (non-returnable group OR refrigerated item)
+        if (isNonReturnable || isRefrigerated) {
           console.log(`Item ${itemCode} filtered out due to restrictions`);
           continue;
         }
@@ -478,9 +495,18 @@ export default function SingleInvoiceReturn({
                         No Items Available for Return
                       </h4>
                       <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                        {returnItems.every(item => item.available_qty === 0)
-                          ? "All items from this invoice have already been returned."
-                          : "All items from this invoice are non-returnable or have restrictions."}
+                        {(() => {
+                          const invoiceDate = invoice?.posting_date || invoice?.date;
+                          if (invoiceDate) {
+                            const invoiceDateObj = new Date(invoiceDate);
+                            const today = new Date();
+                            const daysSinceInvoice = Math.floor((today.getTime() - invoiceDateObj.getTime()) / (1000 * 60 * 60 * 24));
+                            if (daysSinceInvoice > 14) {
+                              return `This invoice is ${daysSinceInvoice} days old. Returns are only allowed within 14 days of the invoice date.`;
+                            }
+                          }
+                          return "All items from this invoice are non-returnable, refrigerated, or have already been returned.";
+                        })()}
                       </p>
                     </div>
                   </div>

@@ -315,17 +315,30 @@ export default function ClosingShiftPage() {
       return false;
     }
 
+    // NEW RULE: Check invoice age first - all invoices older than 14 days cannot be returned
+    const invoiceDate = invoice.posting_date || invoice.date;
+    if (invoiceDate) {
+      const invoiceDateObj = new Date(invoiceDate);
+      const today = new Date();
+      const daysSinceInvoice = Math.floor((today.getTime() - invoiceDateObj.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (daysSinceInvoice > 14) {
+        return false; // Invoice is too old
+      }
+    }
+
+    // For invoices <= 14 days, check item restrictions
     const hasReturnable = invoice.items.some(item => {
       const soldQty = item.qty || item.quantity || 0;
       const returnedQty = item.returned_qty || 0;
       const hasAvailableQty = returnedQty < soldQty;
       
-      // Check if item is non-returnable
+      // Check if item is non-returnable (Item Group flag)
       if (item.is_non_returnable) {
         return false;
       }
       
-      // Check if item is refrigerated and overdue
+      // Check if item is refrigerated (Item flag)
       if (item.is_refrigerated_overdue) {
         return false;
       }
