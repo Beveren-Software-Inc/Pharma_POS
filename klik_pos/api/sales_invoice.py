@@ -127,12 +127,10 @@ def _build_filters_and_fields(skip_opening_entry_filter=False, cashier_user_ids=
 	user_roles = frappe.get_roles()
 	is_admin_user = "Administrator" in user_roles or "System Manager" in user_roles
 
-	# Skip opening entry filter if requested (for Invoice History page - show all invoices for cashier)
 	if skip_opening_entry_filter:
 		frappe.logger().info(
 			f"Skipping opening entry filter - showing all invoices for user {frappe.session.user}"
 		)
-		# Don't filter by opening entry - show all invoices
 		filters = {}
 	elif is_admin_user:
 		frappe.logger().info(
@@ -145,11 +143,9 @@ def _build_filters_and_fields(skip_opening_entry_filter=False, cashier_user_ids=
 		frappe.logger().info("No active POS opening entry found, showing all POS invoices")
 		filters = {"custom_pos_opening_entry": ["!=", ""]}
 
-	# Check if ZATCA status field exists
 	sales_invoice_meta = frappe.get_meta("Sales Invoice")
 	has_zatca_status = any(df.fieldname == "custom_zatca_submit_status" for df in sales_invoice_meta.fields)
 
-	# Build fields list
 	fields = [
 		"name",
 		"posting_date",
@@ -170,7 +166,6 @@ def _build_filters_and_fields(skip_opening_entry_filter=False, cashier_user_ids=
 	if has_zatca_status:
 		fields.append("custom_zatca_submit_status")
 
-	# Add cashier filter if provided
 	if cashier_user_ids:
 		if len(cashier_user_ids) == 1:
 			filters["owner"] = cashier_user_ids[0]
@@ -410,7 +405,7 @@ def check_invoice_return_eligibility(invoice_id):
 def _get_invoice_items_with_returns(invoice_id, customer):
 	"""
 	Fetch invoice items and calculate returned/available quantities.
-	Includes item_group and custom_is_refrigerated for return validation.
+	Includes item_group and custom_is_refrigerated_ for return validation.
 	"""
 	# Batch fetch all items for this invoice with item_group
 	items_query = """
@@ -455,15 +450,15 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 			ig_data = frappe.db.sql(item_group_query, as_dict=True)
 			item_group_map = {ig.name: bool(ig.custom_non_returnable) for ig in ig_data}
 		
-		# Fetch item custom_is_refrigerated flag
-		if frappe.db.has_column("Item", "custom_is_refrigerated"):
+		# Fetch item custom_is_refrigerated_ flag
+		if frappe.db.has_column("Item", "custom_is_refrigerated_"):
 			item_query = """
-				SELECT name, custom_is_refrigerated
+				SELECT name, custom_is_refrigerated_
 				FROM `tabItem`
 				WHERE name IN ({})
 			""".format(",".join([f"'{code}'" for code in item_codes]))
 			item_data = frappe.db.sql(item_query, as_dict=True)
-			item_refrigerated_map = {item.name: bool(item.custom_is_refrigerated) for item in item_data}
+			item_refrigerated_map = {item.name: bool(item.custom_is_refrigerated_) for item in item_data}
 
 	# Get invoice date for refrigerated check
 	invoice_doc = frappe.get_doc("Sales Invoice", invoice_id)
@@ -503,14 +498,34 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 		returned_qty_value = returned_qty_map.get(item.item_code, 0)
 		available_qty = round(item.qty - returned_qty_value, 6)
 		
-		# Check if item is non-returnable
+		# NEW RULE: If invoice is older than 14 days, mark all items as non-returnable
+		if days_since_invoice > 14:
+			
+			items.append(
+				{
+					"item_code": item.item_code,
+					"item_name": item.item_name,
+					"qty": item.qty,
+					"rate": item.rate,
+					"amount": item.amount,
+					"description": item.description,
+					"returned_qty": returned_qty_value,
+					"available_qty": available_qty,
+					"item_group": item.item_group,
+					"is_non_returnable": True,  
+					"is_refrigerated_overdue": False,
+				}
+			)
+			continue
+		
+	
 		is_non_returnable = False
 		if item.item_group and item.item_group in item_group_map:
 			is_non_returnable = item_group_map[item.item_group]
 		
-		is_refrigerated_overdue = False
-		if days_since_invoice > 14 and item.item_code in item_refrigerated_map:
-			is_refrigerated_overdue = item_refrigerated_map[item.item_code]
+		is_refrigerated = False
+		if item.item_code in item_refrigerated_map:
+			is_refrigerated = item_refrigerated_map[item.item_code]
 		
 		items.append(
 			{
@@ -524,7 +539,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 				"available_qty": available_qty,
 				"item_group": item.item_group,
 				"is_non_returnable": is_non_returnable,
-				"is_refrigerated_overdue": is_refrigerated_overdue,
+				"is_refrigerated_overdue": is_refrigerated,
 			}
 		)
 
@@ -1174,7 +1189,7 @@ def validate_return_restrictions(invoice_doc):
 	"""
 	Validate if an invoice can be returned based on:
 	1. Item Group custom_non_returnable field
-	2. Item custom_is_refrigerated field (after 14 days)
+	2. Item custom_is_refrigerated_ field (after 14 days)
 	
 	Args:
 		invoice_doc: Sales Invoice document (original invoice if this is a return)
@@ -1222,7 +1237,11 @@ def validate_return_restrictions(invoice_doc):
 	# Now safe to subtract
 	days_since_invoice = (today_date - invoice_date).days
 	
-	# Check each item
+	# NEW RULE: All invoices older than 14 days cannot be returned
+	if days_since_invoice > 14:
+		return False, f"Cannot return this invoice. Invoice is {days_since_invoice} days old. Returns are only allowed within 14 days of the invoice date."
+	
+	# For invoices <= 14 days, check item/group restrictions
 	non_returnable_items = []
 	refrigerated_items = []
 	
@@ -1238,14 +1257,13 @@ def validate_return_restrictions(invoice_doc):
 			except Exception:
 				pass
 		
-		# Check Item refrigerated flag (after 14 days)
-		if days_since_invoice > 14:
-			try:
-				item_doc = frappe.get_doc("Item", item_code)
-				if getattr(item_doc, "custom_is_refrigerated", 0):
-					refrigerated_items.append(f"{item_code} ({item.item_name or item_code})")
-			except Exception:
-				pass
+		# Check Item refrigerated flag (no age restriction needed here since we already checked invoice age)
+		try:
+			item_doc = frappe.get_doc("Item", item_code)
+			if getattr(item_doc, "custom_is_refrigerated_", 0):
+				refrigerated_items.append(f"{item_code} ({item.item_name or item_code})")
+		except Exception:
+			pass
 	
 	error_parts = []
 	if non_returnable_items:
@@ -1254,7 +1272,7 @@ def validate_return_restrictions(invoice_doc):
 			error_parts[-1] += f" and {len(non_returnable_items) - 3} more"
 	
 	if refrigerated_items:
-		error_parts.append(f"Refrigerated items (over 14 days old): {', '.join(refrigerated_items[:3])}")
+		error_parts.append(f"Refrigerated items: {', '.join(refrigerated_items[:3])}")
 		if len(refrigerated_items) > 3:
 			error_parts[-1] += f" and {len(refrigerated_items) - 3} more"
 	
@@ -2016,7 +2034,40 @@ def create_partial_return(
 		if original_invoice.is_return:
 			frappe.throw("This invoice is already a return.")
 		
-		# Validate return restrictions for items being returned
+		# NEW RULE: Check if invoice is older than 14 days first
+		invoice_date_raw = original_invoice.posting_date or original_invoice.creation
+		invoice_date = None
+		try:
+			if invoice_date_raw:
+				invoice_date = frappe.utils.getdate(invoice_date_raw)
+				if not isinstance(invoice_date, date_type):
+					invoice_date = frappe.utils.getdate(str(invoice_date_raw))
+		except Exception:
+			pass
+		
+		if not invoice_date or not isinstance(invoice_date, date_type):
+			invoice_date = frappe.utils.today()
+			if not isinstance(invoice_date, date_type):
+				from datetime import datetime
+				try:
+					if isinstance(invoice_date, str):
+						invoice_date = datetime.strptime(invoice_date, "%Y-%m-%d").date()
+					else:
+						invoice_date = frappe.utils.today()
+				except Exception:
+					invoice_date = frappe.utils.today()
+		
+		today_date = frappe.utils.today()
+		if not isinstance(today_date, date_type):
+			today_date = frappe.utils.getdate(today_date)
+		
+		days_since_invoice = (today_date - invoice_date).days
+		
+		# Block all returns if invoice is older than 14 days
+		if days_since_invoice > 14:
+			frappe.throw(f"Cannot return this invoice. Invoice is {days_since_invoice} days old. Returns are only allowed within 14 days of the invoice date.")
+		
+		# Validate return restrictions for items being returned (only for invoices <= 14 days)
 		# Check if any of the return_items belong to non-returnable groups or are refrigerated
 		if return_items:
 			# Get item codes being returned
@@ -2025,20 +2076,6 @@ def create_partial_return(
 			# Check each item being returned
 			non_returnable_items = []
 			refrigerated_items = []
-			
-			invoice_date = original_invoice.posting_date or original_invoice.creation
-			# Always convert to date object using frappe.utils.getdate which handles strings, dates, and datetimes
-			try:
-				if invoice_date:
-					invoice_date = frappe.utils.getdate(invoice_date)
-				else:
-					# If no date available, use today (will allow return)
-					invoice_date = frappe.utils.today()
-			except Exception:
-				# If conversion fails, use today (will allow return)
-				invoice_date = frappe.utils.today()
-			
-			days_since_invoice = (frappe.utils.today() - invoice_date).days
 			
 			for item_code in return_item_codes:
 				# Find the original item in the invoice
@@ -2060,14 +2097,13 @@ def create_partial_return(
 					except Exception:
 						pass
 				
-				# Check refrigerated (after 14 days)
-				if days_since_invoice > 14:
-					try:
-						item_doc = frappe.get_doc("Item", item_code)
-						if getattr(item_doc, "custom_is_refrigerated", 0):
-							refrigerated_items.append(f"{item_code} ({original_item.item_name or item_code})")
-					except Exception:
-						pass
+				# Check refrigerated (no age restriction needed since we already checked invoice age)
+				try:
+					item_doc = frappe.get_doc("Item", item_code)
+					if getattr(item_doc, "custom_is_refrigerated_", 0):
+						refrigerated_items.append(f"{item_code} ({original_item.item_name or item_code})")
+				except Exception:
+					pass
 			
 			# Build error messages
 			error_parts = []
@@ -2077,7 +2113,7 @@ def create_partial_return(
 					error_parts[-1] += f" and {len(non_returnable_items) - 3} more"
 			
 			if refrigerated_items:
-				error_parts.append(f"Refrigerated items (over 14 days old): {', '.join(refrigerated_items[:3])}")
+				error_parts.append(f"Refrigerated items: {', '.join(refrigerated_items[:3])}")
 				if len(refrigerated_items) > 3:
 					error_parts[-1] += f" and {len(refrigerated_items) - 3} more"
 			
