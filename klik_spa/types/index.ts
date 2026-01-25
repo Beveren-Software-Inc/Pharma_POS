@@ -97,7 +97,9 @@ export interface SalesInvoiceItem {
   description?: string
   returned_qty?: number
   available_qty?: number
-
+  item_group?: string
+  is_non_returnable?: boolean
+  is_refrigerated_overdue?: boolean
 }
 
 export interface SalesInvoice {

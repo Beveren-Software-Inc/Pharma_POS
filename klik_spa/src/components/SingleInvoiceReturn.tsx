@@ -155,6 +155,28 @@ export default function SingleInvoiceReturn({
         const rate = Number(item.rate ?? item.unitPrice ?? 0);
         const amount = Number(item.amount ?? item.total ?? (qty * rate));
 
+        // Check if item is non-returnable or refrigerated and overdue
+        // Handle both boolean and string/number values from backend
+        const isNonReturnable = item.is_non_returnable === true || item.is_non_returnable === 1 || item.is_non_returnable === "1" || item.is_non_returnable === "true";
+        const isRefrigeratedOverdue = item.is_refrigerated_overdue === true || item.is_refrigerated_overdue === 1 || item.is_refrigerated_overdue === "1" || item.is_refrigerated_overdue === "true";
+        
+        // Debug logging for all items
+        console.log(`Processing item ${itemCode}:`, {
+          isNonReturnable,
+          isRefrigeratedOverdue,
+          raw_is_non_returnable: item.is_non_returnable,
+          raw_is_refrigerated_overdue: item.is_refrigerated_overdue,
+          item_group: item.item_group,
+          qty,
+          returnedQty,
+          available_qty: qty - returnedQty
+        });
+        
+        // Skip items that cannot be returned
+        if (isNonReturnable || isRefrigeratedOverdue) {
+          console.log(`Item ${itemCode} filtered out due to restrictions`);
+          continue;
+        }
 
         items.push({
           item_code: itemCode,
@@ -447,7 +469,7 @@ export default function SingleInvoiceReturn({
               </div>
 
               {/* Warning for no returnable items */}
-              {returnItems.every(item => item.available_qty === 0) && (
+              {returnItems.length === 0 && (
                 <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                   <div className="flex items-center space-x-3">
                     <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
@@ -456,7 +478,9 @@ export default function SingleInvoiceReturn({
                         No Items Available for Return
                       </h4>
                       <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                        All items from this invoice have already been returned.
+                        {returnItems.every(item => item.available_qty === 0)
+                          ? "All items from this invoice have already been returned."
+                          : "All items from this invoice are non-returnable or have restrictions."}
                       </p>
                     </div>
                   </div>

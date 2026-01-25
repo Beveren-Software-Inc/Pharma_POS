@@ -5,6 +5,7 @@ import frappe
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 from frappe import _
 from frappe.utils import flt
+from datetime import datetime, timedelta, date as date_type
 
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
@@ -378,15 +379,44 @@ def get_invoice_details(invoice_id):
 		return {"success": False, "error": str(e)}
 
 
+@frappe.whitelist(allow_guest=True)
+def check_invoice_return_eligibility(invoice_id):
+	"""
+	Check if an invoice can be returned based on item restrictions.
+	Returns can_return boolean and reason if not returnable.
+	"""
+	try:
+		invoice = frappe.get_doc("Sales Invoice", invoice_id)
+		
+		if invoice.is_return:
+			return {"can_return": False, "reason": "This invoice is already a return."}
+		
+		if invoice.docstatus != 1:
+			return {"can_return": False, "reason": "Only submitted invoices can be returned."}
+		
+		# Use the validation function
+		can_return, error_message = validate_return_restrictions(invoice)
+		
+		return {
+			"can_return": can_return,
+			"reason": error_message if not can_return else None,
+		}
+	
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), f"Error checking return eligibility for invoice {invoice_id}")
+		return {"can_return": False, "reason": f"Error checking eligibility: {str(e)}"}
+
+
 def _get_invoice_items_with_returns(invoice_id, customer):
 	"""
 	Fetch invoice items and calculate returned/available quantities.
+	Includes item_group and custom_is_refrigerated for return validation.
 	"""
-	# Batch fetch all items for this invoice
+	# Batch fetch all items for this invoice with item_group
 	items_query = """
-		SELECT item_code, item_name, qty, rate, amount, description
-		FROM `tabSales Invoice Item`
-		WHERE parent = %s
+		SELECT sii.item_code, sii.item_name, sii.qty, sii.rate, sii.amount, sii.description, sii.item_group
+		FROM `tabSales Invoice Item` sii
+		WHERE sii.parent = %s
 	"""
 	items_data = frappe.db.sql(items_query, (invoice_id,), as_dict=True)
 
@@ -410,12 +440,78 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 		returns_data = frappe.db.sql(returns_query, (invoice_id, customer), as_dict=True)
 		returned_qty_map = {row.item_code: row.total_returned_qty for row in returns_data}
 
-	# Build items list with return data
+	# Batch fetch item custom fields and item group flags
+	item_group_map = {}
+	item_refrigerated_map = {}
+	
+	if item_codes:
+		item_groups = list(set([item.item_group for item in items_data if item.item_group]))
+		if item_groups:
+			item_group_query = """
+				SELECT name, custom_non_returnable
+				FROM `tabItem Group`
+				WHERE name IN ({})
+			""".format(",".join([f"'{ig}'" for ig in item_groups]))
+			ig_data = frappe.db.sql(item_group_query, as_dict=True)
+			item_group_map = {ig.name: bool(ig.custom_non_returnable) for ig in ig_data}
+		
+		# Fetch item custom_is_refrigerated flag
+		if frappe.db.has_column("Item", "custom_is_refrigerated"):
+			item_query = """
+				SELECT name, custom_is_refrigerated
+				FROM `tabItem`
+				WHERE name IN ({})
+			""".format(",".join([f"'{code}'" for code in item_codes]))
+			item_data = frappe.db.sql(item_query, as_dict=True)
+			item_refrigerated_map = {item.name: bool(item.custom_is_refrigerated) for item in item_data}
+
+	# Get invoice date for refrigerated check
+	invoice_doc = frappe.get_doc("Sales Invoice", invoice_id)
+	invoice_date_raw = invoice_doc.posting_date or invoice_doc.creation
+	
+	invoice_date = None
+	try:
+		if invoice_date_raw:
+			invoice_date = frappe.utils.getdate(invoice_date_raw)
+			if not isinstance(invoice_date, date_type):
+				invoice_date = frappe.utils.getdate(str(invoice_date_raw))
+	except Exception:
+		pass
+	
+	# Fallback to today if conversion failed
+	if not invoice_date or not isinstance(invoice_date, date_type):
+		invoice_date = frappe.utils.today()
+		if not isinstance(invoice_date, date_type):
+			from datetime import datetime
+			try:
+				if isinstance(invoice_date, str):
+					invoice_date = datetime.strptime(invoice_date, "%Y-%m-%d").date()
+				else:
+					invoice_date = frappe.utils.today()
+			except Exception:
+				invoice_date = frappe.utils.today()
+	
+	# Get today's date
+	today_date = frappe.utils.today()
+	if not isinstance(today_date, date_type):
+		today_date = frappe.utils.getdate(today_date)
+	
+	days_since_invoice = (today_date - invoice_date).days
+
 	items = []
 	for item in items_data:
 		returned_qty_value = returned_qty_map.get(item.item_code, 0)
 		available_qty = round(item.qty - returned_qty_value, 6)
-
+		
+		# Check if item is non-returnable
+		is_non_returnable = False
+		if item.item_group and item.item_group in item_group_map:
+			is_non_returnable = item_group_map[item.item_group]
+		
+		is_refrigerated_overdue = False
+		if days_since_invoice > 14 and item.item_code in item_refrigerated_map:
+			is_refrigerated_overdue = item_refrigerated_map[item.item_code]
+		
 		items.append(
 			{
 				"item_code": item.item_code,
@@ -426,6 +522,9 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 				"description": item.description,
 				"returned_qty": returned_qty_value,
 				"available_qty": available_qty,
+				"item_group": item.item_group,
+				"is_non_returnable": is_non_returnable,
+				"is_refrigerated_overdue": is_refrigerated_overdue,
 			}
 		)
 
@@ -1071,6 +1170,122 @@ def get_expense_accounts(item_code):
 from frappe.model.mapper import get_mapped_doc
 
 
+def validate_return_restrictions(invoice_doc):
+	"""
+	Validate if an invoice can be returned based on:
+	1. Item Group custom_non_returnable field
+	2. Item custom_is_refrigerated field (after 14 days)
+	
+	Args:
+		invoice_doc: Sales Invoice document (original invoice if this is a return)
+	
+	Returns:
+		tuple: (can_return: bool, error_message: str)
+	"""
+	if not invoice_doc or not invoice_doc.items:
+		return True, None
+	
+	original_invoice = invoice_doc
+	if invoice_doc.is_return and invoice_doc.return_against:
+		try:
+			original_invoice = frappe.get_doc("Sales Invoice", invoice_doc.return_against)
+		except Exception:
+			original_invoice = invoice_doc
+	
+	invoice_date_raw = original_invoice.posting_date or original_invoice.creation
+	
+	invoice_date = None
+	try:
+		if invoice_date_raw:
+			invoice_date = frappe.utils.getdate(invoice_date_raw)
+			if not isinstance(invoice_date, date_type):
+				invoice_date = frappe.utils.getdate(str(invoice_date_raw))
+	except Exception:
+		pass
+	
+	if not invoice_date or not isinstance(invoice_date, date_type):
+		invoice_date = frappe.utils.today()
+		if not isinstance(invoice_date, date_type):
+			from datetime import datetime
+			try:
+				if isinstance(invoice_date, str):
+					invoice_date = datetime.strptime(invoice_date, "%Y-%m-%d").date()
+				else:
+					invoice_date = frappe.utils.today()
+			except Exception:
+				invoice_date = frappe.utils.today()
+	
+	today_date = frappe.utils.today()
+	if not isinstance(today_date, date_type):
+		today_date = frappe.utils.getdate(today_date)
+	
+	# Now safe to subtract
+	days_since_invoice = (today_date - invoice_date).days
+	
+	# Check each item
+	non_returnable_items = []
+	refrigerated_items = []
+	
+	for item in original_invoice.items:
+		item_code = item.item_code
+		
+		# Check Item Group non-returnable flag
+		if item.item_group:
+			try:
+				item_group_doc = frappe.get_doc("Item Group", item.item_group)
+				if getattr(item_group_doc, "custom_non_returnable", 0):
+					non_returnable_items.append(f"{item_code} ({item.item_name or item_code})")
+			except Exception:
+				pass
+		
+		# Check Item refrigerated flag (after 14 days)
+		if days_since_invoice > 14:
+			try:
+				item_doc = frappe.get_doc("Item", item_code)
+				if getattr(item_doc, "custom_is_refrigerated", 0):
+					refrigerated_items.append(f"{item_code} ({item.item_name or item_code})")
+			except Exception:
+				pass
+	
+	error_parts = []
+	if non_returnable_items:
+		error_parts.append(f"Items from non-returnable groups: {', '.join(non_returnable_items[:3])}")
+		if len(non_returnable_items) > 3:
+			error_parts[-1] += f" and {len(non_returnable_items) - 3} more"
+	
+	if refrigerated_items:
+		error_parts.append(f"Refrigerated items (over 14 days old): {', '.join(refrigerated_items[:3])}")
+		if len(refrigerated_items) > 3:
+			error_parts[-1] += f" and {len(refrigerated_items) - 3} more"
+	
+	if error_parts:
+		error_message = "Cannot return this invoice. " + ". ".join(error_parts) + "."
+		return False, error_message
+	
+	return True, None
+
+
+def validate_sales_invoice_return(doc, method):
+	"""
+	Validate return restrictions before saving a Sales Invoice.
+	This hook is called on validate for Sales Invoice documents.
+	"""
+	if doc.doctype != "Sales Invoice":
+		return
+	
+	# Only validate if this is a return invoice
+	if not doc.is_return:
+		return
+	
+	# Skip validation for draft documents (they haven't been submitted yet)
+	if doc.docstatus == 0:
+		return
+	
+	can_return, error_message = validate_return_restrictions(doc)
+	if not can_return:
+		frappe.throw(_(error_message))
+
+
 @frappe.whitelist()
 def return_sales_invoice(invoice_name):
 	try:
@@ -1081,6 +1296,11 @@ def return_sales_invoice(invoice_name):
 
 		if original_invoice.is_return:
 			frappe.throw("This invoice is already a return.")
+		
+		# Validate return restrictions
+		can_return, error_message = validate_return_restrictions(original_invoice)
+		if not can_return:
+			frappe.throw(error_message)
 
 		# Exclude payment mapping
 		return_doc = get_mapped_doc(
@@ -1795,6 +2015,75 @@ def create_partial_return(
 
 		if original_invoice.is_return:
 			frappe.throw("This invoice is already a return.")
+		
+		# Validate return restrictions for items being returned
+		# Check if any of the return_items belong to non-returnable groups or are refrigerated
+		if return_items:
+			# Get item codes being returned
+			return_item_codes = [item.get("item_code") for item in return_items if item.get("return_qty", 0) > 0]
+			
+			# Check each item being returned
+			non_returnable_items = []
+			refrigerated_items = []
+			
+			invoice_date = original_invoice.posting_date or original_invoice.creation
+			# Always convert to date object using frappe.utils.getdate which handles strings, dates, and datetimes
+			try:
+				if invoice_date:
+					invoice_date = frappe.utils.getdate(invoice_date)
+				else:
+					# If no date available, use today (will allow return)
+					invoice_date = frappe.utils.today()
+			except Exception:
+				# If conversion fails, use today (will allow return)
+				invoice_date = frappe.utils.today()
+			
+			days_since_invoice = (frappe.utils.today() - invoice_date).days
+			
+			for item_code in return_item_codes:
+				# Find the original item in the invoice
+				original_item = None
+				for inv_item in original_invoice.items:
+					if inv_item.item_code == item_code:
+						original_item = inv_item
+						break
+				
+				if not original_item:
+					continue
+				
+				# Check Item Group
+				if original_item.item_group:
+					try:
+						item_group_doc = frappe.get_doc("Item Group", original_item.item_group)
+						if getattr(item_group_doc, "custom_non_returnable", 0):
+							non_returnable_items.append(f"{item_code} ({original_item.item_name or item_code})")
+					except Exception:
+						pass
+				
+				# Check refrigerated (after 14 days)
+				if days_since_invoice > 14:
+					try:
+						item_doc = frappe.get_doc("Item", item_code)
+						if getattr(item_doc, "custom_is_refrigerated", 0):
+							refrigerated_items.append(f"{item_code} ({original_item.item_name or item_code})")
+					except Exception:
+						pass
+			
+			# Build error messages
+			error_parts = []
+			if non_returnable_items:
+				error_parts.append(f"Items from non-returnable groups: {', '.join(non_returnable_items[:3])}")
+				if len(non_returnable_items) > 3:
+					error_parts[-1] += f" and {len(non_returnable_items) - 3} more"
+			
+			if refrigerated_items:
+				error_parts.append(f"Refrigerated items (over 14 days old): {', '.join(refrigerated_items[:3])}")
+				if len(refrigerated_items) > 3:
+					error_parts[-1] += f" and {len(refrigerated_items) - 3} more"
+			
+			if error_parts:
+				error_message = "Cannot return selected items. " + ". ".join(error_parts) + "."
+				frappe.throw(error_message)
 
 		# Create return invoice using the same approach as return_sales_invoice
 		return_doc = get_mapped_doc(

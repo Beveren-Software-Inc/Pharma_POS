@@ -63,6 +63,7 @@ fixtures = [
 					"Sales Invoice-custom_delivery_personnel_name",
 					"POS Profile-custom_pharmacy_default_uom",
 					"Sales Invoice-custom_delivery_via",
+					"Item Group-custom_non_returnable",
 				),
 			]
 		],
@@ -75,6 +76,7 @@ doc_events = {
 		"validate": [
 			"klik_pos.api.sales_invoice.set_base_roundoff_amount",
 			"klik_pos.api.sales_invoice.set_grand_total_with_roundoff",
+			"klik_pos.api.sales_invoice.validate_sales_invoice_return",
 		],
 		# "before_save": [
 		# 	"klik_pos.api.sales_invoice.sync_return_payments_before_save",
