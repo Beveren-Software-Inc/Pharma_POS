@@ -1,0 +1,53 @@
+{
+ "app": "klik_pos",
+ "charts": [],
+ "content": "[{\"id\":\"FcIZ54cymf\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Home</span>\",\"col\":12}},{\"id\":\"r_0-ZqR6Xv\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Klik POS\",\"col\":3}}]",
+ "creation": "2026-01-26 00:00:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "home",
+ "idx": 0,
+ "indicator_color": "green",
+ "is_hidden": 0,
+ "label": "Home",
+ "links": [
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Klik POS",
+   "link_count": 0,
+   "link_to": "",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link",
+   "url": "/klik_pos"
+  }
+ ],
+ "modified": "2026-01-26 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "KLIK POS",
+ "name": "Klik POS",
+ "number_cards": [],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [],
+ "sequence_id": 40.0,
+ "shortcuts": [
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Klik POS",
+   "type": "URL",
+   "url": "/klik_pos"
+  }
+ ],
+ "title": "Klik POS",
+ "type": "Workspace"
+}
