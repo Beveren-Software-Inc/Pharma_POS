@@ -77,9 +77,17 @@ export function ProductProvider({ children }: ProductProviderProps) {
       if (category && category !== 'all') {
         params.append('category', category);
       }
-      const response = await fetch(
-        `/api/method/klik_pos.api.item.get_items_with_balance_and_price?${params.toString()}`
-      );
+      // Use a custom fetch that explicitly prevents Expect header
+      const url = `/api/method/klik_pos.api.item.get_items_with_balance_and_price?${params.toString()}`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+        credentials: 'include',
+        // Explicitly set cache to prevent any automatic headers
+        cache: 'no-cache',
+      });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
