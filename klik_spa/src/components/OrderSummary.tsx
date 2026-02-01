@@ -31,6 +31,7 @@ import { useCartStore } from "../stores/cartStore";
 import { getPrescriptionDosages, type PrescriptionDosage } from "../services/prescriptionDosageService";
 import { searchPatients, getPendingInpatientMedicationOrders, type Patient, type InpatientMedicationOrder } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
+import { getItemUOMsAndPrices } from "../services/uomService";
 
 
 interface OrderSummaryProps {
@@ -617,7 +618,24 @@ export default function OrderSummary({
     typeof posDetails?.custom_pharmacy_default_uom === "string"
       ? posDetails.custom_pharmacy_default_uom.trim()
       : "";
-  
+
+  /** Convert quantity from order UOM to cart UOM using Item UOM conversion factors. If no conversion, assume 1:1. */
+  const convertOrderQuantityToCartUOM = useCallback(
+    async (itemCode: string, orderQuantity: number, orderUom: string | undefined, cartUom: string): Promise<number> => {
+      if (!orderUom || orderUom === cartUom) return orderQuantity;
+      try {
+        const { base_uom, uoms } = await getItemUOMsAndPrices(itemCode);
+        const orderFactor = orderUom === base_uom ? 1 : (uoms.find((u) => u.uom === orderUom)?.conversion_factor ?? 1);
+        const cartFactor = cartUom === base_uom ? 1 : (uoms.find((u) => u.uom === cartUom)?.conversion_factor ?? 1);
+        if (cartFactor === 0) return orderQuantity;
+        return (orderQuantity * orderFactor) / cartFactor;
+      } catch {
+        return orderQuantity;
+      }
+    },
+    []
+  );
+
   // Search for patients when pharmacy mode is enabled and search query changes
   useEffect(() => {
     if (isPharmacy && customerSearchQuery.trim().length >= 2) {
@@ -946,17 +964,18 @@ export default function OrderSummary({
         return;
       }
       
-      // Automatically add all medication orders to cart
-      // Collect all items from all orders
-      const itemsToAdd: Array<{ item_code: string; quantity: number; dosage?: string; drug_name?: string }> = [];
+      // Automatically add all medication orders to cart (quantity, uom, patient_frequency from order entry)
+      const itemsToAdd: Array<{ item_code: string; quantity: number; uom?: string; dosage?: string; patient_frequency?: string; drug_name?: string }> = [];
       
       orders.forEach(order => {
         order.items.forEach(item => {
           if (item.drug) {
             itemsToAdd.push({
               item_code: item.drug,
-              quantity: item.quantity || 1,
+              quantity: item.quantity ?? 1,
+              uom: item.uom,
               dosage: item.dosage || undefined,
+              patient_frequency: item.patient_frequency,
               drug_name: item.drug_name || undefined
             });
           }
@@ -985,28 +1004,36 @@ export default function OrderSummary({
             notFoundCount++;
             continue;
           }
+
+          const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom;
+          const cartQuantity = await convertOrderQuantityToCartUOM(
+            product.id,
+            itemToAdd.quantity,
+            itemToAdd.uom,
+            uomToUse
+          );
           
           // Check if item is already in cart
           const existingCartItem = cartItems.find(ci => ci.id === product.id || ci.item_code === product.id);
           
+          const prescriptionDosageValue = itemToAdd.patient_frequency || itemToAdd.dosage;
+          
           if (existingCartItem) {
-            // Item already in cart, just update quantity and dosage
-            const newQuantity = existingCartItem.quantity + itemToAdd.quantity;
+            const newQuantity = existingCartItem.quantity + cartQuantity;
             await onUpdateQuantity(product.id, newQuantity);
             
-            // Update prescription dosage if provided
-            if (itemToAdd.dosage) {
-              updateItemDiscount(product.id, "prescriptionDosage", itemToAdd.dosage);
+            if (prescriptionDosageValue) {
+              updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
+            }
+            if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
+              const dosageVal = parseFloat(String(itemToAdd.dosage));
+              updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
             }
             
             addedCount++;
           } else {
-            // Add new item to cart
-            const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom;
             let priceToUse = product.price;
 
-            // If we override UOM in pharmacy mode and there is no selected customer yet,
-            // fetch the base price for the chosen UOM so the cart doesn't show the wrong rate.
             if (isPharmacy && pharmacyDefaultUom && pharmacyDefaultUom !== product.uom && !selectedCustomer) {
               const priceInfo = await getItemPriceForCustomer(product.id, undefined, pharmacyDefaultUom);
               if (priceInfo?.success && priceInfo.price > 0) {
@@ -1023,16 +1050,20 @@ export default function OrderSummary({
                 image: product.image || '',
                 available: product.available,
                 uom: uomToUse,
-                item_code: product.id, // item.id is the item_code from the API
+                item_code: product.id,
               },
-              itemToAdd.quantity
+              cartQuantity
             );
             
-            // Set prescription dosage if provided
-            if (itemToAdd.dosage) {
-              // Use setTimeout to ensure item is added to cart first
+            if (prescriptionDosageValue) {
               setTimeout(() => {
-                updateItemDiscount(product.id, "prescriptionDosage", itemToAdd.dosage!);
+                updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
+              }, 100);
+            }
+            if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
+              const dosageVal = parseFloat(String(itemToAdd.dosage));
+              setTimeout(() => {
+                updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
               }, 100);
             }
             
@@ -1040,7 +1071,6 @@ export default function OrderSummary({
           }
         }
         
-        // Show success/error message
         toast.dismiss(loadingToast);
         
         if (addedCount > 0 && notFoundCount === 0) {
@@ -1072,16 +1102,18 @@ export default function OrderSummary({
     // Get selected orders
     const ordersToAdd = medicationOrders.filter(order => selectedOrders.has(order.name));
     
-    // Collect all items from selected orders
-    const itemsToAdd: Array<{ item_code: string; quantity: number; dosage?: string; drug_name?: string }> = [];
+    // Collect all items from selected orders (quantity, uom, patient_frequency from order entry)
+    const itemsToAdd: Array<{ item_code: string; quantity: number; uom?: string; dosage?: string; patient_frequency?: string; drug_name?: string }> = [];
     
     ordersToAdd.forEach(order => {
       order.items.forEach(item => {
         if (item.drug) {
           itemsToAdd.push({
             item_code: item.drug,
-            quantity: item.quantity || 1,
+            quantity: item.quantity ?? 1,
+            uom: item.uom,
             dosage: item.dosage || undefined,
+            patient_frequency: item.patient_frequency,
             drug_name: item.drug_name || undefined
           });
         }
@@ -1095,16 +1127,13 @@ export default function OrderSummary({
       return;
     }
     
-    // Show loading toast
     const loadingToast = toast.loading(`Adding ${itemsToAdd.length} item(s) to cart...`);
     
     try {
       let addedCount = 0;
       let notFoundCount = 0;
       
-      // Process each item
       for (const itemToAdd of itemsToAdd) {
-        // Find the product in the products list
         const product = products.find(p => p.id === itemToAdd.item_code || p.item_code === itemToAdd.item_code);
         
         if (!product) {
@@ -1112,24 +1141,32 @@ export default function OrderSummary({
           notFoundCount++;
           continue;
         }
+
+        const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom;
+        const cartQuantity = await convertOrderQuantityToCartUOM(
+          product.id,
+          itemToAdd.quantity,
+          itemToAdd.uom,
+          uomToUse
+        );
+        const prescriptionDosageValue = itemToAdd.patient_frequency || itemToAdd.dosage;
         
-        // Check if item is already in cart
         const existingCartItem = cartItems.find(ci => ci.id === product.id || ci.item_code === product.id);
         
         if (existingCartItem) {
-          // Item already in cart, just update quantity and dosage
-          const newQuantity = existingCartItem.quantity + itemToAdd.quantity;
+          const newQuantity = existingCartItem.quantity + cartQuantity;
           await onUpdateQuantity(product.id, newQuantity);
           
-          // Update prescription dosage if provided
-          if (itemToAdd.dosage) {
-            updateItemDiscount(product.id, "prescriptionDosage", itemToAdd.dosage);
+          if (prescriptionDosageValue) {
+            updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
+          }
+          if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
+            const dosageVal = parseFloat(String(itemToAdd.dosage));
+            updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
           }
           
           addedCount++;
         } else {
-          // Add new item to cart
-          const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom;
           let priceToUse = product.price;
 
           if (isPharmacy && pharmacyDefaultUom && pharmacyDefaultUom !== product.uom && !selectedCustomer) {
@@ -1148,16 +1185,20 @@ export default function OrderSummary({
               image: product.image || '',
               available: product.available,
               uom: uomToUse,
-              item_code: product.id, // item.id is the item_code from the API
+              item_code: product.id,
             },
-            itemToAdd.quantity
+            cartQuantity
           );
           
-          // Set prescription dosage if provided
-          if (itemToAdd.dosage) {
-            // Use setTimeout to ensure item is added to cart first
+          if (prescriptionDosageValue) {
             setTimeout(() => {
-              updateItemDiscount(product.id, "prescriptionDosage", itemToAdd.dosage!);
+              updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
+            }, 100);
+          }
+          if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
+            const dosageVal = parseFloat(String(itemToAdd.dosage));
+            setTimeout(() => {
+              updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
             }, 100);
           }
           
@@ -1165,7 +1206,6 @@ export default function OrderSummary({
         }
       }
       
-      // Show success/error message
       toast.dismiss(loadingToast);
       
       if (addedCount > 0 && notFoundCount === 0) {
@@ -1771,72 +1811,50 @@ export default function OrderSummary({
               </button>
             </div>
 
-            {/* Selected Customer Display */}
-            {selectedCustomer && (
+            {/* Selected Customer / Patient Display - show when either is set so Pill (orders) + X always visible for patient */}
+            {(selectedCustomer || selectedPatient) && (
               <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                {/* Debug: Log customer data */}
-                {/* {console.log("Selected Customer Data (Mobile):", {
-                  name: selectedCustomer,
-                  phone: selectedCustomer.phone,
-                  phoneType: typeof selectedCustomer.phone,
-                  phoneLength: selectedCustomer.phone?.length,
-                  phoneNotNA: selectedCustomer.phone !== "N/A",
-                  phoneTruthy: !!selectedCustomer.phone,
-                  totalOrders: selectedCustomer.totalOrders,
-                  realTimeOrders: customerStats?.total_orders,
-                  loyaltyPoints: selectedCustomer.loyaltyPoints
-                })} */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
-                    {selectedCustomer && getCustomerTypeIcon(selectedCustomer)}
+                    {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500" />}
                     <div>
                       <div className="font-medium text-gray-900 dark:text-white text-sm">
-                        {selectedCustomer?.name}
+                        {selectedCustomer?.name ?? (selectedPatient?.patient_name || selectedPatient?.name)}
                       </div>
                       <div className="text-xs text-gray-500 dark:text-gray-400">
-                        {/* Debug phone rendering */}
-                        {/* {console.log("Phone rendering check:", {
-                          phone: selectedCustomer.phone,
-                          phoneExists: !!selectedCustomer.phone,
-                          phoneNotNA: selectedCustomer.phone !== "N/A",
-                          shouldShowPhone: selectedCustomer.phone && selectedCustomer.phone !== "N/A"
-                        })} */}
-                        {selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
+                        {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
                           <span>{selectedCustomer.phone}</span>
                         )}
-                        {selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (customerStats?.total_orders || 0) > 0 && (
+                        {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (customerStats?.total_orders || 0) > 0 && (
                           <span className="mx-2">•</span>
                         )}
-                        {(customerStats?.total_orders || 0) > 0 && (
+                        {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
                           <span>{customerStats?.total_orders || 0} orders</span>
                         )}
-                        {(!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
+                        {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
                           <span className="text-gray-400 italic">No additional info</span>
                         )}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center space-x-2">
-                    {/* Medication Orders Icon - Show if patient is selected OR if customer is also a patient */}
-                    {isPharmacy && (selectedPatient || (selectedCustomer && patients.find(
+                    {/* Pill: view medication orders - show whenever a patient is selected */}
+                    {(selectedPatient || (selectedCustomer && patients.find(
                       p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
-                    ))) && (
+                    ))) ? (
                       <button
                         onClick={async () => {
-                          // Get patient - either from selectedPatient or find from patients list
                           const patientToUse = selectedPatient || (selectedCustomer ? patients.find(
                             p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
                           ) : null);
-                          
                           if (!patientToUse) {
                             toast.error("Patient not found.");
                             return;
                           }
-                          // Fetch fresh medication orders and show modal
                           try {
                             const orders = await getPendingInpatientMedicationOrders(patientToUse.name);
                             setMedicationOrders(orders);
-                            setSelectedOrders(new Set(orders.map(o => o.name))); // Select all orders by default
+                            setSelectedOrders(new Set(orders.map(o => o.name)));
                             if (orders.length > 0) {
                               setShowMedicationOrdersModal(true);
                             } else {
@@ -1847,12 +1865,12 @@ export default function OrderSummary({
                             toast.error("Failed to fetch medication orders.");
                           }
                         }}
-                        className="text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                        className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"
                         title="View medication orders"
                       >
                         <Pill size={16} />
                       </button>
-                    )}
+                    ) : null}
                     <button
                       onClick={() => {
                         setSelectedCustomer(null);
@@ -1932,103 +1950,82 @@ export default function OrderSummary({
             </button>
           </div>
 
-          {selectedCustomer && (
+          {/* Selected Customer / Patient - show when either is set so Pill (orders) + X visible for patient */}
+          {(selectedCustomer || selectedPatient) && (
             <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              {/* Debug: Log customer data */}
-              {/* {console.log("Selected Customer Data:", {
-                name: selectedCustomer.name,
-                phone: selectedCustomer.phone,
-                phoneType: typeof selectedCustomer.phone,
-                phoneLength: selectedCustomer.phone?.length,
-                phoneNotNA: selectedCustomer.phone !== "N/A",
-                phoneTruthy: !!selectedCustomer.phone,
-                totalOrders: selectedCustomer.totalOrders,
-                realTimeOrders: customerStats?.total_orders,
-                loyaltyPoints: selectedCustomer.loyaltyPoints
-              })} */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  {selectedCustomer && getCustomerTypeIcon(selectedCustomer)}
+                  {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500" />}
                   <div>
                     <div className="font-medium text-gray-900 dark:text-white text-sm">
-                      {selectedCustomer?.name}
+                      {selectedCustomer?.name ?? (selectedPatient?.patient_name || selectedPatient?.name)}
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {/* Debug phone rendering */}
-                      {/* {console.log("Phone rendering check (Desktop):", {
-                        phone: selectedCustomer.phone,
-                        phoneExists: !!selectedCustomer.phone,
-                        phoneNotNA: selectedCustomer.phone !== "N/A",
-                        shouldShowPhone: selectedCustomer.phone && selectedCustomer.phone !== "N/A"
-                      })} */}
-                      {selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
+                      {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
                         <span>{selectedCustomer.phone}</span>
                       )}
-                      {selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (customerStats?.total_orders || 0) > 0 && (
+                      {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (customerStats?.total_orders || 0) > 0 && (
                         <span className="mx-2">•</span>
                       )}
-                      {(customerStats?.total_orders || 0) > 0 && (
+                      {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
                         <span>{customerStats?.total_orders || 0} orders</span>
                       )}
-                      {(!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
+                      {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
                         <span className="text-gray-400 italic">No additional info</span>
                       )}
                     </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    {/* Medication Orders Icon - Show if patient is selected OR if customer is also a patient */}
-                    {isPharmacy && (selectedPatient || (selectedCustomer && patients.find(
-                      p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
-                    ))) && (
-                      <button
-                        onClick={async () => {
-                          // Get patient - either from selectedPatient or find from patients list
-                          const patientToUse = selectedPatient || (selectedCustomer ? patients.find(
-                            p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
-                          ) : null);
-                          
-                          if (!patientToUse) {
-                            toast.error("Patient not found.");
-                            return;
-                          }
-                          // Fetch fresh medication orders and show modal
-                          try {
-                            const orders = await getPendingInpatientMedicationOrders(patientToUse.name);
-                            setMedicationOrders(orders);
-                            setSelectedOrders(new Set(orders.map(o => o.name))); // Select all orders by default
-                            if (orders.length > 0) {
-                              setShowMedicationOrdersModal(true);
-                            } else {
-                              toast.info("No pending medication orders found for this patient.");
-                            }
-                          } catch (error) {
-                            console.error('Error fetching medication orders:', error);
-                            toast.error("Failed to fetch medication orders.");
-                          }
-                        }}
-                        className="text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors p-1"
-                        title="View medication orders"
-                      >
-                        <Pill size={18} />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        setSelectedCustomer(null);
-                        setSelectedPatient(null);
-                        setCustomerSearchQuery("");
-                        setUserRemovedDefaultCustomer(true);
-                        setMedicationOrders([]);
-                        setSelectedOrders(new Set());
-                        setShowCustomerDropdown(false);
-                      }}
-                      className="text-gray-400 hover:text-gray-600"
-                    >
-                      <X size={14} />
-                    </button>
                   </div>
                 </div>
+                <div className="flex items-center space-x-2">
+                  {/* Pill: view medication orders - show whenever a patient is selected */}
+                  {(selectedPatient || (selectedCustomer && patients.find(
+                    p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
+                  ))) ? (
+                    <button
+                      onClick={async () => {
+                        const patientToUse = selectedPatient || (selectedCustomer ? patients.find(
+                          p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
+                        ) : null);
+                        if (!patientToUse) {
+                          toast.error("Patient not found.");
+                          return;
+                        }
+                        try {
+                          const orders = await getPendingInpatientMedicationOrders(patientToUse.name);
+                          setMedicationOrders(orders);
+                          setSelectedOrders(new Set(orders.map(o => o.name)));
+                          if (orders.length > 0) {
+                            setShowMedicationOrdersModal(true);
+                          } else {
+                            toast.info("No pending medication orders found for this patient.");
+                          }
+                        } catch (error) {
+                          console.error('Error fetching medication orders:', error);
+                          toast.error("Failed to fetch medication orders.");
+                        }
+                      }}
+                      className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"
+                      title="View medication orders"
+                    >
+                      <Pill size={18} />
+                    </button>
+                  ) : null}
+                  <button
+                    onClick={() => {
+                      setSelectedCustomer(null);
+                      setSelectedPatient(null);
+                      setCustomerSearchQuery("");
+                      setUserRemovedDefaultCustomer(true);
+                      setMedicationOrders([]);
+                      setSelectedOrders(new Set());
+                      setShowCustomerDropdown(false);
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

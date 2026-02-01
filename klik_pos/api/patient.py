@@ -140,6 +140,11 @@ def get_pending_inpatient_medication_orders(patient: str):
 							# Get dosage if available
 							if hasattr(item, "dosage"):
 								item_dict["dosage"] = item.dosage
+							# Patient Frequency (Link to Prescription Dosage) - use for cart prescription dosage
+							if hasattr(item, "patient_frequency") and item.patient_frequency:
+								item_dict["patient_frequency"] = item.patient_frequency
+							else:
+								item_dict["patient_frequency"] = None
 							
 							# Get other optional fields
 							if hasattr(item, "dosage_form"):
@@ -152,6 +157,12 @@ def get_pending_inpatient_medication_orders(patient: str):
 								item_dict["quantity"] = item.quantity
 							else:
 								item_dict["quantity"] = 1
+							
+							# UOM from order entry (drug default/stock UOM)
+							if hasattr(item, "uom"):
+								item_dict["uom"] = item.uom
+							else:
+								item_dict["uom"] = None
 							
 							# Only add if we have a drug/item_code
 							if item_dict.get("drug"):
