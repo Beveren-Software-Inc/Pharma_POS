@@ -845,6 +845,24 @@ def build_sales_invoice_doc(
 			# which has a Link field "medication_order" to "Patient Medication Order"
 			doc.append("custom_medication_order", {"medication_order": order_name})
 
+		# Also set the Patient on Sales Invoice (healthcare) if the standard patient field exists.
+		# Use the patient from the first medication order.
+		if frappe.db.has_column("Sales Invoice", "patient"):
+			first_order = orders[0]
+			if first_order:
+				try:
+					patient_name = frappe.db.get_value(
+						"Patient Medication Order", first_order, "patient"
+					)
+					if patient_name:
+						doc.patient = patient_name
+				except Exception:
+					# Don't block invoice creation if healthcare doc lookup fails
+					frappe.log_error(
+						frappe.get_traceback(),
+						f"Error setting patient from Medication Order {first_order}",
+					)
+
 	# Configure POS profile and company settings
 	pos_profile = _get_active_pos_profile()
 	_set_pos_profile_fields(doc, pos_profile, customer, business_type)
