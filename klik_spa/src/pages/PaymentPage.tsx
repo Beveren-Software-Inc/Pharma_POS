@@ -120,10 +120,10 @@ export default function PaymentScreen() {
                 <div>
                   <div className="font-medium">{isRTL ? item.nameAr : item.nameEn}</div>
                   <div className="text-sm text-gray-600">
-                    {item.qty} × ₨ {item.unitPrice.toFixed(2)}
+                    {item.qty} × ₨ {item.unitPrice.toFixed(3)}
                   </div>
                 </div>
-                <div className="font-semibold">₨ {item.lineTotal.toFixed(2)}</div>
+                <div className="font-semibold">₨ {item.lineTotal.toFixed(3)}</div>
               </div>
             ))}
           </div>
@@ -131,15 +131,15 @@ export default function PaymentScreen() {
           <div className="border-t pt-4 mt-4">
             <div className="flex justify-between py-1">
               <span>{t("SUBTOTAL")}</span>
-              <span>₨ {invoiceData.subtotal.toFixed(2)}</span>
+              <span>₨ {invoiceData.subtotal.toFixed(3)}</span>
             </div>
             <div className="flex justify-between py-1">
               <span>{t("VAT")} (5%)</span>
-              <span>₨ {invoiceData.vat.toFixed(2)}</span>
+              <span>₨ {invoiceData.vat.toFixed(3)}</span>
             </div>
             <div className="flex justify-between py-2 font-bold text-lg border-t">
               <span>{t("TOTAL")}</span>
-              <span>₨ {invoiceData.total.toFixed(2)}</span>
+              <span>₨ {invoiceData.total.toFixed(3)}</span>
             </div>
           </div>
 

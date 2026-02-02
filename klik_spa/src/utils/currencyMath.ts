@@ -1,20 +1,20 @@
 /**
  * Currency math utilities to handle floating point precision issues
- * All amounts are treated as cents to avoid floating point errors
+ * All amounts use 3 decimal places (e.g. BHD) - smallest unit = multiply by 1000
  */
 
 /**
- * Convert dollars to cents (multiply by 100)
+ * Convert amount to smallest unit (multiply by 1000 for 3 decimal places)
  */
 export function toCents(dollars: number): number {
-  return Math.round(dollars * 100);
+  return Math.round(dollars * 1000);
 }
 
 /**
- * Convert cents to dollars (divide by 100)
+ * Convert smallest unit to amount (divide by 1000)
  */
 export function toDollars(cents: number): number {
-  return cents / 100;
+  return cents / 1000;
 }
 
 /**
@@ -52,17 +52,17 @@ export function divideCurrency(amount: number, divisor: number): number {
 }
 
 /**
- * Round currency amount to 2 decimal places
+ * Round currency amount to 3 decimal places (e.g. BHD)
  */
 export function roundCurrency(amount: number): number {
-  return Math.round(amount * 100) / 100;
+  return Math.round(amount * 1000) / 1000;
 }
 
 /**
- * Format currency amount to 2 decimal places string
+ * Format currency amount to 3 decimal places string
  */
 export function formatCurrencyAmount(amount: number): string {
-  return roundCurrency(amount).toFixed(2);
+  return roundCurrency(amount).toFixed(3);
 }
 
 /**

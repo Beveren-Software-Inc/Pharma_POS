@@ -776,12 +776,41 @@ def _fetch_primary_barcodes(item_codes: list[str]) -> dict[str, str]:
 	return barcode_map
 
 
+def _fetch_pack_conversion_factors(item_codes: list[str]) -> dict[str, float]:
+	"""
+	Fetch conversion factor for UOM 'PACK' from UOM Conversion Detail child table.
+	Returns dict mapping item_code -> conversion_factor for items that have PACK in their UOM table.
+	Used as primary source for No of Packs; fallback is custom_number_of_pack on Item.
+	"""
+	pack_map: dict[str, float] = {}
+	if not item_codes:
+		return pack_map
+	try:
+		# UOM Conversion Detail child table: uom, conversion_factor, parent
+		if not frappe.db.exists("DocType", "UOM Conversion Detail"):
+			return pack_map
+		rows = frappe.get_all(
+			"UOM Conversion Detail",
+			filters={"parent": ["in", item_codes], "uom": "PACK"},
+			fields=["parent", "conversion_factor"],
+		)
+		for row in rows:
+			item_code = row.get("parent")
+			cf = row.get("conversion_factor")
+			if item_code is not None and cf is not None:
+				pack_map[item_code] = float(cf)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Error fetching PACK conversion factors for POS")
+	return pack_map
+
+
 def _build_enriched_items(
 	items: list[dict],
 	stock_map: dict[str, float],
 	price_map: dict[str, dict],
 	barcode_map: dict[str, str],
 	hide_unavailable: bool,
+	pack_map: dict[str, float] | None = None,
 ) -> list[dict]:
 	"""Convert raw item rows into the SPA payload shape."""
 	enriched_items: list[dict] = []
@@ -819,8 +848,14 @@ def _build_enriched_items(
 			enriched_item["custom_strength"] = item.get("custom_strength")
 		if item.get("custom_pharmaceutical_form"):
 			enriched_item["custom_pharmaceutical_form"] = item.get("custom_pharmaceutical_form")
-		if item.get("custom_number_of_pack") is not None:
-			enriched_item["custom_number_of_pack"] = item.get("custom_number_of_pack")
+		# No of Packs: prefer PACK conversion factor from Item UOM child table, fallback to custom_number_of_pack
+		no_of_packs = None
+		if pack_map and item_code in pack_map:
+			no_of_packs = pack_map[item_code]
+		elif item.get("custom_number_of_pack") is not None:
+			no_of_packs = item.get("custom_number_of_pack")
+		if no_of_packs is not None:
+			enriched_item["custom_number_of_pack"] = no_of_packs
 		if item.get("custom_pack_size"):
 			enriched_item["custom_pack_size"] = item.get("custom_pack_size")
 		if item.get("custom_route_of_administration"):
@@ -903,6 +938,7 @@ def get_items_with_balance_and_price(
 		item_codes = [item["name"] for item in items]
 
 		barcode_map = _fetch_primary_barcodes(item_codes)
+		pack_map = _fetch_pack_conversion_factors(item_codes)
 
 		# Build UOM map for price fetching
 		uom_map = {item["name"]: item.get("stock_uom", "Nos") for item in items}
@@ -911,7 +947,7 @@ def get_items_with_balance_and_price(
 		stock_map = _fetch_batch_stock(item_codes, warehouse)
 		price_map = _fetch_batch_prices(item_codes, price_list, uom_map)
 
-		enriched_items = _build_enriched_items(items, stock_map, price_map, barcode_map, hide_unavailable)
+		enriched_items = _build_enriched_items(items, stock_map, price_map, barcode_map, hide_unavailable, pack_map)
 
 		has_more = (offset + len(enriched_items)) < total_count
 		return {

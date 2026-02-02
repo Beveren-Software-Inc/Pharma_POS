@@ -9,7 +9,7 @@ export interface InpatientMedicationOrderItem {
   drug: string;
   drug_name?: string;
   dosage?: string;
-  /** Prescription Dosage name (Link) - use for cart prescription dosage display */
+  /** Prescription Frequency name (Link) - use for cart prescription frequency display */
   patient_frequency?: string;
   dosage_form?: string;
   period?: string;

@@ -102,7 +102,7 @@ export default function GiftCouponSelector({ onClose, onApplyCoupon, appliedCoup
                     </div>
                   </div>
                   <div className="flex items-center">
-                    <span className="font-bold text-sm mr-2">${coupon.value.toFixed(2)}</span>
+                    <span className="font-bold text-sm mr-2">${coupon.value.toFixed(3)}</span>
                     {isApplied && <Check size={16} className="text-green-500" />}
                   </div>
                 </div>

@@ -628,6 +628,7 @@ def create_and_submit_invoice(data):
 			roundoff_amount,
 			delivery_personnel,
 			delivery_via,
+			medication_order,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -648,6 +649,7 @@ def create_and_submit_invoice(data):
 			include_payments=True,
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
+			medication_order=medication_order,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -722,6 +724,7 @@ def create_draft_invoice(data):
 			roundoff_amount,
 			delivery_personnel,
 			delivery_via,
+			medication_order,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -734,6 +737,7 @@ def create_draft_invoice(data):
 			include_payments=True,
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
+			medication_order=medication_order,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -777,6 +781,8 @@ def parse_invoice_data(data):
 	delivery_personnel = data.get("deliveryPersonnel")
 	# Extract delivery channel (custom field on Sales Invoice)
 	delivery_via = data.get("deliveryVia")
+	# Extract Patient Medication Order (when items came from medication order)
+	medication_order = data.get("medicationOrder")
 
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
@@ -791,6 +797,7 @@ def parse_invoice_data(data):
 		roundoff_amount,
 		delivery_personnel,
 		delivery_via,
+		medication_order,
 	)
 
 
@@ -805,6 +812,7 @@ def build_sales_invoice_doc(
 	include_payments=False,
 	delivery_personnel=None,
 	delivery_via=None,
+	medication_order=None,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -818,6 +826,24 @@ def build_sales_invoice_doc(
 	# Set delivery channel if provided and field exists
 	if delivery_via and frappe.db.has_column("Sales Invoice", "custom_delivery_via"):
 		doc.custom_delivery_via = delivery_via
+	# Set Patient Medication Orders (Table MultiSelect) if items came from orders and field exists
+	if medication_order and frappe.db.has_column("Sales Invoice", "custom_medication_order"):
+		orders = medication_order
+
+		# Normalize to a list of order names
+		if isinstance(orders, str):
+			orders = [orders]
+		elif isinstance(orders, (set, tuple)):
+			orders = list(orders)
+		elif not isinstance(orders, list):
+			orders = [orders]
+
+		for order_name in orders:
+			if not order_name:
+				continue
+			# custom_medication_order is a Table MultiSelect of child doctype "Medication Details"
+			# which has a Link field "medication_order" to "Patient Medication Order"
+			doc.append("custom_medication_order", {"medication_order": order_name})
 
 	# Configure POS profile and company settings
 	pos_profile = _get_active_pos_profile()
@@ -1012,6 +1038,7 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 	_add_uom_to_item(item_data, item)
 	_add_batch_to_item(item_data, item, item_data_map.get(item_code, {}))
 	_add_serial_to_item(item_data, item)
+	_add_dosage_to_item(item_data, item)
 
 	return item_data
 
@@ -1053,6 +1080,18 @@ def _add_serial_to_item(item_data, item):
 	if serial_number:
 		item_data["use_serial_batch_fields"] = 1
 		item_data["serial_no"] = serial_number
+
+
+def _add_dosage_to_item(item_data, item):
+	"""Add dosage and prescription dosage to invoice item if Sales Invoice Item has custom fields."""
+	if frappe.db.has_column("Sales Invoice Item", "custom_dosage"):
+		dosage = item.get("dosage")
+		if dosage is not None and dosage != "":
+			item_data["custom_dosage"] = dosage
+	if frappe.db.has_column("Sales Invoice Item", "custom_prescription_dosage"):
+		prescription_dosage = item.get("prescriptionDosage") or item.get("prescription_dosage")
+		if prescription_dosage:
+			item_data["custom_prescription_dosage"] = prescription_dosage
 
 
 def _populate_tax_details(doc):

@@ -120,10 +120,10 @@ export const getCurrencySymbol = (currency: string): string => {
  * @returns Formatted string (e.g., "SAR 100.00", "$50.00")
  */
 export const formatCurrency = (amount: number, currency?: string): string => {
-  if (!amount && amount !== 0) return '0.00';
+  if (!amount && amount !== 0) return '0.000';
 
   const symbol = getCurrencySymbol(currency || 'USD');
-  return `${symbol} ${amount.toFixed(2)}`;
+  return `${symbol} ${amount.toFixed(3)}`;
 };
 
 /**
@@ -133,8 +133,8 @@ export const formatCurrency = (amount: number, currency?: string): string => {
  * @returns Formatted string (e.g., "SAR100.00", "$50.00")
  */
 export const formatCurrencyCompact = (amount: number, currency?: string): string => {
-  if (!amount && amount !== 0) return '0.00';
+  if (!amount && amount !== 0) return '0.000';
 
   const symbol = getCurrencySymbol(currency || 'USD');
-  return `${symbol}${amount.toFixed(2)}`;
+  return `${symbol}${amount.toFixed(3)}`;
 };
