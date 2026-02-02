@@ -6,7 +6,9 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "delivery_via"
+  "delivery_via",
+  "section_break_wbqo",
+  "documents"
  ],
  "fields": [
   {
@@ -14,12 +16,22 @@
    "fieldtype": "Data",
    "label": "Delivery Via",
    "unique": 1
+  },
+  {
+   "fieldname": "section_break_wbqo",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "documents",
+   "fieldtype": "Table",
+   "label": "Documents",
+   "options": "Delivery Channel Attachment"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-01-21 14:31:02.741180",
+ "modified": "2026-02-02 12:51:49.181414",
  "modified_by": "Administrator",
  "module": "KLiK PoS",
  "name": "Delivery Channel",
@@ -41,7 +53,7 @@
  ],
  "row_format": "Dynamic",
  "rows_threshold_for_grid_search": 20,
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": []
 }

@@ -9,9 +9,13 @@ export interface InpatientMedicationOrderItem {
   drug: string;
   drug_name?: string;
   dosage?: string;
+  /** Prescription Frequency name (Link) - use for cart prescription frequency display */
+  patient_frequency?: string;
   dosage_form?: string;
   period?: string;
   quantity?: number;
+  /** UOM from the order entry (e.g. drug default/stock UOM) */
+  uom?: string;
 }
 
 export interface InpatientMedicationOrder {

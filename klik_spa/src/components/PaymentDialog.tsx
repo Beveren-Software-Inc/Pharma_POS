@@ -150,7 +150,7 @@ export default function PaymentDialog({
   const [submittedInvoice, setSubmittedInvoice] = useState<any>(null);
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [invoiceData, setInvoiceData] = useState<any>(null);
-  const [roundOffInput, setRoundOffInput] = useState(roundOffAmount.toFixed(2));
+  const [roundOffInput, setRoundOffInput] = useState(roundOffAmount.toFixed(3));
   const [isAutoPrinting, setIsAutoPrinting] = useState(false);
   const [sharingMode, setSharingMode] = useState<string | null>(
     initialSharingMode
@@ -447,12 +447,12 @@ export default function PaymentDialog({
     if (isInclusive) {
       // For inclusive tax: tax is already included in the taxable amount
       taxAmount = (taxableAmount * taxRate) / (100 + taxRate);
-      taxAmount = parseFloat(taxAmount.toFixed(2));
+      taxAmount = parseFloat(taxAmount.toFixed(3));
       grandTotal = taxableAmount;
     } else {
       // For exclusive tax: tax is added to the taxable amount
       taxAmount = (taxableAmount * taxRate) / 100;
-      taxAmount = parseFloat(taxAmount.toFixed(2)); // Ensure 2 decimal places
+      taxAmount = parseFloat(taxAmount.toFixed(3)); // Ensure 3 decimal places (e.g. BHD)
       grandTotal = taxableAmount + taxAmount;
     }
 
@@ -487,7 +487,7 @@ export default function PaymentDialog({
     if (isOpen && modes.length > 0) {
       const defaultMode = modes.find((mode) => mode.default === 1);
       if (defaultMode && Object.keys(paymentAmounts).length === 0) {
-        const defaultAmount = parseFloat(calculations.grandTotal.toFixed(2));
+        const defaultAmount = parseFloat(calculations.grandTotal.toFixed(3));
         setLastModifiedMethodId(defaultMode.mode_of_payment); // Track the auto-filled method
         setPaymentAmounts({ [defaultMode.mode_of_payment]: defaultAmount });
       }
@@ -717,7 +717,7 @@ export default function PaymentDialog({
     }
 
     setRoundOffAmount(difference);
-    setRoundOffInput(difference.toFixed(2));
+    setRoundOffInput(difference.toFixed(3));
 
     // Different behavior based on business type:
     // B2B: Don't auto-fill payment amounts (let user manually enter)
@@ -793,7 +793,7 @@ export default function PaymentDialog({
 
       // Check if the absolute value exceeds the limit
       if (Math.abs(parsed) > maxAllowedRoundoff) {
-        toast.error(`Roundoff amount cannot exceed ${maxAllowedRoundoff.toFixed(2)}. Write-off limit is ${writeOffLimit}.`);
+        toast.error(`Roundoff amount cannot exceed ${maxAllowedRoundoff.toFixed(3)}. Write-off limit is ${writeOffLimit}.`);
         return;
       }
 
@@ -811,7 +811,7 @@ export default function PaymentDialog({
         const sumOthers = Object.entries(paymentAmounts)
           .filter(([id]) => id !== targetId)
           .reduce((sum, [, amt]) => sum + (amt || 0), 0);
-        const newTargetAmount = Math.max(0, parseFloat((newGrandTotal - sumOthers).toFixed(2)));
+        const newTargetAmount = Math.max(0, parseFloat((newGrandTotal - sumOthers).toFixed(3)));
         setPaymentAmounts((prev) => ({
           ...prev,
           [targetId]: newTargetAmount,
@@ -869,7 +869,7 @@ export default function PaymentDialog({
             const lastAmount = lastPayment[1];
 
             // Reduce the last payment method by the excess amount
-            const adjustedLastAmount = parseFloat(Math.max(0, lastAmount - excess).toFixed(2));
+            const adjustedLastAmount = parseFloat(Math.max(0, lastAmount - excess).toFixed(3));
 
             return validPayments.map(([method, amount], index) => {
               if (index === lastPaymentIndex) {
@@ -893,9 +893,12 @@ export default function PaymentDialog({
         // Include discount information for backend
         discountPercentage: itemDiscounts[item.id]?.discountPercentage || 0,
         discountAmount: itemDiscounts[item.id]?.discountAmount || 0,
+        // Pharmacy: dosage and prescription frequency for Sales Invoice Item
+        dosage: itemDiscounts[item.id]?.dosage ?? item.dosage ?? null,
+        prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
       })),
       customer: selectedCustomer,
-      paymentMethods: (adjustedPaymentMethods ?? []).map(([method, amount]) => ({ method, amount: parseFloat((Number(amount) || 0).toFixed(2)) })),
+      paymentMethods: (adjustedPaymentMethods ?? []).map(([method, amount]) => ({ method, amount: parseFloat((Number(amount) || 0).toFixed(3)) })),
       subtotal: calculations.subtotal,
       SalesTaxCharges: selectedSalesTaxCharges,
       taxAmount: calculations.taxAmount,
@@ -909,6 +912,15 @@ export default function PaymentDialog({
       businessType: posDetails?.business_type,
       deliveryPersonnel: deliveryPersonnel || null,
       deliveryVia: deliveryVia || null,
+      // Patient Medication Orders - push all unique orders if items came from medication orders
+      medicationOrder: (() => {
+        const orders = new Set<string>();
+        cartItems.forEach((item) => {
+          const orderName = (itemDiscounts[item.id] as { medicationOrder?: string } | undefined)?.medicationOrder;
+          if (orderName) orders.add(orderName);
+        });
+        return Array.from(orders);
+      })(),
     };
 
     try {
@@ -991,8 +1003,20 @@ export default function PaymentDialog({
     setIsHoldingOrder(true);
 
     const orderData = {
-      items: cartItems,
+      items: cartItems.map(item => ({
+        ...item,
+        dosage: itemDiscounts[item.id]?.dosage ?? item.dosage ?? null,
+        prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
+      })),
       customer: selectedCustomer,
+      medicationOrder: (() => {
+        const orders = new Set<string>();
+        cartItems.forEach((item) => {
+          const orderName = (itemDiscounts[item.id] as { medicationOrder?: string } | undefined)?.medicationOrder;
+          if (orderName) orders.add(orderName);
+        });
+        return Array.from(orders);
+      })(),
       subtotal: calculations.subtotal,
       SalesTaxCharges: selectedSalesTaxCharges,
       taxAmount: calculations.taxAmount,
@@ -1252,7 +1276,7 @@ export default function PaymentDialog({
                             </label>
                             <input
                               type="number"
-                              value={method.amount.toFixed(2) || ""}
+                              value={method.amount.toFixed(3) || ""}
                               onChange={(e) =>
                                 handlePaymentAmountChange(
                                   method.id,
@@ -2011,7 +2035,7 @@ export default function PaymentDialog({
                               const numValue = parseFloat(e.target.value);
                               if (!isNaN(numValue)) {
                                 const formatted = parseFloat(
-                                  numValue.toFixed(2)
+                                  numValue.toFixed(3)
                                 );
                                 handleManualAmountChange(method.id, formatted.toString());
                               }

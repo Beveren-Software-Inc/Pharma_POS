@@ -285,7 +285,7 @@ export default function MultiInvoiceReturn({
               const calculatedReturnAmount = ((inv as InvoiceWithPaidAmount).paid_amount || inv.grand_total) * returnPercentage;
 
               // Round to 2 decimal places to avoid floating point precision issues
-              const amount = Math.round(calculatedReturnAmount * 100) / 100;
+              const amount = Math.round(calculatedReturnAmount * 1000) / 1000;
 
               const defaultMode = paymentModes.find((m) => m.default === 1)?.mode_of_payment || paymentModes[0]?.mode_of_payment || 'Cash';
               // @ts-expect-error backend may provide payments array
@@ -345,7 +345,7 @@ export default function MultiInvoiceReturn({
           const returnedItemsAmount = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
 
           // Round to 2 decimal places to avoid floating point precision issues
-          const amount = Math.round(returnedItemsAmount * 100) / 100;
+          const amount = Math.round(returnedItemsAmount * 1000) / 1000;
 
           // Update the payment amount for this invoice
           const invoiceName = invoice.name;
@@ -398,7 +398,7 @@ export default function MultiInvoiceReturn({
               const calculatedReturnAmount = ((inv as InvoiceWithPaidAmount).paid_amount || inv.grand_total) * returnPercentage;
 
           // Round to 2 decimal places to avoid floating point precision issues
-          const amount = Math.round(calculatedReturnAmount * 100) / 100;
+          const amount = Math.round(calculatedReturnAmount * 1000) / 1000;
 
           const defaultMode = paymentModes.find((m) => m.default === 1)?.mode_of_payment || paymentModes[0]?.mode_of_payment || 'Cash';
           // @ts-expect-error backend may provide payments array
@@ -1179,7 +1179,7 @@ export default function MultiInvoiceReturn({
                                 const calculatedReturnAmount = ((invoice as InvoiceWithPaidAmount).paid_amount || invoice.grand_total) * returnPercentage;
 
                                     // Round to 2 decimal places to avoid floating point precision issues
-                                    return Math.round(calculatedReturnAmount * 100) / 100;
+                                    return Math.round(calculatedReturnAmount * 1000) / 1000;
                                   })()
                                 }
                               }));
@@ -1207,12 +1207,12 @@ export default function MultiInvoiceReturn({
                                 const returnedItemsAmount = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
 
                                 // Round to 2 decimal places to avoid floating point precision issues
-                                return Math.round(returnedItemsAmount * 100) / 100;
+                                return Math.round(returnedItemsAmount * 1000) / 1000;
                               })()}
                               onChange={(e) => {
                                 const value = parseFloat(e.target.value) || 0;
                                 // Round to 2 decimal places to avoid floating point precision issues
-                                const roundedValue = Math.round(value * 100) / 100;
+                                const roundedValue = Math.round(value * 1000) / 1000;
                                 setInvoicePayments(prev => ({
                                   ...prev,
                                   [invoice.name]: {

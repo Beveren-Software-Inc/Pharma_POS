@@ -16,7 +16,7 @@ export default function ProductCard({ item, onAddToCart, isMobile = false, scann
   const isDisabled = isOutOfStock || scannerOnly
 
   // Format price based on currency
-  const formattedPrice = `${item.currency_symbol}${item.price.toFixed(2)}`
+  const formattedPrice = `${item.currency_symbol}${item.price.toFixed(3)}`
 
 return (
     <div

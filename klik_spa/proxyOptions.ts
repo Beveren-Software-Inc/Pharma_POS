@@ -7,6 +7,10 @@ export default {
 		ws: true,
 		changeOrigin: true,
 		secure: false,
+		headers: {
+			// Prevent Expect header from being sent
+			'Expect': '',
+		},
 		configure: (proxy, _options) => {
 			proxy.on('error', (err, _req, _res) => {
 				console.log('Proxy error:', err);
@@ -16,6 +20,8 @@ export default {
 				if (default_site) {
 					proxyReq.setHeader('Host', `${default_site}:${webserver_port}`);
 				}
+				// Remove Expect header to prevent 417 errors in Frappe v16
+				proxyReq.removeHeader('Expect');
 				console.log('Proxying request:', req.method, req.url, '->', proxyReq.path);
 			});
 			proxy.on('proxyRes', (proxyRes, req, _res) => {

@@ -60,15 +60,15 @@
 //             <div className="space-y-2 mb-4">
 //               <div className="flex justify-between">
 //                 <span>{t("SUBTOTAL")}</span>
-//                 <span>₨ {subtotal.toFixed(2)}</span>
+//                 <span>₨ {subtotal.toFixed(3)}</span>
 //               </div>
 //               <div className="flex justify-between">
 //                 <span>{t("VAT")} (5%)</span>
-//                 <span>₨ {vat.toFixed(2)}</span>
+//                 <span>₨ {vat.toFixed(3)}</span>
 //               </div>
 //               <div className="flex justify-between font-bold text-lg border-t pt-2">
 //                 <span>{t("TOTAL")}</span>
-//                 <span>₨ {total.toFixed(2)}</span>
+//                 <span>₨ {total.toFixed(3)}</span>
 //               </div>
 //             </div>
 
