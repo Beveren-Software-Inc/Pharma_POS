@@ -3,6 +3,7 @@ import json
 import frappe
 from erpnext.setup.utils import get_exchange_rate
 from frappe import _
+from frappe.utils import flt, getdate
 
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
@@ -796,12 +797,32 @@ def get_customer_statistics(customer_id):
 
 		last_visit = last_visit_result[0].last_visit if last_visit_result else None
 
+		# Loyalty points from ERPNext standard Loyalty Point Entry (sum of non-expired points)
+		loyalty_points = 0
+		try:
+			company = frappe.db.get_default("company") or (frappe.get_all("Company", limit=1, pluck="name") or [None])[0]
+			if company:
+				lpe_result = frappe.db.sql(
+					"""
+					SELECT COALESCE(SUM(loyalty_points), 0) AS total
+					FROM `tabLoyalty Point Entry`
+					WHERE customer = %s AND company = %s AND expiry_date >= %s
+					""",
+					(customer_id, company, getdate()),
+					as_dict=True,
+				)
+				if lpe_result:
+					loyalty_points = flt(lpe_result[0].get("total") or 0)
+		except Exception:
+			pass
+
 		return {
 			"success": True,
 			"data": {
 				"total_orders": total_orders,
 				"total_spent": total_spent,
 				"last_visit": last_visit,
+				"loyalty_points": loyalty_points,
 			},
 		}
 

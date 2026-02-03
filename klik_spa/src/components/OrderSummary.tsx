@@ -1833,30 +1833,29 @@ export default function OrderSummary({
             {/* Selected Customer / Patient Display - show when either is set so Pill (orders) + X always visible for patient */}
             {(selectedCustomer || selectedPatient) && (
               <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500" />}
-                    <div>
-                      <div className="font-medium text-gray-900 dark:text-white text-sm">
-                        {selectedCustomer?.name ?? (selectedPatient?.patient_name || selectedPatient?.name)}
-                      </div>
-                      <div className="text-xs text-gray-500 dark:text-gray-400">
-                        {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
-                          <span>{selectedCustomer.phone}</span>
-                        )}
-                        {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (customerStats?.total_orders || 0) > 0 && (
-                          <span className="mx-2">•</span>
-                        )}
-                        {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
-                          <span>{customerStats?.total_orders || 0} orders</span>
-                        )}
-                        {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
-                          <span className="text-gray-400 italic">No additional info</span>
-                        )}
-                      </div>
-                    </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500 flex-shrink-0" />}
+                    <span className="font-medium text-gray-900 dark:text-white text-sm truncate">
+                      {selectedCustomer?.name ?? (selectedPatient?.patient_name || selectedPatient?.name)}
+                    </span>
                   </div>
-                  <div className="flex items-center space-x-2">
+                  <div className="flex-1 flex justify-center items-center min-w-0">
+                    {(() => {
+                      const points = (customerStats?.loyalty_points ?? selectedCustomer?.loyaltyPoints ?? 0);
+                      if (points <= 0) return null;
+                      return (
+                        <button
+                          type="button"
+                          className="px-3 py-1.5 text-xs font-medium bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
+                          title="Redeem loyalty points"
+                        >
+                          Redeem {Math.round(points)}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                  <div className="flex items-center space-x-2 flex-shrink-0">
                     {/* Pill: view medication orders - always show when customer/patient selected in pharmacy so it survives refresh */}
                     {(selectedPatient || (selectedCustomer && isPharmacy)) ? (
                       <button
@@ -1887,8 +1886,8 @@ export default function OrderSummary({
                         title="View medication orders"
                       >
                         <Pill size={16} />
-                      </button>
-                    ) : null}
+                    </button>
+                  ) : null}
                     <button
                       onClick={() => {
                         setSelectedCustomer(null);
@@ -1903,6 +1902,20 @@ export default function OrderSummary({
                       <X size={14} />
                     </button>
                   </div>
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">
+                  {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
+                    <span>{selectedCustomer.phone}</span>
+                  )}
+                  {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (customerStats?.total_orders || 0) > 0 && (
+                    <span className="mx-2">•</span>
+                  )}
+                  {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
+                    <span>{customerStats?.total_orders || 0} orders</span>
+                  )}
+                  {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
+                    <span className="text-gray-400 italic">No additional info</span>
+                  )}
                 </div>
               </div>
             )}
@@ -1971,30 +1984,29 @@ export default function OrderSummary({
           {/* Selected Customer / Patient - show when either is set so Pill (orders) + X visible for patient */}
           {(selectedCustomer || selectedPatient) && (
             <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500" />}
-                  <div>
-                    <div className="font-medium text-gray-900 dark:text-white text-sm">
-                      {selectedCustomer?.name ?? (selectedPatient?.patient_name || selectedPatient?.name)}
-                    </div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
-                        <span>{selectedCustomer.phone}</span>
-                      )}
-                      {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (customerStats?.total_orders || 0) > 0 && (
-                        <span className="mx-2">•</span>
-                      )}
-                      {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
-                        <span>{customerStats?.total_orders || 0} orders</span>
-                      )}
-                      {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
-                        <span className="text-gray-400 italic">No additional info</span>
-                      )}
-                    </div>
-                  </div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500 flex-shrink-0" />}
+                  <span className="font-medium text-gray-900 dark:text-white text-sm truncate">
+                    {selectedCustomer?.name ?? (selectedPatient?.patient_name || selectedPatient?.name)}
+                  </span>
                 </div>
-                <div className="flex items-center space-x-2">
+                <div className="flex-1 flex justify-center items-center min-w-0">
+                  {(() => {
+                    const points = (customerStats?.loyalty_points ?? selectedCustomer?.loyaltyPoints ?? 0);
+                    if (points <= 0) return null;
+                    return (
+                      <button
+                        type="button"
+                        className="px-3 py-1.5 text-xs font-medium bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
+                        title="Redeem loyalty points"
+                      >
+                        Redeem {Math.round(points)}
+                      </button>
+                    );
+                  })()}
+                </div>
+                <div className="flex items-center space-x-2 flex-shrink-0">
                   {/* Pill: view medication orders - always show when customer/patient selected in pharmacy so it survives refresh */}
                   {(selectedPatient || (selectedCustomer && isPharmacy)) ? (
                     <button
@@ -2042,6 +2054,20 @@ export default function OrderSummary({
                     <X size={14} />
                   </button>
                 </div>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">
+                {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
+                  <span>{selectedCustomer.phone}</span>
+                )}
+                {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (customerStats?.total_orders || 0) > 0 && (
+                  <span className="mx-2">•</span>
+                )}
+                {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
+                  <span>{customerStats?.total_orders || 0} orders</span>
+                )}
+                {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
+                  <span className="text-gray-400 italic">No additional info</span>
+                )}
               </div>
             </div>
           )}
