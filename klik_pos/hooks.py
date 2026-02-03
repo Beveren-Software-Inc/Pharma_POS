@@ -64,6 +64,7 @@ fixtures = [
 					"POS Profile-custom_pharmacy_default_uom",
 					"Sales Invoice-custom_delivery_via",
 					"Item Group-custom_non_returnable",
+					"Sales Invoice-custom_medication_order"
 				),
 			]
 		],

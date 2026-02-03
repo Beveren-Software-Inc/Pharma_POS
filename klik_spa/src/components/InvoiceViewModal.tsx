@@ -195,10 +195,10 @@ export default function InvoiceViewModal({
                               {item.qty}
                             </td>
                             <td className="px-6 py-4 text-gray-900 dark:text-white">
-                              ${Number(item.rate ?? 0).toFixed(2)}
+                              ${Number(item.rate ?? 0).toFixed(3)}
                             </td>
                             <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white">
-                              ${Number(item.amount ?? 0).toFixed(2)}
+                              ${Number(item.amount ?? 0).toFixed(3)}
                             </td>
                           </tr>
                         ))}

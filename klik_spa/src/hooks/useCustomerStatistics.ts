@@ -4,6 +4,7 @@ interface CustomerStatistics {
   total_orders: number;
   total_spent: number;
   last_visit: string | null;
+  loyalty_points?: number;
 }
 
 interface UseCustomerStatisticsReturn {

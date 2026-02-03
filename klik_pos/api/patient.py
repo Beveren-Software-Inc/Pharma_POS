@@ -140,7 +140,7 @@ def get_pending_inpatient_medication_orders(patient: str):
 							# Get dosage if available
 							if hasattr(item, "dosage"):
 								item_dict["dosage"] = item.dosage
-							# Patient Frequency (Link to Prescription Dosage) - use for cart prescription dosage
+							# Patient Frequency (Link to Prescription Frequency) - use for cart prescription frequency
 							if hasattr(item, "patient_frequency") and item.patient_frequency:
 								item_dict["patient_frequency"] = item.patient_frequency
 							else:

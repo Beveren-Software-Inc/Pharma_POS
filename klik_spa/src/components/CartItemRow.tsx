@@ -52,7 +52,7 @@ export default function CartItemRow({ item, onUpdateQty }: CartItemRowProps) {
         </button>
       </div>
 
-      <div className="text-gray-800 font-semibold">₨ {(item.price * qty).toFixed(2)}</div>
+      <div className="text-gray-800 font-semibold">₨ {(item.price * qty).toFixed(3)}</div>
     </div>
   )
 }

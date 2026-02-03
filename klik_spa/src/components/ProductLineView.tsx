@@ -91,7 +91,7 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
           {items.map((item) => {
             const isOutOfStock = item.available <= 0
             const isDisabled = isOutOfStock || scannerOnly
-            const formattedPrice = `${item.currency_symbol}${item.price.toFixed(2)}`
+            const formattedPrice = `${item.currency_symbol}${item.price.toFixed(3)}`
             
             // Check if item has pharmacy fields
             // eslint-disable-next-line @typescript-eslint/no-explicit-any

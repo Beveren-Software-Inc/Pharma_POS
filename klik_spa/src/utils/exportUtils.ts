@@ -74,7 +74,7 @@ export function exportInvoicesToCSV(invoices: ExportableInvoice[], filename?: st
 }
 
 export function formatCurrencyForExport(amount: number, currency: string = 'SAR'): string {
-  return `${amount.toFixed(2)} ${currency}`;
+  return `${amount.toFixed(3)} ${currency}`;
 }
 
 export function formatDateForExport(dateString: string): string {

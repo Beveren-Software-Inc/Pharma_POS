@@ -54,9 +54,9 @@ export default function MenuItemCard({ item, onAddToCart }: MenuItemCardProps) {
 
         <div className="flex items-center space-x-1">
           {item.originalPrice && (
-            <span className="text-gray-400 line-through text-xs">${item.originalPrice.toFixed(2)}</span>
+            <span className="text-gray-400 line-through text-xs">${item.originalPrice.toFixed(3)}</span>
           )}
-          <span className="font-bold text-base">${item.price.toFixed(2)}</span>
+          <span className="font-bold text-base">${item.price.toFixed(3)}</span>
           <span className="text-gray-500 text-xs">/ Portion</span>
         </div>
       </div>
