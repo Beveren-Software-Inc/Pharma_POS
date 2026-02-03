@@ -10,6 +10,8 @@ interface CartState {
   cartItems: CartItem[]
   appliedCoupons: GiftCoupon[]
   selectedCustomer: Customer | null
+  /** Points to redeem at checkout (loyalty); null = not redeeming */
+  redeemLoyaltyPoints: number | null
 
   // Actions
   addToCart: (item: Omit<CartItem, 'quantity'>) => Promise<void>
@@ -21,6 +23,7 @@ interface CartState {
   applyCoupon: (coupon: GiftCoupon) => void
   removeCoupon: (couponCode: string) => void
   setSelectedCustomer: (customer: Customer | null) => Promise<void>
+  setRedeemLoyaltyPoints: (points: number | null) => void
   updatePricesForCustomer: (customerId?: string) => Promise<void>
   applyPricingRules: () => Promise<void>
 }
@@ -31,6 +34,7 @@ export const useCartStore = create<CartState>()(
       cartItems: [],
       appliedCoupons: [],
       selectedCustomer: null,
+      redeemLoyaltyPoints: null,
 
       addToCart: async (item) => {
         const state = get();
@@ -217,9 +221,13 @@ export const useCartStore = create<CartState>()(
         set(() => ({
           cartItems: [],
           appliedCoupons: [],
-          selectedCustomer: null
+          selectedCustomer: null,
+          redeemLoyaltyPoints: null
         }));
       },
+
+      setRedeemLoyaltyPoints: (points) => set(() => ({ redeemLoyaltyPoints: points })),
+
 
       applyCoupon: (coupon) => set((state) => {
         if (!state.appliedCoupons.some((c) => c.code === coupon.code)) {
@@ -235,8 +243,9 @@ export const useCartStore = create<CartState>()(
       })),
 
       setSelectedCustomer: async (customer) => {
-        set(() => ({
-          selectedCustomer: customer
+        set((state) => ({
+          selectedCustomer: customer,
+          ...(customer ? {} : { redeemLoyaltyPoints: null })
         }));
 
         // Apply pricing rules when customer changes (pricing rules can be customer-specific)
