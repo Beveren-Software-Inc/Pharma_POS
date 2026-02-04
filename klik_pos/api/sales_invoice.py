@@ -838,6 +838,9 @@ def build_sales_invoice_doc(
 	doc.customer = customer
 	doc.due_date = frappe.utils.nowdate()
 	doc.custom_delivery_date = frappe.utils.nowdate()
+	# POS already applied ERPNext pricing rules (discounts + free items) on the cart,
+	# so avoid re-applying pricing rules on the Sales Invoice to prevent duplicate free items.
+	doc.ignore_pricing_rule = 1
 
 	# Set delivery personnel if provided
 	if delivery_personnel:
@@ -1075,6 +1078,10 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 		"warehouse": pos_profile.warehouse,
 		"cost_center": pos_profile.cost_center,
 	}
+
+	# Preserve free-item flag from cart so ERPNext knows these are promotional rows
+	if item.get("is_free_item"):
+		item_data["is_free_item"] = 1
 
 	# Add optional fields
 	_add_uom_to_item(item_data, item)

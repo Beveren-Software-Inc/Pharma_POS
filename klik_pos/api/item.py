@@ -309,10 +309,10 @@ def get_item_by_barcode(barcode: str):
 
 		item_code = frappe.db.sql(
 			"""
-            SELECT parent
-            FROM `tabItem Barcode`
-            WHERE barcode = %s
-        """,
+			SELECT parent
+			FROM `tabItem Barcode`
+			WHERE barcode = %s
+		""",
 			barcode,
 			as_dict=True,
 		)
@@ -320,10 +320,10 @@ def get_item_by_barcode(barcode: str):
 		if not item_code:
 			item_code = frappe.db.sql(
 				"""
-                SELECT name
-                FROM `tabItem`
-                WHERE name = %s AND disabled = 0
-            """,
+				SELECT name
+				FROM `tabItem`
+				WHERE name = %s AND disabled = 0
+			""",
 				barcode,
 				as_dict=True,
 			)
@@ -373,10 +373,10 @@ def get_item_by_identifier(code: str):
 		# 1) Try Item Barcode
 		item_row = frappe.db.sql(
 			"""
-            SELECT parent as item_code
-            FROM `tabItem Barcode`
-            WHERE barcode = %s
-            """,
+			SELECT parent as item_code
+			FROM `tabItem Barcode`
+			WHERE barcode = %s
+			""",
 			code,
 			as_dict=True,
 		)
@@ -388,10 +388,10 @@ def get_item_by_identifier(code: str):
 		if not item_row:
 			item_row = frappe.db.sql(
 				"""
-                SELECT b.item as item_code
-                FROM `tabBatch` b
-                WHERE b.batch_id = %s OR b.name = %s
-                """,
+				SELECT b.item as item_code
+				FROM `tabBatch` b
+				WHERE b.batch_id = %s OR b.name = %s
+				""",
 				(code, code),
 				as_dict=True,
 			)
@@ -404,10 +404,10 @@ def get_item_by_identifier(code: str):
 			# In ERPNext, the Serial No doctype has field name=serial_no; item_code links to Item
 			item_row = frappe.db.sql(
 				"""
-                SELECT s.item_code as item_code
-                FROM `tabSerial No` s
-                WHERE s.name = %s OR s.serial_no = %s
-                """,
+				SELECT s.item_code as item_code
+				FROM `tabSerial No` s
+				WHERE s.name = %s OR s.serial_no = %s
+				""",
 				(code, code),
 				as_dict=True,
 			)
@@ -985,14 +985,14 @@ def get_stock_updates():
 		if hide_unavailable:
 			# Use SQL to get only items with stock > 0
 			base_query = """
-                SELECT DISTINCT i.name
-                FROM `tabItem` i
-                INNER JOIN `tabBin` b ON i.name = b.item_code
-                WHERE i.disabled = 0
-                AND i.is_stock_item = 1
-                AND b.warehouse = %s
-                AND b.actual_qty > 0
-            """
+				SELECT DISTINCT i.name
+				FROM `tabItem` i
+				INNER JOIN `tabBin` b ON i.name = b.item_code
+				WHERE i.disabled = 0
+				AND i.is_stock_item = 1
+				AND b.warehouse = %s
+				AND b.actual_qty > 0
+			"""
 
 			params = [warehouse]
 			if pos_doc.item_groups:
@@ -1307,6 +1307,7 @@ def apply_pricing_rules_to_cart(cart_items, customer=None):
 	Returns:
 		List of items with updated prices, discounts, and pricing rule info
 	"""
+	
 	try:
 		cart_items = _parse_cart_items(cart_items)
 		if not cart_items:
@@ -1314,12 +1315,13 @@ def apply_pricing_rules_to_cart(cart_items, customer=None):
 
 		context = _build_pricing_context(customer)
 		erpnext_items = _prepare_erpnext_items(cart_items, context)
-
+		
 		if not erpnext_items:
 			return []
 		pricing_results = _apply_pricing_rules(erpnext_items, context)
-
+		
 		result_items = _process_pricing_results(pricing_results, erpnext_items, cart_items, context)
+		print("Kuna hapa", str(result_items))
 		return result_items
 
 	except Exception as e:
@@ -1489,7 +1491,7 @@ def _apply_pricing_rules(erpnext_items, context):
 	if context.get("customer"):
 		args_dict["customer"] = context["customer"]
 
-	# Always include customer_group and territory if available (needed for pricing rule filtering)
+	#Always include customer_group and territory if available (needed for pricing rule filtering)
 	if context.get("customer_group"):
 		args_dict["customer_group"] = context["customer_group"]
 	if context.get("territory"):
@@ -1502,7 +1504,6 @@ def _apply_pricing_rules(erpnext_items, context):
 		args_dict["warehouse"] = context["warehouse"]
 
 	args = frappe._dict(args_dict)
-
 	try:
 		results = apply_pricing_rule(args, doc=None)
 	except Exception as e:
@@ -1520,7 +1521,6 @@ def _apply_pricing_rules(erpnext_items, context):
 def _process_pricing_results(pricing_results, erpnext_items, cart_items, context):
 	"""Process pricing rule results and map back to cart items."""
 	result_items = []
-
 	# Create a map from item_code to cart_item for quick lookup
 	cart_item_map = {}
 	for cart_item in cart_items:
@@ -1539,7 +1539,7 @@ def _process_pricing_results(pricing_results, erpnext_items, cart_items, context
 
 		if not item_code:
 			continue
-
+		print("Ruling the party", str(pricing_result))
 		# Find the matching cart item
 		cart_item = cart_item_map.get(item_code)
 		if not cart_item:
@@ -1705,6 +1705,7 @@ def _handle_no_pricing_rule(erpnext_item, cart_items, context):
 
 def _calculate_discounted_price(cart_item, pricing_result, context):
 	"""Calculate final price after applying discounts."""
+	print("Calculating discounted price...")
 	cart_item_code = cart_item.get("id") or cart_item.get("item_code")
 	item_uom = cart_item.get("uom")
 	price_list = context.get("price_list")
@@ -1845,7 +1846,7 @@ def _calculate_discounted_price(cart_item, pricing_result, context):
 				else ((original_price - final_price) / original_price * 100)
 			)
 			final_discount_amt = discount_amount if discount_amount > 0 else (original_price - final_price)
-
+			print("Uko wapi")
 			return {
 				**cart_item,
 				"price": final_price,
