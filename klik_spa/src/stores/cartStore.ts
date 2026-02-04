@@ -6,10 +6,76 @@ import { toast } from 'react-toastify'
 import { clearDraftInvoiceCache } from '../utils/draftInvoiceCache'
 import { updateItemPricesForCustomer, getItemPriceForCustomer, applyPricingRulesToCart } from '../services/dynamicPricing'
 
+// Helper to merge ERPNext pricing rule results (including free items) back into the POS cart
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mergePricingResultsWithFreeItems(baseCartItems: CartItem[], pricingResults: any[]): CartItem[] {
+  // Update base items with discounts / pricing rule info
+  const updatedBaseItems: CartItem[] = baseCartItems.map((item) => {
+    const pricingRuleItem = pricingResults.find((pr) => pr.id === item.id)
+    if (!pricingRuleItem) {
+      return item
+    }
+
+    return {
+      ...item,
+      price: pricingRuleItem.price ?? item.price,
+      // Optional metadata from pricing rules (safe to leave undefined when not present)
+      // @ts-expect-error: runtime fields from backend
+      original_price: pricingRuleItem.original_price ?? (item as any).original_price ?? item.price,
+      // @ts-expect-error: runtime fields from backend
+      discount_percentage: pricingRuleItem.discount_percentage,
+      // @ts-expect-error: runtime fields from backend
+      discount_amount: pricingRuleItem.discount_amount,
+      // @ts-expect-error: runtime fields from backend
+      pricing_rules: pricingRuleItem.pricing_rules,
+      // @ts-expect-error: runtime fields from backend
+      has_pricing_rule: pricingRuleItem.has_pricing_rule,
+    } as CartItem
+  })
+
+  // Collect free items from all pricing results
+  const freeItems: CartItem[] = []
+
+  pricingResults.forEach((pricingRuleItem) => {
+    const freeData = pricingRuleItem.free_item_data
+    if (!freeData || !Array.isArray(freeData) || freeData.length === 0) {
+      return
+    }
+
+    freeData.forEach((fd: any) => {
+      const qty = fd.qty || fd.free_qty || 0
+      if (!fd.item_code || qty <= 0) {
+        return
+      }
+
+      freeItems.push({
+        id: fd.item_code, // keep id = item_code so invoice builder can use it
+        // CartItem core fields
+        name: fd.item_name || fd.item_code,
+        category: 'Free Item',
+        price: fd.rate || 0,
+        image: '',
+        quantity: qty,
+        // Helpful extra fields for backend / UI
+        item_code: fd.item_code,
+        uom: fd.uom,
+        // @ts-expect-error: runtime flag, optional on CartItem
+        is_free_item: true,
+        // @ts-expect-error: runtime metadata from backend
+        pricing_rules: fd.pricing_rules,
+      })
+    })
+  })
+
+  return [...updatedBaseItems, ...freeItems]
+}
+
 interface CartState {
   cartItems: CartItem[]
   appliedCoupons: GiftCoupon[]
   selectedCustomer: Customer | null
+  /** Points to redeem at checkout (loyalty); null = not redeeming */
+  redeemLoyaltyPoints: number | null
 
   // Actions
   addToCart: (item: Omit<CartItem, 'quantity'>) => Promise<void>
@@ -21,6 +87,7 @@ interface CartState {
   applyCoupon: (coupon: GiftCoupon) => void
   removeCoupon: (couponCode: string) => void
   setSelectedCustomer: (customer: Customer | null) => Promise<void>
+  setRedeemLoyaltyPoints: (points: number | null) => void
   updatePricesForCustomer: (customerId?: string) => Promise<void>
   applyPricingRules: () => Promise<void>
 }
@@ -31,6 +98,7 @@ export const useCartStore = create<CartState>()(
       cartItems: [],
       appliedCoupons: [],
       selectedCustomer: null,
+      redeemLoyaltyPoints: null,
 
       addToCart: async (item) => {
         const state = get();
@@ -217,9 +285,13 @@ export const useCartStore = create<CartState>()(
         set(() => ({
           cartItems: [],
           appliedCoupons: [],
-          selectedCustomer: null
+          selectedCustomer: null,
+          redeemLoyaltyPoints: null
         }));
       },
+
+      setRedeemLoyaltyPoints: (points) => set(() => ({ redeemLoyaltyPoints: points })),
+
 
       applyCoupon: (coupon) => set((state) => {
         if (!state.appliedCoupons.some((c) => c.code === coupon.code)) {
@@ -235,8 +307,9 @@ export const useCartStore = create<CartState>()(
       })),
 
       setSelectedCustomer: async (customer) => {
-        set(() => ({
-          selectedCustomer: customer
+        set((state) => ({
+          selectedCustomer: customer,
+          ...(customer ? {} : { redeemLoyaltyPoints: null })
         }));
 
         // Apply pricing rules when customer changes (pricing rules can be customer-specific)
@@ -250,12 +323,16 @@ export const useCartStore = create<CartState>()(
         const state = get();
         if (state.cartItems.length === 0) return;
 
+        // Only apply pricing rules to non-free cart items; free items are re-generated from rules
+        const baseCartItems = state.cartItems.filter((item: any) => !item.is_free_item);
+        if (baseCartItems.length === 0) return;
+
         try {
           // First get base prices for items
-          const priceUpdates = await updateItemPricesForCustomer(state.cartItems, customerId);
+          const priceUpdates = await updateItemPricesForCustomer(baseCartItems, customerId);
 
           // Update cart items with new base prices, but preserve existing price if UOM is set and price seems correct
-          let updatedItems = state.cartItems.map(item => {
+          let updatedItems = baseCartItems.map(item => {
             const priceUpdate = priceUpdates[item.id];
             if (priceUpdate && priceUpdate.success && priceUpdate.price > 0) {
               const currentPrice = item.price || 0;
@@ -282,23 +359,11 @@ export const useCartStore = create<CartState>()(
           // Then apply pricing rules to get discounted prices
           const itemsWithPricingRules = await applyPricingRulesToCart(updatedItems, customerId);
 
-          // Update cart with pricing rule results
-          set((state) => ({
-            cartItems: state.cartItems.map(item => {
-              const pricingRuleItem = itemsWithPricingRules.find(prItem => prItem.id === item.id);
-              if (pricingRuleItem) {
-                return {
-                  ...item,
-                  price: pricingRuleItem.price,
-                  original_price: pricingRuleItem.original_price || item.price,
-                  discount_percentage: pricingRuleItem.discount_percentage,
-                  discount_amount: pricingRuleItem.discount_amount,
-                  pricing_rules: pricingRuleItem.pricing_rules,
-                  has_pricing_rule: pricingRuleItem.has_pricing_rule,
-                };
-              }
-              return item;
-            })
+          // Merge discounted base items + free items from pricing rules back into the cart
+          const mergedCartItems = mergePricingResultsWithFreeItems(updatedItems, itemsWithPricingRules);
+
+          set(() => ({
+            cartItems: mergedCartItems
           }));
 
         } catch (error) {
@@ -311,48 +376,18 @@ export const useCartStore = create<CartState>()(
         const state = get();
         if (state.cartItems.length === 0) return;
 
+        // Only price non-free items; free items are derived from rules
+        const baseCartItems = state.cartItems.filter((item: any) => !item.is_free_item);
+        if (baseCartItems.length === 0) return;
+
         try {
           const customerId = state.selectedCustomer?.id;
-          const itemsWithPricingRules = await applyPricingRulesToCart(state.cartItems, customerId);
+          const itemsWithPricingRules = await applyPricingRulesToCart(baseCartItems, customerId);
 
-          set((state) => ({
-            cartItems: state.cartItems.map(item => {
-              const pricingRuleItem = itemsWithPricingRules.find(prItem => prItem.id === item.id);
-              if (pricingRuleItem) {
-                const currentPrice = item.price || 0;
-                const newPrice = pricingRuleItem.price || 0;
+          const mergedCartItems = mergePricingResultsWithFreeItems(baseCartItems, itemsWithPricingRules);
 
-                // Preserve UOM-converted prices - if item has UOM and new price is much lower, keep current
-                if (!pricingRuleItem.has_pricing_rule && item.uom && currentPrice > 0 && newPrice > 0) {
-                  // If new price is much lower than current (less than 50% of current),
-                  // and current price is reasonable, preserve current price
-                  // This handles cases where Box (360) is being overwritten with Nos (18)
-                  if (newPrice < currentPrice * 0.5 && currentPrice > 10) {
-                    console.log(`Preserving price in pricing rules for ${item.id}: current=${currentPrice}, new=${newPrice}, UOM=${item.uom}`);
-                    return {
-                      ...item,
-                      price: currentPrice, // Keep current price
-                      original_price: pricingRuleItem.original_price || currentPrice,
-                      discount_percentage: pricingRuleItem.discount_percentage,
-                      discount_amount: pricingRuleItem.discount_amount,
-                      pricing_rules: pricingRuleItem.pricing_rules,
-                      has_pricing_rule: pricingRuleItem.has_pricing_rule,
-                    };
-                  }
-                }
-
-                return {
-                  ...item,
-                  price: newPrice,
-                  original_price: pricingRuleItem.original_price || item.price,
-                  discount_percentage: pricingRuleItem.discount_percentage,
-                  discount_amount: pricingRuleItem.discount_amount,
-                  pricing_rules: pricingRuleItem.pricing_rules,
-                  has_pricing_rule: pricingRuleItem.has_pricing_rule,
-                };
-              }
-              return item;
-            })
+          set(() => ({
+            cartItems: mergedCartItems
           }));
         } catch (error) {
           console.error('❌ Error applying pricing rules:', error);

@@ -831,6 +831,75 @@ def get_customer_statistics(customer_id):
 		return {"success": False, "error": str(e)}
 
 
+@frappe.whitelist()
+def get_loyalty_redemption_preview(customer_id, points_to_redeem, grand_total):
+	"""
+	Preview loyalty redemption: return loyalty_amount and validation for POS.
+	Uses ERPNext standard Loyalty Program (conversion_factor = value per point).
+	amount_to_pay = grand_total - loyalty_amount.
+	"""
+	try:
+		points_to_redeem = flt(points_to_redeem, 0)
+		grand_total = flt(grand_total, 0)
+		if not customer_id or points_to_redeem <= 0:
+			return {
+				"success": True,
+				"loyalty_amount": 0,
+				"conversion_factor": 0,
+				"max_points": 0,
+				"amount_to_pay": grand_total,
+			}
+
+		from erpnext.accounts.doctype.loyalty_program.loyalty_program import (
+			get_loyalty_program_details_with_points,
+		)
+
+		company = frappe.db.get_default("company") or (frappe.get_all("Company", limit=1, pluck="name") or [None])[0]
+		if not company:
+			return {"success": True, "loyalty_amount": 0, "conversion_factor": 0, "max_points": 0, "amount_to_pay": grand_total}
+
+		loyalty_program = frappe.db.get_value("Customer", customer_id, "loyalty_program")
+		if not loyalty_program:
+			return {"success": True, "loyalty_amount": 0, "conversion_factor": 0, "max_points": 0, "amount_to_pay": grand_total}
+
+		lp_details = get_loyalty_program_details_with_points(
+			customer_id,
+			loyalty_program=loyalty_program,
+			company=company,
+			silent=True,
+		)
+		if not lp_details or not lp_details.get("loyalty_points"):
+			return {"success": True, "loyalty_amount": 0, "conversion_factor": lp_details.get("conversion_factor") or 0, "max_points": 0, "amount_to_pay": grand_total}
+
+		max_points = int(lp_details.loyalty_points or 0)
+		conversion_factor = flt(lp_details.conversion_factor or 0, 2)
+		# Cap points to what user can redeem (cannot exceed invoice total in value)
+		points_capped = min(points_to_redeem, max_points)
+		if conversion_factor <= 0:
+			loyalty_amount = 0
+		else:
+			loyalty_amount = flt(points_capped * conversion_factor, 2)
+			if loyalty_amount > grand_total:
+				loyalty_amount = grand_total
+				points_capped = int(grand_total / conversion_factor)
+		amount_to_pay = flt(grand_total - loyalty_amount, 2)
+		return {
+			"success": True,
+			"loyalty_amount": loyalty_amount,
+			"conversion_factor": conversion_factor,
+			"max_points": max_points,
+			"points_used": points_capped,
+			"amount_to_pay": amount_to_pay,
+		}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Loyalty Redemption Preview Error")
+		try:
+			gt = flt(grand_total, 2)
+		except Exception:
+			gt = 0
+		return {"success": False, "error": str(e), "loyalty_amount": 0, "amount_to_pay": gt}
+
+
 @frappe.whitelist(allow_guest=True)
 def get_global_totals():
 	"""Return global totals for customers and invoices for dashboard cards."""

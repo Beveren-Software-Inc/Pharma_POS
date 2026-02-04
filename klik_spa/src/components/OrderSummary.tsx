@@ -563,7 +563,7 @@ export default function OrderSummary({
   isMobile = false,
 }: OrderSummaryProps) {
   // const [showCouponPopover, setShowCouponPopover] = useState(false);
-  const { selectedCustomer, setSelectedCustomer, updateUOM, updatePricesForCustomer, addToCartWithQuantity } = useCartStore();
+  const { selectedCustomer, setSelectedCustomer, redeemLoyaltyPoints, setRedeemLoyaltyPoints, updateUOM, updatePricesForCustomer, addToCartWithQuantity } = useCartStore();
 
   // Track if user has manually removed the default customer
   const [userRemovedDefaultCustomer, setUserRemovedDefaultCustomer] = useState(false);
@@ -596,6 +596,8 @@ export default function OrderSummary({
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [showMedicationOrdersModal, setShowMedicationOrdersModal] = useState(false);
+  const [showRedeemLoyaltyModal, setShowRedeemLoyaltyModal] = useState(false);
+  const [redeemPointsInput, setRedeemPointsInput] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [medicationOrders, setMedicationOrders] = useState<InpatientMedicationOrder[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
@@ -1847,6 +1849,10 @@ export default function OrderSummary({
                       return (
                         <button
                           type="button"
+                          onClick={() => {
+                            setRedeemPointsInput(String(redeemLoyaltyPoints ?? Math.round(points)));
+                            setShowRedeemLoyaltyModal(true);
+                          }}
                           className="px-3 py-1.5 text-xs font-medium bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
                           title="Redeem loyalty points"
                         >
@@ -1998,6 +2004,10 @@ export default function OrderSummary({
                     return (
                       <button
                         type="button"
+                        onClick={() => {
+                          setRedeemPointsInput(String(redeemLoyaltyPoints ?? Math.round(points)));
+                          setShowRedeemLoyaltyModal(true);
+                        }}
                         className="px-3 py-1.5 text-xs font-medium bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
                         title="Redeem loyalty points"
                       >
@@ -2535,11 +2545,56 @@ export default function OrderSummary({
         />
       )}
 
+      {/* Redeem Loyalty Points Modal */}
+      {showRedeemLoyaltyModal && (() => {
+        const maxPoints = Math.round(customerStats?.loyalty_points ?? selectedCustomer?.loyaltyPoints ?? 0);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowRedeemLoyaltyModal(false)}>
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-4 w-full max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
+              <h3 className="font-medium text-gray-900 dark:text-white mb-2">Redeem loyalty points</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">How many points to redeem? (max {maxPoints})</p>
+              <input
+                type="number"
+                min={1}
+                max={maxPoints}
+                value={redeemPointsInput}
+                onChange={(e) => setRedeemPointsInput(e.target.value.replace(/\D/g, "").slice(0, String(maxPoints).length))}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white mb-4"
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const val = Math.min(maxPoints, Math.max(0, parseInt(redeemPointsInput, 10) || 0));
+                    setRedeemLoyaltyPoints(val > 0 ? val : null);
+                    setShowRedeemLoyaltyModal(false);
+                  }}
+                  className="flex-1 px-3 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700"
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRedeemLoyaltyPoints(null);
+                    setShowRedeemLoyaltyModal(false);
+                  }}
+                  className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Don&apos;t redeem
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Payment Dialog */}
       {showPaymentDialog && (
         <PaymentDialog
           isOpen={showPaymentDialog}
           onClose={handleClosePaymentDialog}
+          redeemLoyaltyPoints={redeemLoyaltyPoints}
           cartItems={cartItems.map((item) => ({
             ...item,
             discountedPrice: getDiscountedPrice(item),

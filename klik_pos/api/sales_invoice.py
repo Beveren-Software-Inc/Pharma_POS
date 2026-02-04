@@ -4,7 +4,7 @@ import erpnext
 import frappe
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import flt, cint
 from datetime import datetime, timedelta, date as date_type
 
 from klik_pos.klik_pos.utils import get_current_pos_profile
@@ -629,6 +629,8 @@ def create_and_submit_invoice(data):
 			delivery_personnel,
 			delivery_via,
 			medication_order,
+			redeem_loyalty_points,
+			loyalty_points,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -650,6 +652,8 @@ def create_and_submit_invoice(data):
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
 			medication_order=medication_order,
+			redeem_loyalty_points=redeem_loyalty_points,
+			loyalty_points=loyalty_points,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -725,6 +729,8 @@ def create_draft_invoice(data):
 			delivery_personnel,
 			delivery_via,
 			medication_order,
+			redeem_loyalty_points,
+			loyalty_points,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -738,6 +744,8 @@ def create_draft_invoice(data):
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
 			medication_order=medication_order,
+			redeem_loyalty_points=redeem_loyalty_points,
+			loyalty_points=loyalty_points,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -784,6 +792,13 @@ def parse_invoice_data(data):
 	# Extract Patient Medication Order (when items came from medication order)
 	medication_order = data.get("medicationOrder")
 
+	# Loyalty points redemption (ERPNext standard)
+	redeem_loyalty_points = cint(data.get("redeemLoyaltyPoints") or data.get("redeem_loyalty_points") or 0)
+	loyalty_points = cint(data.get("loyaltyPoints") or data.get("loyalty_points") or 0)
+	if redeem_loyalty_points and loyalty_points <= 0:
+		loyalty_points = 0
+		redeem_loyalty_points = 0
+
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
 
@@ -798,6 +813,8 @@ def parse_invoice_data(data):
 		delivery_personnel,
 		delivery_via,
 		medication_order,
+		redeem_loyalty_points,
+		loyalty_points,
 	)
 
 
@@ -813,12 +830,17 @@ def build_sales_invoice_doc(
 	delivery_personnel=None,
 	delivery_via=None,
 	medication_order=None,
+	redeem_loyalty_points=0,
+	loyalty_points=0,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
 	doc.customer = customer
 	doc.due_date = frappe.utils.nowdate()
 	doc.custom_delivery_date = frappe.utils.nowdate()
+	# POS already applied ERPNext pricing rules (discounts + free items) on the cart,
+	# so avoid re-applying pricing rules on the Sales Invoice to prevent duplicate free items.
+	doc.ignore_pricing_rule = 1
 
 	# Set delivery personnel if provided
 	if delivery_personnel:
@@ -888,6 +910,11 @@ def build_sales_invoice_doc(
 	# Add payment information
 	if include_payments:
 		_add_payment_entries(doc, mode_of_payment)
+
+	# Loyalty points redemption (ERPNext standard); validate_loyalty_points will set loyalty_amount on validate
+	if redeem_loyalty_points and loyalty_points and cint(loyalty_points) > 0:
+		doc.redeem_loyalty_points = 1
+		doc.loyalty_points = cint(loyalty_points)
 
 	return doc
 
@@ -1051,6 +1078,10 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 		"warehouse": pos_profile.warehouse,
 		"cost_center": pos_profile.cost_center,
 	}
+
+	# Preserve free-item flag from cart so ERPNext knows these are promotional rows
+	if item.get("is_free_item"):
+		item_data["is_free_item"] = 1
 
 	# Add optional fields
 	_add_uom_to_item(item_data, item)

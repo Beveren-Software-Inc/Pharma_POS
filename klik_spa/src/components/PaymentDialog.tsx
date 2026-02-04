@@ -78,6 +78,8 @@ interface PaymentDialogProps {
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
   itemDiscounts?: any; // Batch and discount information
   totalItemDiscount?: number;
+  /** Loyalty points to redeem at checkout (from Redeem modal); amount_to_pay = grandTotal - loyalty_amount */
+  redeemLoyaltyPoints?: number | null;
 }
 
 interface PaymentMethod {
@@ -135,6 +137,7 @@ export default function PaymentDialog({
   initialSharingMode = null,
   externalInvoiceData = null,
   itemDiscounts = {},
+  redeemLoyaltyPoints = null,
 
 }: PaymentDialogProps) {
   const [selectedSalesTaxCharges, setSelectedSalesTaxCharges] = useState("");
@@ -163,6 +166,9 @@ export default function PaymentDialog({
 
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [isSendingWhatsapp, setIsSendingWhatsapp] = useState(false);
+
+  // Loyalty redemption preview (amount_to_pay = grandTotal - loyalty_amount)
+  const [loyaltyPreview, setLoyaltyPreview] = useState<{ loyalty_amount: number; amount_to_pay: number } | null>(null);
 
   // WhatsApp template states
   const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppTemplate[]>([]);
@@ -473,9 +479,52 @@ export default function PaymentDialog({
     roundOffAmount,
   ]);
 
+  // Fetch loyalty redemption preview so amount_to_pay = grandTotal - loyalty_amount
+  useEffect(() => {
+    if (!isOpen || !selectedCustomer?.id || !redeemLoyaltyPoints || redeemLoyaltyPoints <= 0) {
+      setLoyaltyPreview(null);
+      return;
+    }
+    const grandTotal = calculations.grandTotal;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const params = new URLSearchParams({
+          customer_id: selectedCustomer!.id,
+          points_to_redeem: String(redeemLoyaltyPoints),
+          grand_total: String(grandTotal),
+        });
+        const res = await fetch(`/api/method/klik_pos.api.customer.get_loyalty_redemption_preview?${params}`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (data?.message?.success && data?.message?.loyalty_amount != null) {
+          setLoyaltyPreview({
+            loyalty_amount: data.message.loyalty_amount,
+            amount_to_pay: data.message.amount_to_pay ?? grandTotal - data.message.loyalty_amount,
+          });
+        } else {
+          setLoyaltyPreview(null);
+        }
+      } catch {
+        if (!cancelled) setLoyaltyPreview(null);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [isOpen, selectedCustomer?.id, redeemLoyaltyPoints, calculations.grandTotal]);
+
+  // Amount the customer actually pays (after loyalty redemption discount)
+  const effectiveGrandTotal = (redeemLoyaltyPoints && loyaltyPreview?.amount_to_pay != null)
+    ? loyaltyPreview.amount_to_pay
+    : calculations.grandTotal;
+
   // Calculate total paid amount from all payment methods (for both B2C and B2B)
   const totalPaidAmount = calculateTotalPayments(Object.values(paymentAmounts));
-  const outstandingAmount = calculateRemainingAmount(calculations.grandTotal, Object.values(paymentAmounts));
+  const outstandingAmount = calculateRemainingAmount(effectiveGrandTotal, Object.values(paymentAmounts));
 
   useEffect(() => {
     if (isOpen && defaultTax && !selectedSalesTaxCharges) {
@@ -487,12 +536,12 @@ export default function PaymentDialog({
     if (isOpen && modes.length > 0) {
       const defaultMode = modes.find((mode) => mode.default === 1);
       if (defaultMode && Object.keys(paymentAmounts).length === 0) {
-        const defaultAmount = parseFloat(calculations.grandTotal.toFixed(3));
+        const defaultAmount = parseFloat(effectiveGrandTotal.toFixed(3));
         setLastModifiedMethodId(defaultMode.mode_of_payment); // Track the auto-filled method
         setPaymentAmounts({ [defaultMode.mode_of_payment]: defaultAmount });
       }
     }
-  }, [isOpen, modes, calculations.grandTotal, isB2B, isB2C]);
+  }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C]);
 
   useEffect(() => {
 
@@ -501,7 +550,7 @@ export default function PaymentDialog({
       if (defaultMode) {
         // Calculate total of all payment methods
         const totalPayments = Object.values(paymentAmounts).reduce((sum, amount) => sum + (amount || 0), 0);
-        const excess = totalPayments - calculations.grandTotal;
+        const excess = totalPayments - effectiveGrandTotal;
 
         // Find the payment method with the highest amount
         const paymentEntries = Object.entries(paymentAmounts);
@@ -522,7 +571,7 @@ export default function PaymentDialog({
         }
       }
     }
-  }, [calculations.grandTotal, modes, isB2C, isB2B, isCombined, paymentAmounts]);
+  }, [effectiveGrandTotal, modes, isB2C, isB2B, isCombined, paymentAmounts]);
 
   // Auto-print when invoice is submitted and auto-print is enabled
   useEffect(() => {
@@ -632,7 +681,7 @@ export default function PaymentDialog({
   const handleAutoFillPayment = (methodId: string) => {
     if (invoiceSubmitted || isProcessingPayment) return;
 
-    const grandTotal = calculations.grandTotal;
+    const grandTotal = effectiveGrandTotal;
     const newPaymentAmounts: PaymentAmount = {};
 
     // Set all payment methods to 0 first
@@ -654,7 +703,7 @@ export default function PaymentDialog({
     if (invoiceSubmitted || isProcessingPayment) return;
 
     const numericAmount = roundCurrency(parseFloat(amount) || 0);
-    // const grandTotal = calculations.grandTotal;
+    // const grandTotal = effectiveGrandTotal;
 
 
     // Update the payment amount and let the adjustment useEffect handle the logic
@@ -847,7 +896,7 @@ export default function PaymentDialog({
     setIsProcessingPayment(true);
 
     // Calculate net amount to send to backend (amount paid minus change for B2C)
-    const netAmountToSend = isB2B ? totalPaidAmount : calculations.grandTotal;
+    const netAmountToSend = isB2B ? totalPaidAmount : effectiveGrandTotal;
 
     // For B2C, adjust payment method amounts to reflect net payment (after change)
     const adjustedPaymentMethods = isB2B
@@ -861,8 +910,8 @@ export default function PaymentDialog({
           const totalPaymentAmount = validPayments.reduce((sum, [, amount]) => sum + amount, 0);
 
           // If total exceeds grand total, adjust the last payment method
-          if (totalPaymentAmount > calculations.grandTotal) {
-            const excess = totalPaymentAmount - calculations.grandTotal;
+          if (totalPaymentAmount > effectiveGrandTotal) {
+            const excess = totalPaymentAmount - effectiveGrandTotal;
             const lastPaymentIndex = validPayments.length - 1;
             const lastPayment = validPayments[lastPaymentIndex];
             if (!lastPayment) return;
@@ -906,7 +955,7 @@ export default function PaymentDialog({
       couponDiscount: calculations.couponDiscount,
       roundOffAmount,
       grandTotal: calculations.grandTotal,
-      amountPaid: netAmountToSend, // Send net amount (grand total for B2C, total paid for B2B)
+      amountPaid: netAmountToSend, // Send net amount (effective total for B2C after loyalty, total paid for B2B)
       outstandingAmount: outstandingAmount,
       appliedCoupons,
       businessType: posDetails?.business_type,
@@ -921,6 +970,8 @@ export default function PaymentDialog({
         });
         return Array.from(orders);
       })(),
+      redeemLoyaltyPoints: !!(redeemLoyaltyPoints && redeemLoyaltyPoints > 0),
+      loyaltyPoints: redeemLoyaltyPoints ?? 0,
     };
 
     try {
@@ -1159,7 +1210,7 @@ export default function PaymentDialog({
                         `Dear ${
                           selectedCustomer?.name
                         },\n\nHere is your invoice total: ${formatCurrency(
-                          calculations.grandTotal
+                          effectiveGrandTotal
                         )}\n\nThank you.`
                       );
                       window.open(
@@ -1177,7 +1228,7 @@ export default function PaymentDialog({
                     onClick={() => {
                       const msg = encodeURIComponent(
                         `Here is your invoice total: ${formatCurrency(
-                          calculations.grandTotal
+                          effectiveGrandTotal
                         )}`
                       );
                       window.open(
@@ -1392,6 +1443,18 @@ export default function PaymentDialog({
                       </span>
                     </div>
                   </div>
+                  {loyaltyPreview && loyaltyPreview.loyalty_amount > 0 && (
+                    <>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600 dark:text-gray-400">Loyalty redemption</span>
+                        <span className="text-amber-600 dark:text-amber-400">-{formatCurrency(loyaltyPreview.loyalty_amount)}</span>
+                      </div>
+                      <div className="flex justify-between font-medium text-gray-900 dark:text-white">
+                        <span>Amount to pay</span>
+                        <span>{formatCurrency(effectiveGrandTotal)}</span>
+                      </div>
+                    </>
+                  )}
 
                   {(isB2C || isB2B) && (
                     <>
@@ -1411,14 +1474,14 @@ export default function PaymentDialog({
                           {formatCurrency(outstandingAmount)}
                         </span>
                       </div>
-                      {totalPaidAmount > calculations.grandTotal && (
+                      {totalPaidAmount > effectiveGrandTotal && (
                         <div className="flex justify-between">
                           <span className="text-gray-600 dark:text-gray-400">
                             Change
                           </span>
                           <span className="font-medium text-beveren-600 dark:text-beveren-400">
                             {formatCurrency(
-                              subtractCurrency(totalPaidAmount, calculations.grandTotal)
+                              subtractCurrency(totalPaidAmount, effectiveGrandTotal)
                             )}
                           </span>
                         </div>
@@ -1432,7 +1495,7 @@ export default function PaymentDialog({
                         Outstanding Amount
                       </span>
                       <span className="font-medium text-orange-600 dark:text-orange-400">
-                        {formatCurrency(calculations.grandTotal)}
+                        {formatCurrency(effectiveGrandTotal)}
                       </span>
                     </div>
                   )}
@@ -2197,6 +2260,18 @@ export default function PaymentDialog({
                           </span>
                         </div>
                       </div>
+                      {loyaltyPreview && loyaltyPreview.loyalty_amount > 0 && (
+                        <>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-600 dark:text-gray-400">Loyalty redemption</span>
+                            <span className="text-amber-600 dark:text-amber-400">-{formatCurrency(loyaltyPreview.loyalty_amount)}</span>
+                          </div>
+                          <div className="flex justify-between font-medium text-gray-900 dark:text-white">
+                            <span>Amount to pay</span>
+                            <span>{formatCurrency(effectiveGrandTotal)}</span>
+                          </div>
+                        </>
+                      )}
 
                       {(isB2C || isB2B) && (
                         <>
@@ -2222,14 +2297,14 @@ export default function PaymentDialog({
                               {formatCurrency(outstandingAmount)}
                             </span>
                           </div>
-                          {totalPaidAmount > calculations.grandTotal && (
+                          {totalPaidAmount > effectiveGrandTotal && (
                             <div className="flex justify-between">
                               <span className="text-gray-600 dark:text-gray-400">
                                 Change
                               </span>
                               <span className="font-bold text-green-600 dark:text-green-400">
                                 {formatCurrency(
-                                  subtractCurrency(totalPaidAmount, calculations.grandTotal)
+                                  subtractCurrency(totalPaidAmount, effectiveGrandTotal)
                                 )}
                               </span>
                             </div>
@@ -2342,7 +2417,7 @@ export default function PaymentDialog({
                             <span className="font-medium text-gray-900 dark:text-white">
                               {formatCurrency(
                                 externalInvoiceData?.grand_total ||
-                                  calculations.grandTotal
+                                  effectiveGrandTotal
                               )}
                             </span>
                           </div>
@@ -2411,7 +2486,7 @@ export default function PaymentDialog({
                         Total
                       </span>
                       <span className="text-gray-900 dark:text-white">
-                        {formatCurrency(calculations.grandTotal)}
+                        {formatCurrency(effectiveGrandTotal)}
                       </span>
                     </div>
                   </div>
@@ -2451,7 +2526,7 @@ export default function PaymentDialog({
                           Outstanding Amount:
                         </span>
                         <span className="text-orange-600 dark:text-orange-400 font-bold">
-                          {formatCurrency(calculations.grandTotal)}
+                          {formatCurrency(effectiveGrandTotal)}
                         </span>
                       </div>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
