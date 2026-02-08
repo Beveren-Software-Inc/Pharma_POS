@@ -46,11 +46,11 @@ def fetch_item_balance(item_code: str, warehouse: str) -> float:
 
 
 def _get_uom_conversion_factor(item_code: str, uom: str) -> float | None:
-	"""Get conversion factor for a specific UOM from Item UOM table."""
+	"""Get conversion factor for a specific UOM from Item UOM child table (UOM Conversion Detail)."""
 	try:
 		conversion_factor = frappe.db.get_value(
-			"UOM",
-			{"parent": item_code, "uom": uom},
+			"UOM Conversion Detail",
+			{"parenttype": "Item", "parent": item_code, "uom": uom},
 			"conversion_factor",
 		)
 		return float(conversion_factor) if conversion_factor else None
@@ -1321,7 +1321,6 @@ def apply_pricing_rules_to_cart(cart_items, customer=None):
 		pricing_results = _apply_pricing_rules(erpnext_items, context)
 		
 		result_items = _process_pricing_results(pricing_results, erpnext_items, cart_items, context)
-		print("Kuna hapa", str(result_items))
 		return result_items
 
 	except Exception as e:
@@ -1741,7 +1740,6 @@ def _calculate_discounted_price(cart_item, pricing_result, context):
 	# 3) Normal case: apply ERPNext discount logic on our original_price
 	final_price = _apply_discount_logic(original_price, pricing_result)
 
-	# Build result item with all pricing information
 	return {
 		**cart_item,
 		"price": final_price,
@@ -1756,7 +1754,6 @@ def _calculate_discounted_price(cart_item, pricing_result, context):
 
 def _get_original_price_for_cart_item(cart_item_code, item_uom, cart_price, price_list, customer):
 	"""Resolve the base/original price for a cart item, respecting UOM and existing cart price."""
-	# Use same logic as _prepare_erpnext_items: check direct price first, then calculate
 	direct_price_filters = {
 		"item_code": cart_item_code,
 		"uom": item_uom,
