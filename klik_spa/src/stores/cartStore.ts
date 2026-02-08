@@ -83,6 +83,7 @@ interface CartState {
   updateQuantity: (id: string, quantity: number) => Promise<void>
   updateUOM: (id: string, uom: string, price: number) => Promise<void>
   removeItem: (id: string) => void
+  updateItemMetadata: (id: string, updates: Record<string, unknown>) => void
   clearCart: () => void
   applyCoupon: (coupon: GiftCoupon) => void
   removeCoupon: (couponCode: string) => void
@@ -277,6 +278,12 @@ export const useCartStore = create<CartState>()(
 
       removeItem: (id) => set((state) => ({
         cartItems: state.cartItems.filter((item) => item.id !== id)
+      })),
+
+      updateItemMetadata: (id, updates) => set((state) => ({
+        cartItems: state.cartItems.map((item) =>
+          item.id === id ? { ...item, ...updates } : item
+        )
       })),
 
       clearCart: () => {

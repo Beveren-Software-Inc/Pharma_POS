@@ -563,7 +563,7 @@ export default function OrderSummary({
   isMobile = false,
 }: OrderSummaryProps) {
   // const [showCouponPopover, setShowCouponPopover] = useState(false);
-  const { selectedCustomer, setSelectedCustomer, redeemLoyaltyPoints, setRedeemLoyaltyPoints, updateUOM, updatePricesForCustomer, addToCartWithQuantity } = useCartStore();
+  const { selectedCustomer, setSelectedCustomer, redeemLoyaltyPoints, setRedeemLoyaltyPoints, updateUOM, updatePricesForCustomer, addToCartWithQuantity, updateItemMetadata } = useCartStore();
 
   // Track if user has manually removed the default customer
   const [userRemovedDefaultCustomer, setUserRemovedDefaultCustomer] = useState(false);
@@ -1034,6 +1034,7 @@ export default function OrderSummary({
               updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
             }
             if (itemToAdd.medication_order) {
+              updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order });
               updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order);
             }
             
@@ -1058,6 +1059,7 @@ export default function OrderSummary({
                 available: product.available,
                 uom: uomToUse,
                 item_code: product.id,
+                ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order }),
               },
               cartQuantity
             );
@@ -1074,6 +1076,7 @@ export default function OrderSummary({
               }, 100);
             }
             if (itemToAdd.medication_order) {
+              updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order });
               setTimeout(() => {
                 updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order!);
               }, 100);
@@ -1178,6 +1181,7 @@ export default function OrderSummary({
             updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
           }
           if (itemToAdd.medication_order) {
+            updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order });
             updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order);
           }
           
@@ -1202,6 +1206,7 @@ export default function OrderSummary({
               available: product.available,
               uom: uomToUse,
               item_code: product.id,
+              ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order }),
             },
             cartQuantity
           );
@@ -1218,6 +1223,7 @@ export default function OrderSummary({
             }, 100);
           }
           if (itemToAdd.medication_order) {
+            updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order });
             setTimeout(() => {
               updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order!);
             }, 100);

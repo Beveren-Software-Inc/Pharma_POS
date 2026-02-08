@@ -791,6 +791,15 @@ def parse_invoice_data(data):
 	delivery_via = data.get("deliveryVia")
 	# Extract Patient Medication Order (when items came from medication order)
 	medication_order = data.get("medicationOrder")
+	# Fallback: extract from items if top-level medicationOrder is empty (e.g. mobile payment flow)
+	if not medication_order and items:
+		orders_from_items = set()
+		for it in items:
+			mo = it.get("medicationOrder") or it.get("medication_order")
+			if mo:
+				orders_from_items.add(mo)
+		if orders_from_items:
+			medication_order = list(orders_from_items)
 
 	# Loyalty points redemption (ERPNext standard)
 	redeem_loyalty_points = cint(data.get("redeemLoyaltyPoints") or data.get("redeem_loyalty_points") or 0)

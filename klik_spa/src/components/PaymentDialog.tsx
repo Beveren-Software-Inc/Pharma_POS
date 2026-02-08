@@ -932,20 +932,26 @@ export default function PaymentDialog({
         })();
 
     const paymentData = {
-      items: cartItems.map(item => ({
-        ...item,
-        //eslint-disable-next-line @typescript-eslint/no-explicit-any
-        price: (item as any).discountedPrice || item.price, // Use discounted price
-        batchNumber: itemDiscounts[item.id]?.batchNumber || null,
-        serialNumber: itemDiscounts[item.id]?.serialNumber || null,
-        uom: item.uom || 'Nos', // Include selected UOM
-        // Include discount information for backend
-        discountPercentage: itemDiscounts[item.id]?.discountPercentage || 0,
-        discountAmount: itemDiscounts[item.id]?.discountAmount || 0,
-        // Pharmacy: dosage and prescription frequency for Sales Invoice Item
-        dosage: itemDiscounts[item.id]?.dosage ?? item.dosage ?? null,
-        prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
-      })),
+      items: cartItems.map(item => {
+        const medOrder = (itemDiscounts[item.id] as { medicationOrder?: string } | undefined)?.medicationOrder
+          ?? (item as { medicationOrder?: string }).medicationOrder;
+        return {
+          ...item,
+          //eslint-disable-next-line @typescript-eslint/no-explicit-any
+          price: (item as any).discountedPrice || item.price, // Use discounted price
+          batchNumber: itemDiscounts[item.id]?.batchNumber || null,
+          serialNumber: itemDiscounts[item.id]?.serialNumber || null,
+          uom: item.uom || 'Nos', // Include selected UOM
+          // Include discount information for backend
+          discountPercentage: itemDiscounts[item.id]?.discountPercentage || 0,
+          discountAmount: itemDiscounts[item.id]?.discountAmount || 0,
+          // Pharmacy: dosage and prescription frequency for Sales Invoice Item
+          dosage: itemDiscounts[item.id]?.dosage ?? item.dosage ?? null,
+          prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
+          // Patient Medication Order - per item so backend can extract if top-level is missing
+          medicationOrder: medOrder || undefined,
+        };
+      }),
       customer: selectedCustomer,
       paymentMethods: (adjustedPaymentMethods ?? []).map(([method, amount]) => ({ method, amount: parseFloat((Number(amount) || 0).toFixed(3)) })),
       subtotal: calculations.subtotal,
@@ -961,11 +967,12 @@ export default function PaymentDialog({
       businessType: posDetails?.business_type,
       deliveryPersonnel: deliveryPersonnel || null,
       deliveryVia: deliveryVia || null,
-      // Patient Medication Orders - push all unique orders if items came from medication orders
+      // Patient Medication Orders - from itemDiscounts or cart item; backend also extracts from items
       medicationOrder: (() => {
         const orders = new Set<string>();
         cartItems.forEach((item) => {
-          const orderName = (itemDiscounts[item.id] as { medicationOrder?: string } | undefined)?.medicationOrder;
+          const orderName = (itemDiscounts[item.id] as { medicationOrder?: string } | undefined)?.medicationOrder
+            ?? (item as { medicationOrder?: string }).medicationOrder;
           if (orderName) orders.add(orderName);
         });
         return Array.from(orders);
