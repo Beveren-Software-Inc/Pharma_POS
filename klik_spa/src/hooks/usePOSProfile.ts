@@ -119,6 +119,7 @@ export type POSDetails = {
   custom_delivery_required?: number | boolean | string;
   custom_is_pharmacy?: number | boolean | string;
   custom_pharmacy_default_uom?: string | null;
+  custom_allow_item_tax_template?: number | boolean | string;
   // extend with any other server-provided fields as needed
   [key: string]: unknown;
 }

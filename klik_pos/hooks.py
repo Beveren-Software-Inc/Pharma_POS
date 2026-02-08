@@ -65,11 +65,18 @@ fixtures = [
 					"Sales Invoice-custom_delivery_via",
 					"Item Group-custom_non_returnable",
 					"Sales Invoice-custom_medication_order",
-					"Sales Invoice-custom_reference_no"
+					"Sales Invoice-custom_reference_no",
+					"POS Profile-custom_allow_item_tax_template"
 				),
 			]
 		],
 	},
+ {
+	 "doctype": "Delivery Channel",
+	"filters":[
+		
+	]
+ }
  
 ]
 

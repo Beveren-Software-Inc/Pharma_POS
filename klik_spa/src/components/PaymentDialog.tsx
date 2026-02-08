@@ -59,6 +59,7 @@ import {
 } from "../services/emailTemplateService";
 import DeliveryPersonnelModal from "./DeliveryPersonnelModal";
 import { useDeliveryPersonnel } from "../hooks/useDeliveryPersonnel";
+import { useItemTaxTemplateRates } from "../hooks/useItemTaxTemplateRates";
 
 interface PaymentDialogProps {
   isOpen: boolean;
@@ -209,6 +210,14 @@ export default function PaymentDialog({
   const isDeliveryRequired = deliveryRequiredValue === 1 ||
                              deliveryRequiredValue === true ||
                              deliveryRequiredValue === "1";
+  const isItemTaxTemplateMode = posDetails?.custom_allow_item_tax_template === 1 ||
+                                posDetails?.custom_allow_item_tax_template === true ||
+                                posDetails?.custom_allow_item_tax_template === "1";
+
+  const itemTaxTemplateNames = cartItems
+    .map((item) => (item as { item_tax_template?: string }).item_tax_template)
+    .filter(Boolean) as string[];
+  const { rates: itemTaxTemplateRates } = useItemTaxTemplateRates(itemTaxTemplateNames);
 
 
 
@@ -442,6 +451,29 @@ export default function PaymentDialog({
     );
     const taxableAmount = Math.max(0, subtotal - couponDiscount);
 
+    if (isItemTaxTemplateMode) {
+      // Tax from item tax template per item (exclusive)
+      let taxAmount = 0;
+      cartItems.forEach((item) => {
+        const itemPrice = (item as { discountedPrice?: number }).discountedPrice || item.price;
+        const itemTotal = itemPrice * item.quantity;
+        const template = (item as { item_tax_template?: string }).item_tax_template;
+        const rate = template ? (itemTaxTemplateRates[template] ?? 0) : 0;
+        taxAmount += (itemTotal * rate) / 100;
+      });
+      taxAmount = parseFloat(taxAmount.toFixed(3));
+      const grandTotal = taxableAmount + taxAmount + roundOffAmount;
+      return {
+        subtotal,
+        couponDiscount,
+        taxableAmount,
+        taxAmount,
+        grandTotal,
+        selectedTax: null,
+        isInclusive: false,
+      };
+    }
+
     const selectedTax = salesTaxCharges.find(
       (tax) => tax.id === selectedSalesTaxCharges
     );
@@ -478,6 +510,8 @@ export default function PaymentDialog({
     selectedSalesTaxCharges,
     salesTaxCharges,
     roundOffAmount,
+    isItemTaxTemplateMode,
+    itemTaxTemplateRates,
   ]);
 
   // Fetch loyalty redemption preview so amount_to_pay = grandTotal - loyalty_amount
@@ -951,12 +985,14 @@ export default function PaymentDialog({
           prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
           // Patient Medication Order - per item so backend can extract if top-level is missing
           medicationOrder: medOrder || undefined,
+          // Item tax template (when POS profile allows item tax template mode)
+          item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
         };
       }),
       customer: selectedCustomer,
       paymentMethods: (adjustedPaymentMethods ?? []).map(([method, amount]) => ({ method, amount: parseFloat((Number(amount) || 0).toFixed(3)) })),
       subtotal: calculations.subtotal,
-      SalesTaxCharges: selectedSalesTaxCharges,
+      SalesTaxCharges: isItemTaxTemplateMode ? null : selectedSalesTaxCharges,
       taxAmount: calculations.taxAmount,
       taxType: calculations.isInclusive ? "inclusive" : "exclusive",
       couponDiscount: calculations.couponDiscount,
@@ -1068,6 +1104,7 @@ export default function PaymentDialog({
         ...item,
         dosage: itemDiscounts[item.id]?.dosage ?? item.dosage ?? null,
         prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
+        item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
       })),
       customer: selectedCustomer,
       medicationOrder: (() => {
@@ -1079,7 +1116,7 @@ export default function PaymentDialog({
         return Array.from(orders);
       })(),
       subtotal: calculations.subtotal,
-      SalesTaxCharges: selectedSalesTaxCharges,
+      SalesTaxCharges: isItemTaxTemplateMode ? null : selectedSalesTaxCharges,
       taxAmount: calculations.taxAmount,
       taxType: calculations.isInclusive ? "inclusive" : "exclusive",
       couponDiscount: calculations.couponDiscount,
@@ -2128,7 +2165,8 @@ export default function PaymentDialog({
                   </div>
                 </div>
 
-                {/* Tax Section */}
+                {/* Tax Section - hidden when using item tax template mode */}
+                {!isItemTaxTemplateMode && (
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                     Tax Configuration
@@ -2174,6 +2212,17 @@ export default function PaymentDialog({
                     </div>
                   </div>
                 </div>
+                )}
+                {isItemTaxTemplateMode && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    Tax (from Item Tax Templates)
+                  </h3>
+                  <div className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-gray-900 dark:text-white">
+                    {formatCurrency(calculations.taxAmount)}
+                  </div>
+                </div>
+                )}
 
                 {/* Totals Section */}
                 <div>

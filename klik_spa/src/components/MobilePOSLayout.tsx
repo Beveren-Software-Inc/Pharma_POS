@@ -140,6 +140,7 @@ export default function MobilePOSLayout({
       available: item.available,
       uom: uomToUse,
       item_code: item.id,
+      item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
     })
   }
 

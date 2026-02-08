@@ -1,0 +1,26 @@
+[
+ {
+  "delivery_via": "Talabat",
+  "docstatus": 0,
+  "doctype": "Delivery Channel",
+  "documents": [],
+  "modified": "2026-02-08 17:43:45.528703",
+  "name": "Talabat"
+ },
+ {
+  "delivery_via": "Jahez",
+  "docstatus": 0,
+  "doctype": "Delivery Channel",
+  "documents": [],
+  "modified": "2026-02-08 17:43:54.243658",
+  "name": "Jahez"
+ },
+ {
+  "delivery_via": "Keeta",
+  "docstatus": 0,
+  "doctype": "Delivery Channel",
+  "documents": [],
+  "modified": "2026-02-08 17:44:20.340872",
+  "name": "Keeta"
+ }
+]

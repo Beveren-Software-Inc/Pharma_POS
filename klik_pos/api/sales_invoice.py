@@ -1024,7 +1024,10 @@ def _set_roundoff_fields(doc, roundoff_amount):
 
 
 def _set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile):
-	"""Set the taxes and charges template."""
+	"""Set the taxes and charges template. When item tax template mode is enabled, do not set."""
+	if getattr(pos_profile, "custom_allow_item_tax_template", 0):
+		# Each item has its own item_tax_template; no document-level taxes and charges
+		return
 	if sales_and_tax_charges:
 		doc.taxes_and_charges = sales_and_tax_charges
 	else:
@@ -1108,6 +1111,7 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 	_add_batch_to_item(item_data, item, item_data_map.get(item_code, {}))
 	_add_serial_to_item(item_data, item)
 	_add_dosage_to_item(item_data, item)
+	_add_item_tax_template_to_item(item_data, item, pos_profile)
 
 	return item_data
 
@@ -1161,6 +1165,15 @@ def _add_dosage_to_item(item_data, item):
 		prescription_dosage = item.get("prescriptionDosage") or item.get("prescription_dosage")
 		if prescription_dosage:
 			item_data["custom_prescription_dosage"] = prescription_dosage
+
+
+def _add_item_tax_template_to_item(item_data, item, pos_profile):
+	"""Add item_tax_template to invoice item when POS profile allows item tax template mode."""
+	if not getattr(pos_profile, "custom_allow_item_tax_template", 0):
+		return
+	item_tax_template = item.get("item_tax_template") or item.get("itemTaxTemplate")
+	if item_tax_template:
+		item_data["item_tax_template"] = item_tax_template
 
 
 def _populate_tax_details(doc):
@@ -1686,6 +1699,14 @@ def get_writeoff_account():
 
 
 class CustomSalesInvoice(SalesInvoice):
+	def set_pos_fields(self, for_validate=False):
+		"""Keep taxes_and_charges blank when item tax template mode is enabled to avoid double tax calculation."""
+		pos = super().set_pos_fields(for_validate)
+		if pos and getattr(pos, "custom_allow_item_tax_template", 0):
+			self.taxes_and_charges = None
+			self.taxes = []
+		return pos
+
 	def get_gl_entries(self, warehouse_account=None):
 		from erpnext.accounts.general_ledger import merge_similar_entries
 

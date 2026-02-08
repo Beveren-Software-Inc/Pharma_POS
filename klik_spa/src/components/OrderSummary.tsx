@@ -25,6 +25,7 @@ import { extractErrorFromException } from "../utils/errorExtraction";
 import { getBatches } from "../utils/batch";
 import { getSerials } from "../utils/serial";
 import { usePOSDetails } from "../hooks/usePOSProfile";
+import { useItemTaxTemplates } from "../hooks/useItemTaxTemplates";
 import { useCustomerStatistics } from "../hooks/useCustomerStatistics";
 import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
@@ -620,6 +621,12 @@ export default function OrderSummary({
     typeof posDetails?.custom_pharmacy_default_uom === "string"
       ? posDetails.custom_pharmacy_default_uom.trim()
       : "";
+
+  const isItemTaxTemplateMode = posDetails?.custom_allow_item_tax_template === 1 ||
+    posDetails?.custom_allow_item_tax_template === true ||
+    posDetails?.custom_allow_item_tax_template === "1";
+
+  const { templates: itemTaxTemplates } = useItemTaxTemplates();
 
   /** Convert quantity from order UOM to cart UOM using Item UOM conversion factors. If no conversion, assume 1:1. */
   const convertOrderQuantityToCartUOM = useCallback(
@@ -2326,6 +2333,29 @@ export default function OrderSummary({
                             <UOMSelectField item={item} onUOMChange={handleUOMChange} isMobile={isMobile} selectedCustomer={selectedCustomer} />
                           </div>
                         </div>
+
+                        {/* Item Tax Template (when POS allows item tax template mode) */}
+                        {isItemTaxTemplateMode && (
+                          <div className="mb-4">
+                            <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                              Item Tax Template
+                            </label>
+                            <select
+                              value={(item as { item_tax_template?: string }).item_tax_template || ""}
+                              onChange={(e) =>
+                                updateItemMetadata(item.id, { item_tax_template: e.target.value || null })
+                              }
+                              className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                            >
+                              <option value="">— None (0%) —</option>
+                              {itemTaxTemplates.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
 
                         {/* Row 2: Discount Amount | Discount (%) */}
                         <div className="grid grid-cols-2 gap-4 mb-4">

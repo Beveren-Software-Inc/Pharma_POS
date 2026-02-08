@@ -31,13 +31,20 @@ export default function DeliveryPersonnelModal({
     if (isOpen) {
       setSelectedChannel("");
       setChannelSearchQuery("");
-      setIsChannelDropdownOpen(false);
       setReferenceNo("");
       setSelectedPersonnel("");
       setPersonnelSearchQuery("");
+      // Don't reset dropdown visibility - let it open on focus like customer/patient search
+      // Auto-open channel dropdown when channels are loaded so list shows immediately
+      if (!channelsLoading) {
+        setIsChannelDropdownOpen(true);
+        setIsPersonnelDropdownOpen(false);
+      }
+    } else {
+      setIsChannelDropdownOpen(false);
       setIsPersonnelDropdownOpen(false);
     }
-  }, [isOpen]);
+  }, [isOpen, channelsLoading]);
 
   const filteredChannels = useMemo(() => {
     if (!channelSearchQuery.trim()) return channels;
@@ -117,15 +124,26 @@ export default function DeliveryPersonnelModal({
   const handleChannelInputFocus = () => setIsChannelDropdownOpen(true);
   const handlePersonnelInputFocus = () => setIsPersonnelDropdownOpen(true);
 
-  const handleChannelInputBlur = () => {
+  const handleChannelInputBlur = (e: React.FocusEvent) => {
+    // Delay close to allow click on dropdown item to register (like customer/patient search)
     setTimeout(() => {
-      setIsChannelDropdownOpen(false);
+      const activeElement = document.activeElement;
+      const wrapper = e.currentTarget.closest(".relative")?.parentElement;
+      const dropdown = wrapper?.querySelector(".absolute");
+      if (!dropdown?.contains(activeElement)) {
+        setIsChannelDropdownOpen(false);
+      }
     }, 200);
   };
 
-  const handlePersonnelInputBlur = () => {
+  const handlePersonnelInputBlur = (e: React.FocusEvent) => {
     setTimeout(() => {
-      setIsPersonnelDropdownOpen(false);
+      const activeElement = document.activeElement;
+      const wrapper = e.currentTarget.closest(".relative")?.parentElement;
+      const dropdown = wrapper?.querySelector(".absolute");
+      if (!dropdown?.contains(activeElement)) {
+        setIsPersonnelDropdownOpen(false);
+      }
     }, 200);
   };
 
@@ -177,6 +195,7 @@ export default function DeliveryPersonnelModal({
                     value={channelSearchQuery}
                     onChange={(e) => handleChannelInputChange(e.target.value)}
                     onFocus={handleChannelInputFocus}
+                    onMouseDown={() => setIsChannelDropdownOpen(true)}
                     onBlur={handleChannelInputBlur}
                     className="w-full pl-10 pr-10 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                     autoFocus
@@ -192,22 +211,6 @@ export default function DeliveryPersonnelModal({
                 {isChannelDropdownOpen && (
                   <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-64 overflow-hidden">
                     <div className="max-h-64 overflow-y-auto">
-                      <button
-                        key="__no_channel__"
-                        type="button"
-                        onClick={() => handleSelectChannel("", "")}
-                        className={`w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
-                          !selectedChannel
-                            ? "bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400"
-                            : "text-gray-900 dark:text-white"
-                        }`}
-                      >
-                        <div className="font-medium">No Delivery Channel</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                          Show unassigned delivery personnel only
-                        </div>
-                      </button>
-
                       {filteredChannels.length > 0 ? (
                         filteredChannels.map((c) => (
                           <button
@@ -284,6 +287,7 @@ export default function DeliveryPersonnelModal({
                         value={personnelSearchQuery}
                         onChange={(e) => handlePersonnelInputChange(e.target.value)}
                         onFocus={handlePersonnelInputFocus}
+                        onMouseDown={() => setIsPersonnelDropdownOpen(true)}
                         onBlur={handlePersonnelInputBlur}
                         className="w-full pl-10 pr-10 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                       />
