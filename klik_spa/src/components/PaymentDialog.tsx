@@ -188,6 +188,7 @@ export default function PaymentDialog({
   const [showDeliveryPersonnelModal, setShowDeliveryPersonnelModal] = useState(false);
   const [selectedDeliveryPersonnel, setSelectedDeliveryPersonnel] = useState<string | null>(null);
   const [selectedDeliveryVia, setSelectedDeliveryVia] = useState<string | null>(null);
+  const [selectedReferenceNo, setSelectedReferenceNo] = useState<string | null>(null);
 
   // Hooks
   const { posDetails, loading: posLoading } = usePOSDetails();
@@ -869,7 +870,7 @@ export default function PaymentDialog({
     }
   };
 
-  const processPayment = async (deliveryPersonnel: string | null = null, deliveryVia: string | null = null) => {
+  const processPayment = async (deliveryPersonnel: string | null = null, deliveryVia: string | null = null, referenceNo: string | null = null) => {
     if (!selectedCustomer || !selectedCustomer.name) {
       toast.error("Kindly select a customer");
       return;
@@ -967,6 +968,7 @@ export default function PaymentDialog({
       businessType: posDetails?.business_type,
       deliveryPersonnel: deliveryPersonnel || null,
       deliveryVia: deliveryVia || null,
+      referenceNo: referenceNo || null,
       // Patient Medication Orders - from itemDiscounts or cart item; backend also extracts from items
       medicationOrder: (() => {
         const orders = new Set<string>();
@@ -1031,13 +1033,14 @@ export default function PaymentDialog({
     );
 
     // Always process payment directly; delivery personnel is optional
-    await processPayment(selectedDeliveryPersonnel, selectedDeliveryVia);
+    await processPayment(selectedDeliveryPersonnel, selectedDeliveryVia, selectedReferenceNo);
   };
 
-  const handleDeliveryPersonnelSelect = (selection: { personnelName: string | null; deliveryVia: string | null }) => {
+  const handleDeliveryPersonnelSelect = (selection: { personnelName: string | null; deliveryVia: string | null; referenceNo?: string | null }) => {
     // Called from the footer-triggered modal only; just store selection
     setSelectedDeliveryPersonnel(selection.personnelName || null);
     setSelectedDeliveryVia(selection.deliveryVia);
+    setSelectedReferenceNo(selection.referenceNo ?? null);
     setShowDeliveryPersonnelModal(false);
   };
 
@@ -1087,6 +1090,7 @@ export default function PaymentDialog({
       businessType: posDetails?.business_type,
       deliveryPersonnel: selectedDeliveryPersonnel || null,
       deliveryVia: selectedDeliveryVia || null,
+      referenceNo: selectedReferenceNo || null,
     };
 
     try {

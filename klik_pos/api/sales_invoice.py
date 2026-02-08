@@ -628,6 +628,7 @@ def create_and_submit_invoice(data):
 			roundoff_amount,
 			delivery_personnel,
 			delivery_via,
+			reference_no,
 			medication_order,
 			redeem_loyalty_points,
 			loyalty_points,
@@ -651,6 +652,7 @@ def create_and_submit_invoice(data):
 			include_payments=True,
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
+			reference_no=reference_no,
 			medication_order=medication_order,
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
@@ -728,6 +730,7 @@ def create_draft_invoice(data):
 			roundoff_amount,
 			delivery_personnel,
 			delivery_via,
+			reference_no,
 			medication_order,
 			redeem_loyalty_points,
 			loyalty_points,
@@ -743,6 +746,7 @@ def create_draft_invoice(data):
 			include_payments=True,
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
+			reference_no=reference_no,
 			medication_order=medication_order,
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
@@ -789,6 +793,8 @@ def parse_invoice_data(data):
 	delivery_personnel = data.get("deliveryPersonnel")
 	# Extract delivery channel (custom field on Sales Invoice)
 	delivery_via = data.get("deliveryVia")
+	# Extract reference no (custom field on Sales Invoice)
+	reference_no = data.get("referenceNo") or data.get("reference_no")
 	# Extract Patient Medication Order (when items came from medication order)
 	medication_order = data.get("medicationOrder")
 	# Fallback: extract from items if top-level medicationOrder is empty (e.g. mobile payment flow)
@@ -821,6 +827,7 @@ def parse_invoice_data(data):
 		roundoff_amount,
 		delivery_personnel,
 		delivery_via,
+		reference_no,
 		medication_order,
 		redeem_loyalty_points,
 		loyalty_points,
@@ -838,6 +845,7 @@ def build_sales_invoice_doc(
 	include_payments=False,
 	delivery_personnel=None,
 	delivery_via=None,
+	reference_no=None,
 	medication_order=None,
 	redeem_loyalty_points=0,
 	loyalty_points=0,
@@ -857,6 +865,9 @@ def build_sales_invoice_doc(
 	# Set delivery channel if provided and field exists
 	if delivery_via and frappe.db.has_column("Sales Invoice", "custom_delivery_via"):
 		doc.custom_delivery_via = delivery_via
+	# Set reference no if provided and field exists
+	if reference_no and frappe.db.has_column("Sales Invoice", "custom_reference_no"):
+		doc.custom_reference_no = reference_no
 	# Set Patient Medication Orders (Table MultiSelect) if items came from orders and field exists
 	if medication_order and frappe.db.has_column("Sales Invoice", "custom_medication_order"):
 		orders = medication_order

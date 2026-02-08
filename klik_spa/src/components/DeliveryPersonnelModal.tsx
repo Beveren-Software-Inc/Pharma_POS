@@ -8,7 +8,7 @@ import { useDeliveryChannels } from "../hooks/useDeliveryChannels";
 interface DeliveryPersonnelModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelect: (selection: { personnelName: string | null; deliveryVia: string | null }) => void;
+  onSelect: (selection: { personnelName: string | null; deliveryVia: string | null; referenceNo?: string | null }) => void;
 }
 
 export default function DeliveryPersonnelModal({
@@ -20,6 +20,7 @@ export default function DeliveryPersonnelModal({
   const [selectedChannel, setSelectedChannel] = useState<string>("");
   const [channelSearchQuery, setChannelSearchQuery] = useState<string>("");
   const [isChannelDropdownOpen, setIsChannelDropdownOpen] = useState<boolean>(false);
+  const [referenceNo, setReferenceNo] = useState<string>("");
 
   const { personnel, loading, error } = useDeliveryPersonnel(selectedChannel || null);
   const [selectedPersonnel, setSelectedPersonnel] = useState<string>("");
@@ -31,6 +32,7 @@ export default function DeliveryPersonnelModal({
       setSelectedChannel("");
       setChannelSearchQuery("");
       setIsChannelDropdownOpen(false);
+      setReferenceNo("");
       setSelectedPersonnel("");
       setPersonnelSearchQuery("");
       setIsPersonnelDropdownOpen(false);
@@ -81,10 +83,11 @@ export default function DeliveryPersonnelModal({
   };
 
   const handleConfirm = () => {
-    if (selectedPersonnel || selectedChannel) {
+    if (selectedPersonnel || selectedChannel || referenceNo.trim()) {
       onSelect({
         personnelName: selectedPersonnel || null,
         deliveryVia: selectedChannel || null,
+        referenceNo: referenceNo.trim() || null,
       });
       onClose();
     }
@@ -230,6 +233,20 @@ export default function DeliveryPersonnelModal({
                 )}
               </div>
 
+              {/* Reference No (below Delivery Channel) */}
+              <div>
+                <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Reference No (optional)
+                </div>
+                <input
+                  type="text"
+                  placeholder="Enter reference number..."
+                  value={referenceNo}
+                  onChange={(e) => setReferenceNo(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                />
+              </div>
+
               {/* Delivery Personnel (filtered by channel) */}
               <div className="relative">
                 <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -321,7 +338,7 @@ export default function DeliveryPersonnelModal({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={(!selectedPersonnel && !selectedChannel) || loading || channelsLoading}
+            disabled={(!selectedPersonnel && !selectedChannel && !referenceNo.trim()) || loading || channelsLoading}
             className="px-4 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
           >
             Confirm
