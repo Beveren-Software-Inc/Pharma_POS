@@ -81,6 +81,8 @@ interface PaymentDialogProps {
   totalItemDiscount?: number;
   /** Loyalty points to redeem at checkout (from Redeem modal); amount_to_pay = grandTotal - loyalty_amount */
   redeemLoyaltyPoints?: number | null;
+  /** General additional amount (e.g. syringe, misc) - only when POS allows */
+  generalAdditionalAmount?: number;
 }
 
 interface PaymentMethod {
@@ -139,6 +141,7 @@ export default function PaymentDialog({
   externalInvoiceData = null,
   itemDiscounts = {},
   redeemLoyaltyPoints = null,
+  generalAdditionalAmount = 0,
 
 }: PaymentDialogProps) {
   const [selectedSalesTaxCharges, setSelectedSalesTaxCharges] = useState("");
@@ -436,12 +439,13 @@ export default function PaymentDialog({
 
   // Calculate totals with memoization for performance
   const calculations = useMemo(() => {
-    // Use discounted price if available, otherwise use original price
+    // Use discounted price if available, otherwise use original price; include item additional_amount
     const subtotal = cartItems.reduce(
       (sum, item) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const itemPrice = (item as any).discountedPrice || item.price;
-        return sum + itemPrice * item.quantity;
+        const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
+        return sum + itemPrice * item.quantity + itemAdditional;
       },
       0
     );
@@ -462,13 +466,14 @@ export default function PaymentDialog({
         taxAmount += (itemTotal * rate) / 100;
       });
       taxAmount = parseFloat(taxAmount.toFixed(3));
-      const grandTotal = taxableAmount + taxAmount + roundOffAmount;
+      const grandTotal = taxableAmount + taxAmount + (generalAdditionalAmount || 0) + roundOffAmount;
       return {
         subtotal,
         couponDiscount,
         taxableAmount,
         taxAmount,
         grandTotal,
+        generalAdditionalAmount: generalAdditionalAmount || 0,
         selectedTax: null,
         isInclusive: false,
       };
@@ -500,7 +505,8 @@ export default function PaymentDialog({
       couponDiscount,
       taxableAmount,
       taxAmount,
-      grandTotal: grandTotal + roundOffAmount,
+      grandTotal: grandTotal + (generalAdditionalAmount || 0) + roundOffAmount,
+      generalAdditionalAmount: generalAdditionalAmount || 0,
       selectedTax,
       isInclusive,
     };
@@ -512,6 +518,7 @@ export default function PaymentDialog({
     roundOffAmount,
     isItemTaxTemplateMode,
     itemTaxTemplateRates,
+    generalAdditionalAmount,
   ]);
 
   // Fetch loyalty redemption preview so amount_to_pay = grandTotal - loyalty_amount
@@ -987,6 +994,7 @@ export default function PaymentDialog({
           medicationOrder: medOrder || undefined,
           // Item tax template (when POS profile allows item tax template mode)
           item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
+          additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
         };
       }),
       customer: selectedCustomer,
@@ -1001,6 +1009,7 @@ export default function PaymentDialog({
       amountPaid: netAmountToSend, // Send net amount (effective total for B2C after loyalty, total paid for B2B)
       outstandingAmount: outstandingAmount,
       appliedCoupons,
+      generalAdditionalAmount: generalAdditionalAmount || 0,
       businessType: posDetails?.business_type,
       deliveryPersonnel: deliveryPersonnel || null,
       deliveryVia: deliveryVia || null,
@@ -1105,6 +1114,7 @@ export default function PaymentDialog({
         dosage: itemDiscounts[item.id]?.dosage ?? item.dosage ?? null,
         prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
         item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
+        additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
       })),
       customer: selectedCustomer,
       medicationOrder: (() => {
@@ -1122,6 +1132,7 @@ export default function PaymentDialog({
       couponDiscount: calculations.couponDiscount,
       roundOffAmount,
       grandTotal: calculations.grandTotal,
+      generalAdditionalAmount: generalAdditionalAmount || 0,
       appliedCoupons,
       status: "held",
       businessType: posDetails?.business_type,

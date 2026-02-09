@@ -66,7 +66,8 @@ fixtures = [
 					"Item Group-custom_non_returnable",
 					"Sales Invoice-custom_medication_order",
 					"Sales Invoice-custom_reference_no",
-					"POS Profile-custom_allow_item_tax_template"
+					"POS Profile-custom_allow_item_tax_template",
+					"POS Profile-custom_allow_additional_amounts"
 				),
 			]
 		],
@@ -85,6 +86,7 @@ doc_events = {
 		"validate": [
 			"klik_pos.api.sales_invoice.set_base_roundoff_amount",
 			"klik_pos.api.sales_invoice.set_grand_total_with_roundoff",
+			"klik_pos.api.sales_invoice.set_total_taxes_for_item_template",
 			"klik_pos.api.sales_invoice.validate_sales_invoice_return",
 		],
 		# "before_save": [

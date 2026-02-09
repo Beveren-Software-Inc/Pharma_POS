@@ -17,6 +17,7 @@ import type { Customer } from "../types/customer";
 import PaymentDialog from "./PaymentDialog";
 import AddCustomerModal from "./AddCustomerModal";
 import InpatientMedicationOrdersModal from "./InpatientMedicationOrdersModal";
+import AdditionalAmountModal from "./AdditionalAmountModal";
 import { createDraftSalesInvoice } from "../services/salesInvoice";
 import { useCustomers } from "../hooks/useCustomers";
 import { useProducts } from "../hooks/useProducts";
@@ -564,7 +565,7 @@ export default function OrderSummary({
   isMobile = false,
 }: OrderSummaryProps) {
   // const [showCouponPopover, setShowCouponPopover] = useState(false);
-  const { selectedCustomer, setSelectedCustomer, redeemLoyaltyPoints, setRedeemLoyaltyPoints, updateUOM, updatePricesForCustomer, addToCartWithQuantity, updateItemMetadata } = useCartStore();
+  const { selectedCustomer, setSelectedCustomer, redeemLoyaltyPoints, setRedeemLoyaltyPoints, updateUOM, updatePricesForCustomer, addToCartWithQuantity, updateItemMetadata, generalAdditionalAmount, setGeneralAdditionalAmount } = useCartStore();
 
   // Track if user has manually removed the default customer
   const [userRemovedDefaultCustomer, setUserRemovedDefaultCustomer] = useState(false);
@@ -598,6 +599,7 @@ export default function OrderSummary({
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [showMedicationOrdersModal, setShowMedicationOrdersModal] = useState(false);
   const [showRedeemLoyaltyModal, setShowRedeemLoyaltyModal] = useState(false);
+  const [showAdditionalAmountModal, setShowAdditionalAmountModal] = useState(false);
   const [redeemPointsInput, setRedeemPointsInput] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [medicationOrders, setMedicationOrders] = useState<InpatientMedicationOrder[]>([]);
@@ -625,6 +627,10 @@ export default function OrderSummary({
   const isItemTaxTemplateMode = posDetails?.custom_allow_item_tax_template === 1 ||
     posDetails?.custom_allow_item_tax_template === true ||
     posDetails?.custom_allow_item_tax_template === "1";
+
+  const isAllowAdditionalAmounts = posDetails?.custom_allow_additional_amounts === 1 ||
+    posDetails?.custom_allow_additional_amounts === true ||
+    posDetails?.custom_allow_additional_amounts === "1";
 
   const { templates: itemTaxTemplates } = useItemTaxTemplates();
 
@@ -791,10 +797,11 @@ export default function OrderSummary({
     return Math.max(0, discountedPrice);
   };
 
-  // Calculate subtotal with item-level discounts
+  // Calculate subtotal with item-level discounts and item additional amounts
   const subtotal = cartItems.reduce((sum, item) => {
     const discountedPrice = getDiscountedPrice(item);
-    return sum + discountedPrice * item.quantity;
+    const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
+    return sum + discountedPrice * item.quantity + itemAdditional;
   }, 0);
 
   // Calculate total discount amount for display
@@ -810,8 +817,8 @@ export default function OrderSummary({
     0
   );
 
-  // Calculate final total
-  const total = Math.max(0, subtotal - couponDiscount);
+  // Calculate final total (subtotal - coupons + general additional amount)
+  const total = Math.max(0, subtotal - couponDiscount + (generalAdditionalAmount || 0));
   const handleCustomerSearchKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>
   ) => {
@@ -2334,29 +2341,6 @@ export default function OrderSummary({
                           </div>
                         </div>
 
-                        {/* Item Tax Template (when POS allows item tax template mode) */}
-                        {isItemTaxTemplateMode && (
-                          <div className="mb-4">
-                            <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
-                              Item Tax Template
-                            </label>
-                            <select
-                              value={(item as { item_tax_template?: string }).item_tax_template || ""}
-                              onChange={(e) =>
-                                updateItemMetadata(item.id, { item_tax_template: e.target.value || null })
-                              }
-                              className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
-                            >
-                              <option value="">— None (0%) —</option>
-                              {itemTaxTemplates.map((t) => (
-                                <option key={t.id} value={t.id}>
-                                  {t.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-
                         {/* Row 2: Discount Amount | Discount (%) */}
                         <div className="grid grid-cols-2 gap-4 mb-4">
                           <div>
@@ -2463,6 +2447,53 @@ export default function OrderSummary({
                             </div>
                           </div>
                         )}
+
+                        {/* Row 5: Item Tax Template | Additional Amount (side by side when allowed) */}
+                        {(isItemTaxTemplateMode || isAllowAdditionalAmounts) && (
+                          <div className="grid grid-cols-2 gap-4 mb-4">
+                            {isItemTaxTemplateMode && (
+                              <div>
+                                <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                                  Item Tax Template
+                                </label>
+                                <select
+                                  value={(item as { item_tax_template?: string }).item_tax_template || ""}
+                                  onChange={(e) =>
+                                    updateItemMetadata(item.id, { item_tax_template: e.target.value || null })
+                                  }
+                                  className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                                >
+                                  <option value="">— None (0%) —</option>
+                                  {itemTaxTemplates.map((t) => (
+                                    <option key={t.id} value={t.id}>
+                                      {t.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                            {isAllowAdditionalAmounts && (
+                              <div>
+                                <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                                  Additional Amount
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={((item as { additional_amount?: number }).additional_amount ?? "")}
+                                  onChange={(e) =>
+                                    updateItemMetadata(item.id, {
+                                      additional_amount: parseFloat(e.target.value) || 0,
+                                    })
+                                  }
+                                  placeholder="0.00"
+                                  className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Discount Summary */}
@@ -2510,7 +2541,7 @@ export default function OrderSummary({
         >
 
           {/* Action Buttons */}
-          <div className={`grid grid-cols-2 gap-3 ${isMobile ? "mb-3" : ""}`}>
+          <div className={`grid gap-3 ${isMobile ? "mb-3" : ""} ${isAllowAdditionalAmounts ? "grid-cols-[1fr_1fr_auto]" : "grid-cols-2"}`}>
             <button
               onClick={() => {
                 if (!validateCustomer()) return;
@@ -2546,6 +2577,15 @@ export default function OrderSummary({
             >
               Clear Cart
             </button>
+            {isAllowAdditionalAmounts && (
+              <button
+                onClick={() => setShowAdditionalAmountModal(true)}
+                className="px-3 py-2 border border-beveren-500 text-beveren-600 dark:text-beveren-400 rounded-lg font-medium hover:bg-beveren-50 dark:hover:bg-beveren-900/20 transition-colors text-sm flex items-center justify-center min-w-[44px]"
+                title="Add misc amount (e.g. syringe)"
+              >
+                <Plus size={18} />
+              </button>
+            )}
           </div>
 
 
@@ -2631,20 +2671,35 @@ export default function OrderSummary({
           isOpen={showPaymentDialog}
           onClose={handleClosePaymentDialog}
           redeemLoyaltyPoints={redeemLoyaltyPoints}
-          cartItems={cartItems.map((item) => ({
-            ...item,
-            discountedPrice: getDiscountedPrice(item),
-            itemDiscount: itemDiscounts[item.id] || {},
-            originalPrice: item.price,
-            finalAmount: getDiscountedPrice(item) * item.quantity,
-          }))}
+          cartItems={cartItems.map((item) => {
+            const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
+            return {
+              ...item,
+              discountedPrice: getDiscountedPrice(item),
+              itemDiscount: itemDiscounts[item.id] || {},
+              originalPrice: item.price,
+              finalAmount: getDiscountedPrice(item) * item.quantity + itemAdditional,
+            };
+          })}
           appliedCoupons={appliedCoupons}
           selectedCustomer={selectedCustomer}
           onCompletePayment={handleCompletePayment}
           onHoldOrder={handleHoldOrder}
           isMobile={isMobile}
           itemDiscounts={itemDiscounts}
-          totalItemDiscount={totalItemDiscount}
+            totalItemDiscount={totalItemDiscount}
+          generalAdditionalAmount={generalAdditionalAmount}
+        />
+      )}
+
+      {/* Additional Amount Modal */}
+      {isAllowAdditionalAmounts && (
+        <AdditionalAmountModal
+          isOpen={showAdditionalAmountModal}
+          onClose={() => setShowAdditionalAmountModal(false)}
+          onConfirm={(amount) => setGeneralAdditionalAmount(amount)}
+          currencySymbol={currency_symbol}
+          currentAmount={generalAdditionalAmount}
         />
       )}
 

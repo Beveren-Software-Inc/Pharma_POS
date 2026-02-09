@@ -21,6 +21,7 @@ export interface CartItem {
   base_uom?: string
   conversion_factor?: number
   item_tax_template?: string | null
+  additional_amount?: number
 }
 
 export interface MenuItem {

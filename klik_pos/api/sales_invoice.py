@@ -632,6 +632,7 @@ def create_and_submit_invoice(data):
 			medication_order,
 			redeem_loyalty_points,
 			loyalty_points,
+			general_additional_amount,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -656,6 +657,7 @@ def create_and_submit_invoice(data):
 			medication_order=medication_order,
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
+			general_additional_amount=general_additional_amount,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -734,6 +736,7 @@ def create_draft_invoice(data):
 			medication_order,
 			redeem_loyalty_points,
 			loyalty_points,
+			general_additional_amount,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -750,6 +753,7 @@ def create_draft_invoice(data):
 			medication_order=medication_order,
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
+			general_additional_amount=general_additional_amount,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -814,6 +818,9 @@ def parse_invoice_data(data):
 		loyalty_points = 0
 		redeem_loyalty_points = 0
 
+	# General additional amount (e.g. syringe, misc) - only when POS allows
+	general_additional_amount = flt(data.get("generalAdditionalAmount") or data.get("general_additional_amount") or 0)
+
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
 
@@ -831,6 +838,7 @@ def parse_invoice_data(data):
 		medication_order,
 		redeem_loyalty_points,
 		loyalty_points,
+		general_additional_amount,
 	)
 
 
@@ -849,6 +857,7 @@ def build_sales_invoice_doc(
 	medication_order=None,
 	redeem_loyalty_points=0,
 	loyalty_points=0,
+	general_additional_amount=0.0,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -926,6 +935,9 @@ def build_sales_invoice_doc(
 
 	# Populate tax details
 	_populate_tax_details(doc)
+
+	# Add additional amounts (item-level + general) as tax rows when POS allows
+	_add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_profile)
 
 	# Add payment information
 	if include_payments:
@@ -1197,6 +1209,55 @@ def _populate_tax_details(doc):
 				"row_id": tax.row_id,
 				"tax_amount": tax.tax_amount,
 				"included_in_print_rate": tax.included_in_print_rate,
+			},
+		)
+
+
+def _add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_profile):
+	"""Add item-level and general additional amounts as tax rows when POS allows."""
+	if not getattr(pos_profile, "custom_allow_additional_amounts", 0):
+		return
+
+	total_item_additional = sum(flt(it.get("additional_amount") or it.get("additionalAmount") or 0) for it in items)
+	if total_item_additional <= 0 and (general_additional_amount or 0) <= 0:
+		return
+
+	# Use write-off account or default income account for additional charges
+	account = pos_profile.write_off_account
+	if not account:
+		company_doc = frappe.get_cached_doc("Company", doc.company)
+		account = company_doc.default_income_account
+	if not account:
+		return
+
+	cost_center = pos_profile.cost_center or frappe.db.get_value("Company", doc.company, "cost_center")
+
+	if total_item_additional > 0:
+		doc.append(
+			"taxes",
+			{
+				"charge_type": "Actual",
+				"account_head": account,
+				"description": "Item Additional Amounts",
+				"cost_center": cost_center,
+				"tax_amount": flt(total_item_additional, 2),
+				"category": "Total",
+				"add_deduct_tax": "Add",
+				"included_in_print_rate": 0,
+			},
+		)
+	if general_additional_amount and flt(general_additional_amount) > 0:
+		doc.append(
+			"taxes",
+			{
+				"charge_type": "Actual",
+				"account_head": account,
+				"description": "Additional Amount",
+				"cost_center": cost_center,
+				"tax_amount": flt(general_additional_amount, 2),
+				"category": "Total",
+				"add_deduct_tax": "Add",
+				"included_in_print_rate": 0,
 			},
 		)
 
@@ -1552,6 +1613,49 @@ def set_grand_total_with_roundoff(doc, method):
 
 	# Monkey Patch calculate_totals method to include round-off
 	calculate_taxes_and_totals.calculate_totals = custom_calculate_totals
+
+
+def set_total_taxes_for_item_template(doc, method):
+	"""
+	When using item tax template mode (POS Profile.custom_allow_item_tax_template),
+	ensure Sales Invoice.total_taxes_and_charges reflects the actual tax amount,
+	even if no Sales Taxes and Charges Template / taxes rows are set.
+	"""
+	# Only adjust Sales Invoices
+	if doc.doctype != "Sales Invoice":
+		return
+
+	# If ERPNext has already populated taxes or a non-zero total_taxes_and_charges, do nothing
+	if doc.get("taxes") or (doc.total_taxes_and_charges or 0):
+		return
+
+	# Check if current POS profile is in item tax template mode
+	pos_profile = None
+	try:
+		if doc.pos_profile:
+			pos_profile = frappe.get_cached_doc("POS Profile", doc.pos_profile)
+		else:
+			pos_profile = get_current_pos_profile()
+	except Exception:
+		pos_profile = None
+
+	if not pos_profile or not getattr(pos_profile, "custom_allow_item_tax_template", 0):
+		return
+
+	net_total = doc.net_total or 0
+	grand_total = doc.grand_total or 0
+
+	# If custom round-off is applied, add it back to isolate the pure tax portion
+	if getattr(doc, "custom_roundoff_amount", 0):
+		grand_total += doc.custom_roundoff_amount or 0
+
+	tax_amount = grand_total - net_total
+	if tax_amount <= 0:
+		return
+
+	doc.total_taxes_and_charges = flt(
+		tax_amount, doc.precision("total_taxes_and_charges") or 2
+	)
 
 
 def custom_calculate_totals(self):
