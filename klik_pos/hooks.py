@@ -67,7 +67,9 @@ fixtures = [
 					"Sales Invoice-custom_medication_order",
 					"Sales Invoice-custom_reference_no",
 					"POS Profile-custom_allow_item_tax_template",
-					"POS Profile-custom_allow_additional_amounts"
+					"POS Profile-custom_allow_additional_amounts",
+					"Sales Invoice-custom_remarks",
+					"Sales Invoice-custom_remark"
 				),
 			]
 		],
