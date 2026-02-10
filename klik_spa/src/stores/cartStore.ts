@@ -76,6 +76,8 @@ interface CartState {
   selectedCustomer: Customer | null
   /** Points to redeem at checkout (loyalty); null = not redeeming */
   redeemLoyaltyPoints: number | null
+  /** General additional amount (e.g. syringe, misc charges) - only when POS allows */
+  generalAdditionalAmount: number
 
   // Actions
   addToCart: (item: Omit<CartItem, 'quantity'>) => Promise<void>
@@ -83,11 +85,13 @@ interface CartState {
   updateQuantity: (id: string, quantity: number) => Promise<void>
   updateUOM: (id: string, uom: string, price: number) => Promise<void>
   removeItem: (id: string) => void
+  updateItemMetadata: (id: string, updates: Record<string, unknown>) => void
   clearCart: () => void
   applyCoupon: (coupon: GiftCoupon) => void
   removeCoupon: (couponCode: string) => void
   setSelectedCustomer: (customer: Customer | null) => Promise<void>
   setRedeemLoyaltyPoints: (points: number | null) => void
+  setGeneralAdditionalAmount: (amount: number) => void
   updatePricesForCustomer: (customerId?: string) => Promise<void>
   applyPricingRules: () => Promise<void>
 }
@@ -99,6 +103,7 @@ export const useCartStore = create<CartState>()(
       appliedCoupons: [],
       selectedCustomer: null,
       redeemLoyaltyPoints: null,
+      generalAdditionalAmount: 0,
 
       addToCart: async (item) => {
         const state = get();
@@ -279,6 +284,12 @@ export const useCartStore = create<CartState>()(
         cartItems: state.cartItems.filter((item) => item.id !== id)
       })),
 
+      updateItemMetadata: (id, updates) => set((state) => ({
+        cartItems: state.cartItems.map((item) =>
+          item.id === id ? { ...item, ...updates } : item
+        )
+      })),
+
       clearCart: () => {
         // Clear draft invoice cache when clearing cart
         clearDraftInvoiceCache();
@@ -286,9 +297,14 @@ export const useCartStore = create<CartState>()(
           cartItems: [],
           appliedCoupons: [],
           selectedCustomer: null,
-          redeemLoyaltyPoints: null
+          redeemLoyaltyPoints: null,
+          generalAdditionalAmount: 0,
         }));
       },
+
+      setGeneralAdditionalAmount: (amount) => set(() => ({
+        generalAdditionalAmount: Math.max(0, amount)
+      })),
 
       setRedeemLoyaltyPoints: (points) => set(() => ({ redeemLoyaltyPoints: points })),
 

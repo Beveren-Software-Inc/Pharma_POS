@@ -628,9 +628,11 @@ def create_and_submit_invoice(data):
 			roundoff_amount,
 			delivery_personnel,
 			delivery_via,
+			reference_no,
 			medication_order,
 			redeem_loyalty_points,
 			loyalty_points,
+			general_additional_amount,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -651,9 +653,11 @@ def create_and_submit_invoice(data):
 			include_payments=True,
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
+			reference_no=reference_no,
 			medication_order=medication_order,
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
+			general_additional_amount=general_additional_amount,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -728,9 +732,11 @@ def create_draft_invoice(data):
 			roundoff_amount,
 			delivery_personnel,
 			delivery_via,
+			reference_no,
 			medication_order,
 			redeem_loyalty_points,
 			loyalty_points,
+			general_additional_amount,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -743,9 +749,11 @@ def create_draft_invoice(data):
 			include_payments=True,
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
+			reference_no=reference_no,
 			medication_order=medication_order,
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
+			general_additional_amount=general_additional_amount,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -789,8 +797,19 @@ def parse_invoice_data(data):
 	delivery_personnel = data.get("deliveryPersonnel")
 	# Extract delivery channel (custom field on Sales Invoice)
 	delivery_via = data.get("deliveryVia")
+	# Extract reference no (custom field on Sales Invoice)
+	reference_no = data.get("referenceNo") or data.get("reference_no")
 	# Extract Patient Medication Order (when items came from medication order)
 	medication_order = data.get("medicationOrder")
+	# Fallback: extract from items if top-level medicationOrder is empty (e.g. mobile payment flow)
+	if not medication_order and items:
+		orders_from_items = set()
+		for it in items:
+			mo = it.get("medicationOrder") or it.get("medication_order")
+			if mo:
+				orders_from_items.add(mo)
+		if orders_from_items:
+			medication_order = list(orders_from_items)
 
 	# Loyalty points redemption (ERPNext standard)
 	redeem_loyalty_points = cint(data.get("redeemLoyaltyPoints") or data.get("redeem_loyalty_points") or 0)
@@ -798,6 +817,9 @@ def parse_invoice_data(data):
 	if redeem_loyalty_points and loyalty_points <= 0:
 		loyalty_points = 0
 		redeem_loyalty_points = 0
+
+	# General additional amount (e.g. syringe, misc) - only when POS allows
+	general_additional_amount = flt(data.get("generalAdditionalAmount") or data.get("general_additional_amount") or 0)
 
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
@@ -812,9 +834,11 @@ def parse_invoice_data(data):
 		roundoff_amount,
 		delivery_personnel,
 		delivery_via,
+		reference_no,
 		medication_order,
 		redeem_loyalty_points,
 		loyalty_points,
+		general_additional_amount,
 	)
 
 
@@ -829,9 +853,11 @@ def build_sales_invoice_doc(
 	include_payments=False,
 	delivery_personnel=None,
 	delivery_via=None,
+	reference_no=None,
 	medication_order=None,
 	redeem_loyalty_points=0,
 	loyalty_points=0,
+	general_additional_amount=0.0,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -848,6 +874,9 @@ def build_sales_invoice_doc(
 	# Set delivery channel if provided and field exists
 	if delivery_via and frappe.db.has_column("Sales Invoice", "custom_delivery_via"):
 		doc.custom_delivery_via = delivery_via
+	# Set reference no if provided and field exists
+	if reference_no and frappe.db.has_column("Sales Invoice", "custom_reference_no"):
+		doc.custom_reference_no = reference_no
 	# Set Patient Medication Orders (Table MultiSelect) if items came from orders and field exists
 	if medication_order and frappe.db.has_column("Sales Invoice", "custom_medication_order"):
 		orders = medication_order
@@ -906,6 +935,9 @@ def build_sales_invoice_doc(
 
 	# Populate tax details
 	_populate_tax_details(doc)
+
+	# Add additional amounts (item-level + general) as tax rows when POS allows
+	_add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_profile)
 
 	# Add payment information
 	if include_payments:
@@ -1004,7 +1036,10 @@ def _set_roundoff_fields(doc, roundoff_amount):
 
 
 def _set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile):
-	"""Set the taxes and charges template."""
+	"""Set the taxes and charges template. When item tax template mode is enabled, do not set."""
+	if getattr(pos_profile, "custom_allow_item_tax_template", 0):
+		# Each item has its own item_tax_template; no document-level taxes and charges
+		return
 	if sales_and_tax_charges:
 		doc.taxes_and_charges = sales_and_tax_charges
 	else:
@@ -1088,6 +1123,7 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 	_add_batch_to_item(item_data, item, item_data_map.get(item_code, {}))
 	_add_serial_to_item(item_data, item)
 	_add_dosage_to_item(item_data, item)
+	_add_item_tax_template_to_item(item_data, item, pos_profile)
 
 	return item_data
 
@@ -1143,6 +1179,15 @@ def _add_dosage_to_item(item_data, item):
 			item_data["custom_prescription_dosage"] = prescription_dosage
 
 
+def _add_item_tax_template_to_item(item_data, item, pos_profile):
+	"""Add item_tax_template to invoice item when POS profile allows item tax template mode."""
+	if not getattr(pos_profile, "custom_allow_item_tax_template", 0):
+		return
+	item_tax_template = item.get("item_tax_template") or item.get("itemTaxTemplate")
+	if item_tax_template:
+		item_data["item_tax_template"] = item_tax_template
+
+
 def _populate_tax_details(doc):
 	"""Populate tax details from the taxes and charges template."""
 	if not doc.taxes_and_charges:
@@ -1164,6 +1209,55 @@ def _populate_tax_details(doc):
 				"row_id": tax.row_id,
 				"tax_amount": tax.tax_amount,
 				"included_in_print_rate": tax.included_in_print_rate,
+			},
+		)
+
+
+def _add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_profile):
+	"""Add item-level and general additional amounts as tax rows when POS allows."""
+	if not getattr(pos_profile, "custom_allow_additional_amounts", 0):
+		return
+
+	total_item_additional = sum(flt(it.get("additional_amount") or it.get("additionalAmount") or 0) for it in items)
+	if total_item_additional <= 0 and (general_additional_amount or 0) <= 0:
+		return
+
+	# Use write-off account or default income account for additional charges
+	account = pos_profile.write_off_account
+	if not account:
+		company_doc = frappe.get_cached_doc("Company", doc.company)
+		account = company_doc.default_income_account
+	if not account:
+		return
+
+	cost_center = pos_profile.cost_center or frappe.db.get_value("Company", doc.company, "cost_center")
+
+	if total_item_additional > 0:
+		doc.append(
+			"taxes",
+			{
+				"charge_type": "Actual",
+				"account_head": account,
+				"description": "Item Additional Amounts",
+				"cost_center": cost_center,
+				"tax_amount": flt(total_item_additional, 2),
+				"category": "Total",
+				"add_deduct_tax": "Add",
+				"included_in_print_rate": 0,
+			},
+		)
+	if general_additional_amount and flt(general_additional_amount) > 0:
+		doc.append(
+			"taxes",
+			{
+				"charge_type": "Actual",
+				"account_head": account,
+				"description": "Additional Amount",
+				"cost_center": cost_center,
+				"tax_amount": flt(general_additional_amount, 2),
+				"category": "Total",
+				"add_deduct_tax": "Add",
+				"included_in_print_rate": 0,
 			},
 		)
 
@@ -1521,6 +1615,49 @@ def set_grand_total_with_roundoff(doc, method):
 	calculate_taxes_and_totals.calculate_totals = custom_calculate_totals
 
 
+def set_total_taxes_for_item_template(doc, method):
+	"""
+	When using item tax template mode (POS Profile.custom_allow_item_tax_template),
+	ensure Sales Invoice.total_taxes_and_charges reflects the actual tax amount,
+	even if no Sales Taxes and Charges Template / taxes rows are set.
+	"""
+	# Only adjust Sales Invoices
+	if doc.doctype != "Sales Invoice":
+		return
+
+	# If ERPNext has already populated taxes or a non-zero total_taxes_and_charges, do nothing
+	if doc.get("taxes") or (doc.total_taxes_and_charges or 0):
+		return
+
+	# Check if current POS profile is in item tax template mode
+	pos_profile = None
+	try:
+		if doc.pos_profile:
+			pos_profile = frappe.get_cached_doc("POS Profile", doc.pos_profile)
+		else:
+			pos_profile = get_current_pos_profile()
+	except Exception:
+		pos_profile = None
+
+	if not pos_profile or not getattr(pos_profile, "custom_allow_item_tax_template", 0):
+		return
+
+	net_total = doc.net_total or 0
+	grand_total = doc.grand_total or 0
+
+	# If custom round-off is applied, add it back to isolate the pure tax portion
+	if getattr(doc, "custom_roundoff_amount", 0):
+		grand_total += doc.custom_roundoff_amount or 0
+
+	tax_amount = grand_total - net_total
+	if tax_amount <= 0:
+		return
+
+	doc.total_taxes_and_charges = flt(
+		tax_amount, doc.precision("total_taxes_and_charges") or 2
+	)
+
+
 def custom_calculate_totals(self):
 	"""Main function to calculate invoice totals with custom round-off logic"""
 	# Calculate basic grand total and taxes
@@ -1666,6 +1803,14 @@ def get_writeoff_account():
 
 
 class CustomSalesInvoice(SalesInvoice):
+	def set_pos_fields(self, for_validate=False):
+		"""Keep taxes_and_charges blank when item tax template mode is enabled to avoid double tax calculation."""
+		pos = super().set_pos_fields(for_validate)
+		if pos and getattr(pos, "custom_allow_item_tax_template", 0):
+			self.taxes_and_charges = None
+			self.taxes = []
+		return pos
+
 	def get_gl_entries(self, warehouse_account=None):
 		from erpnext.accounts.general_ledger import merge_similar_entries
 

@@ -20,6 +20,8 @@ export interface CartItem {
   item_code?: string
   base_uom?: string
   conversion_factor?: number
+  item_tax_template?: string | null
+  additional_amount?: number
 }
 
 export interface MenuItem {

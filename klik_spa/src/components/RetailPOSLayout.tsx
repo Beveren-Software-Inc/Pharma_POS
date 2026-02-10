@@ -158,6 +158,7 @@ export default function RetailPOSLayout() {
         available: item.available,
         uom: uomToUse,
         item_code: item.id,
+        item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       })
       updateQuantity(item.id, quantity)
     }
@@ -183,7 +184,8 @@ export default function RetailPOSLayout() {
             image: item.image,
             available: item.available,
             uom: uomToUse,
-            item_code: item.id, // item.id is the item_code from the API
+            item_code: item.id,
+            item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
           })
         }).catch(() => {
           addToCart({
@@ -194,7 +196,8 @@ export default function RetailPOSLayout() {
             image: item.image,
             available: item.available,
             uom: uomToUse,
-            item_code: item.id, // item.id is the item_code from the API
+            item_code: item.id,
+            item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
           })
         })
       } else {
@@ -206,7 +209,8 @@ export default function RetailPOSLayout() {
           image: item.image,
           available: item.available,
           uom: uomToUse,
-          item_code: item.id, // item.id is the item_code from the API
+          item_code: item.id,
+          item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
         })
       }
     }

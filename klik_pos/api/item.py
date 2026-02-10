@@ -776,6 +776,76 @@ def _fetch_primary_barcodes(item_codes: list[str]) -> dict[str, str]:
 	return barcode_map
 
 
+def _fetch_item_tax_templates(item_codes: list[str], company: str) -> dict[str, str]:
+	"""Fetch default item tax template for each item (from Item Tax child table)."""
+	result = {}
+	if not item_codes or not company:
+		return result
+	try:
+		# Item Tax: parent=Item, item_tax_template. Filter by company via Item Tax Template.
+		if not frappe.db.exists("DocType", "Item Tax"):
+			return result
+		placeholders = ", ".join(["%s"] * len(item_codes))
+		rows = frappe.db.sql(
+			f"""
+			SELECT it.parent as item_code, it.item_tax_template
+			FROM `tabItem Tax` it
+			INNER JOIN `tabItem Tax Template` itt ON itt.name = it.item_tax_template
+			WHERE it.parent IN ({placeholders})
+			AND it.parenttype = 'Item'
+			AND itt.company = %s
+			AND itt.disabled = 0
+			ORDER BY it.idx
+			""",
+			[*item_codes, company],
+			as_dict=True,
+		)
+		for row in rows:
+			if row.item_code and row.item_tax_template and row.item_code not in result:
+				result[row.item_code] = row.item_tax_template
+
+		# Items without direct template: check Item Group hierarchy
+		missing = [c for c in item_codes if c not in result]
+		if missing:
+			item_groups = frappe.db.get_values("Item", {"name": ["in", missing]}, ["name", "item_group"], as_dict=True)
+			ig_map = {r["name"]: r.get("item_group") for r in item_groups if r.get("item_group")}
+			seen_igs = set()
+			for item_code, ig in ig_map.items():
+				if not ig or item_code in result:
+					continue
+				ig_chain = [ig]
+				curr = ig
+				while curr:
+					parent = frappe.db.get_value("Item Group", curr, "parent_item_group")
+					if parent:
+						ig_chain.append(parent)
+						curr = parent
+					else:
+						break
+				for ig_name in ig_chain:
+					if ig_name in seen_igs:
+						continue
+					seen_igs.add(ig_name)
+					ig_tax = frappe.db.sql(
+						"""
+						SELECT it.item_tax_template
+						FROM `tabItem Tax` it
+						INNER JOIN `tabItem Tax Template` itt ON itt.name = it.item_tax_template
+						WHERE it.parent = %s AND it.parenttype = 'Item Group'
+						AND itt.company = %s AND itt.disabled = 0
+						LIMIT 1
+						""",
+						(ig_name, company),
+						as_dict=True,
+					)
+					if ig_tax and ig_tax[0].item_tax_template:
+						result[item_code] = ig_tax[0].item_tax_template
+						break
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Fetch item tax templates")
+	return result
+
+
 def _fetch_pack_conversion_factors(item_codes: list[str]) -> dict[str, float]:
 	"""
 	Fetch conversion factor for UOM 'PACK' from UOM Conversion Detail child table.
@@ -811,6 +881,7 @@ def _build_enriched_items(
 	barcode_map: dict[str, str],
 	hide_unavailable: bool,
 	pack_map: dict[str, float] | None = None,
+	item_tax_template_map: dict[str, str] | None = None,
 ) -> list[dict]:
 	"""Convert raw item rows into the SPA payload shape."""
 	enriched_items: list[dict] = []
@@ -862,6 +933,9 @@ def _build_enriched_items(
 			enriched_item["custom_route_of_administration"] = item.get("custom_route_of_administration")
 		if item.get("custom_active_substances"):
 			enriched_item["custom_active_substances"] = item.get("custom_active_substances")
+
+		if item_tax_template_map and item_code in item_tax_template_map:
+			enriched_item["item_tax_template"] = item_tax_template_map[item_code]
 
 		enriched_items.append(enriched_item)
 
@@ -947,7 +1021,15 @@ def get_items_with_balance_and_price(
 		stock_map = _fetch_batch_stock(item_codes, warehouse)
 		price_map = _fetch_batch_prices(item_codes, price_list, uom_map)
 
-		enriched_items = _build_enriched_items(items, stock_map, price_map, barcode_map, hide_unavailable, pack_map)
+		item_tax_template_map = {}
+		if getattr(pos_doc, "custom_allow_item_tax_template", 0):
+			company = pos_doc.company or frappe.defaults.get_user_default("Company")
+			if company:
+				item_tax_template_map = _fetch_item_tax_templates(item_codes, company)
+
+		enriched_items = _build_enriched_items(
+			items, stock_map, price_map, barcode_map, hide_unavailable, pack_map, item_tax_template_map
+		)
 
 		has_more = (offset + len(enriched_items)) < total_count
 		return {
