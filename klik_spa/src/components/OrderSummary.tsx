@@ -565,7 +565,20 @@ export default function OrderSummary({
   isMobile = false,
 }: OrderSummaryProps) {
   // const [showCouponPopover, setShowCouponPopover] = useState(false);
-  const { selectedCustomer, setSelectedCustomer, redeemLoyaltyPoints, setRedeemLoyaltyPoints, updateUOM, updatePricesForCustomer, addToCartWithQuantity, updateItemMetadata, generalAdditionalAmount, setGeneralAdditionalAmount } = useCartStore();
+  const {
+    selectedCustomer,
+    setSelectedCustomer,
+    redeemLoyaltyPoints,
+    setRedeemLoyaltyPoints,
+    updateUOM,
+    updatePricesForCustomer,
+    addToCartWithQuantity,
+    updateItemMetadata,
+    generalAdditionalAmount,
+    additionalRemark,
+    setGeneralAdditionalAmount,
+    setAdditionalRemark,
+  } = useCartStore();
 
   // Track if user has manually removed the default customer
   const [userRemovedDefaultCustomer, setUserRemovedDefaultCustomer] = useState(false);
@@ -797,11 +810,10 @@ export default function OrderSummary({
     return Math.max(0, discountedPrice);
   };
 
-  // Calculate subtotal with item-level discounts and item additional amounts
+  // Calculate subtotal with item-level discounts (additional amounts are shown separately)
   const subtotal = cartItems.reduce((sum, item) => {
     const discountedPrice = getDiscountedPrice(item);
-    const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
-    return sum + discountedPrice * item.quantity + itemAdditional;
+    return sum + discountedPrice * item.quantity;
   }, 0);
 
   // Calculate total discount amount for display
@@ -817,8 +829,8 @@ export default function OrderSummary({
     0
   );
 
-  // Calculate final total (subtotal - coupons + general additional amount)
-  const total = Math.max(0, subtotal - couponDiscount + (generalAdditionalAmount || 0));
+  // Calculate final total (items - coupons). Additional amounts are handled in PaymentDialog.
+  const total = Math.max(0, subtotal - couponDiscount);
   const handleCustomerSearchKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>
   ) => {
@@ -2687,8 +2699,9 @@ export default function OrderSummary({
           onHoldOrder={handleHoldOrder}
           isMobile={isMobile}
           itemDiscounts={itemDiscounts}
-            totalItemDiscount={totalItemDiscount}
+          totalItemDiscount={totalItemDiscount}
           generalAdditionalAmount={generalAdditionalAmount}
+          additionalRemark={additionalRemark}
         />
       )}
 
@@ -2697,9 +2710,15 @@ export default function OrderSummary({
         <AdditionalAmountModal
           isOpen={showAdditionalAmountModal}
           onClose={() => setShowAdditionalAmountModal(false)}
-          onConfirm={(amount) => setGeneralAdditionalAmount(amount)}
+          cartItems={cartItems}
+          onItemAdditionalChange={(id, amt) =>
+            updateItemMetadata(id, { additional_amount: amt })
+          }
+          generalAmount={generalAdditionalAmount}
+          onGeneralAmountChange={(amt) => setGeneralAdditionalAmount(amt)}
+          remark={additionalRemark}
+          onRemarkChange={(txt) => setAdditionalRemark(txt)}
           currencySymbol={currency_symbol}
-          currentAmount={generalAdditionalAmount}
         />
       )}
 

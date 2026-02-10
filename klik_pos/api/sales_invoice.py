@@ -633,6 +633,7 @@ def create_and_submit_invoice(data):
 			redeem_loyalty_points,
 			loyalty_points,
 			general_additional_amount,
+			additional_remark,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -658,6 +659,7 @@ def create_and_submit_invoice(data):
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
 			general_additional_amount=general_additional_amount,
+			additional_remark=additional_remark,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -737,6 +739,7 @@ def create_draft_invoice(data):
 			redeem_loyalty_points,
 			loyalty_points,
 			general_additional_amount,
+			additional_remark,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -754,6 +757,7 @@ def create_draft_invoice(data):
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
 			general_additional_amount=general_additional_amount,
+			additional_remark=additional_remark,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -819,7 +823,10 @@ def parse_invoice_data(data):
 		redeem_loyalty_points = 0
 
 	# General additional amount (e.g. syringe, misc) - only when POS allows
-	general_additional_amount = flt(data.get("generalAdditionalAmount") or data.get("general_additional_amount") or 0)
+	general_additional_amount = flt(
+		data.get("generalAdditionalAmount") or data.get("general_additional_amount") or 0
+	)
+	additional_remark = data.get("additionalRemark") or data.get("additional_remark")
 
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
@@ -839,6 +846,7 @@ def parse_invoice_data(data):
 		redeem_loyalty_points,
 		loyalty_points,
 		general_additional_amount,
+		additional_remark,
 	)
 
 
@@ -858,6 +866,7 @@ def build_sales_invoice_doc(
 	redeem_loyalty_points=0,
 	loyalty_points=0,
 	general_additional_amount=0.0,
+	additional_remark=None,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -918,6 +927,10 @@ def build_sales_invoice_doc(
 	pos_profile = _get_active_pos_profile()
 	_set_pos_profile_fields(doc, pos_profile, customer, business_type)
 
+	# Set additional remark on invoice if field exists
+	if additional_remark and frappe.db.has_column("Sales Invoice", "custom_remark"):
+		doc.custom_remark = additional_remark
+
 	# Set posting details
 	_set_posting_fields(doc)
 
@@ -932,6 +945,9 @@ def build_sales_invoice_doc(
 
 	# Add items to invoice
 	_populate_invoice_items(doc, items, pos_profile)
+
+	# Append additional charge items using the special service item
+	_append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark)
 
 	# Populate tax details
 	_populate_tax_details(doc)
@@ -1186,6 +1202,67 @@ def _add_item_tax_template_to_item(item_data, item, pos_profile):
 	item_tax_template = item.get("item_tax_template") or item.get("itemTaxTemplate")
 	if item_tax_template:
 		item_data["item_tax_template"] = item_tax_template
+
+
+def _append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark=None):
+	"""Map additional amounts to a dedicated service Item (custom_is_additional_charges = 1)."""
+	# Sum per-item additional amounts from payload
+	total_item_additional = sum(
+		flt(it.get("additional_amount") or it.get("additionalAmount") or 0) for it in items
+	)
+
+	general_additional_amount = flt(general_additional_amount or 0)
+
+	if total_item_additional <= 0 and general_additional_amount <= 0:
+		return
+
+	# Find the special service item
+	try:
+		extra_item_code = frappe.db.get_value(
+			"Item",
+			{"custom_is_additional_charges": 1, "disabled": 0},
+			"name",
+		)
+	except Exception:
+		extra_item_code = None
+
+	if not extra_item_code:
+		frappe.log_error(
+			"Additional charges item not found",
+			"Item with custom_is_additional_charges=1 is required for additional amounts",
+		)
+		return
+
+	warehouse = pos_profile.warehouse
+	cost_center = pos_profile.cost_center
+
+	# Per-item aggregated additional charges
+	if total_item_additional > 0:
+		doc.append(
+			"items",
+			{
+				"item_code": extra_item_code,
+				"qty": 1,
+				"rate": flt(total_item_additional, doc.precision("grand_total") or 2),
+				"description": "Item-based additional charges",
+				"warehouse": warehouse,
+				"cost_center": cost_center,
+			},
+		)
+
+	# General additional amount
+	if general_additional_amount > 0:
+		doc.append(
+			"items",
+			{
+				"item_code": extra_item_code,
+				"qty": 1,
+				"rate": flt(general_additional_amount, doc.precision("grand_total") or 2),
+				"description": additional_remark or "Additional charges",
+				"warehouse": warehouse,
+				"cost_center": cost_center,
+			},
+		)
 
 
 def _populate_tax_details(doc):

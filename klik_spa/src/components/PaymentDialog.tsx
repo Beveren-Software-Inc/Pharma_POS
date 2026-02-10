@@ -83,6 +83,8 @@ interface PaymentDialogProps {
   redeemLoyaltyPoints?: number | null;
   /** General additional amount (e.g. syringe, misc) - only when POS allows */
   generalAdditionalAmount?: number;
+  /** Remark for additional amounts (comes from AdditionalAmountModal) */
+  additionalRemark?: string | null;
 }
 
 interface PaymentMethod {
@@ -142,7 +144,7 @@ export default function PaymentDialog({
   itemDiscounts = {},
   redeemLoyaltyPoints = null,
   generalAdditionalAmount = 0,
-
+  additionalRemark = null,
 }: PaymentDialogProps) {
   const [selectedSalesTaxCharges, setSelectedSalesTaxCharges] = useState("");
   const [paymentAmounts, setPaymentAmounts] = useState<PaymentAmount>({});
@@ -439,13 +441,12 @@ export default function PaymentDialog({
 
   // Calculate totals with memoization for performance
   const calculations = useMemo(() => {
-    // Use discounted price if available, otherwise use original price; include item additional_amount
+    // Use discounted price if available, otherwise use original price (additional charges handled separately)
     const subtotal = cartItems.reduce(
       (sum, item) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const itemPrice = (item as any).discountedPrice || item.price;
-        const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
-        return sum + itemPrice * item.quantity + itemAdditional;
+        return sum + itemPrice * item.quantity;
       },
       0
     );
@@ -1482,6 +1483,16 @@ export default function PaymentDialog({
                         : formatCurrency(calculations.taxAmount)}
                     </span>
                   </div>
+                  {calculations.generalAdditionalAmount > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">
+                        Additional Amount
+                      </span>
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        {formatCurrency(calculations.generalAdditionalAmount)}
+                      </span>
+                    </div>
+                  )}
                   {roundOffAmount !== 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">
@@ -2311,6 +2322,16 @@ export default function PaymentDialog({
                             : formatCurrency(calculations.taxAmount)}
                         </span>
                       </div>
+                      {calculations.generalAdditionalAmount > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-600 dark:text-gray-400">
+                            Additional Amount
+                          </span>
+                          <span className="font-medium text-gray-900 dark:text-white">
+                            {formatCurrency(calculations.generalAdditionalAmount)}
+                          </span>
+                        </div>
+                      )}
                       {roundOffAmount !== 0 && (
                         <div className="flex justify-between">
                           <span className="text-gray-600 dark:text-gray-400">

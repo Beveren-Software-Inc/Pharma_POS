@@ -623,6 +623,8 @@ def _get_item_select_fields() -> str:
 
 def _build_base_and_count_queries(select_fields: str, hide_unavailable: bool) -> tuple[list[str], list[str]]:
 	"""Build the base SQL and count SQL (as list parts) depending on stock filtering mode."""
+	has_additional_flag = frappe.db.has_column("Item", "custom_is_additional_charges")
+
 	if hide_unavailable:
 		base_query = [
 			f"SELECT DISTINCT {select_fields}",
@@ -653,6 +655,11 @@ def _build_base_and_count_queries(select_fields: str, hide_unavailable: bool) ->
 			"WHERE i.disabled = 0",
 			"AND i.is_stock_item = 1",
 		]
+
+	# Hide additional-charges service item from POS listing if flag exists
+	if has_additional_flag:
+		base_query.append("AND COALESCE(i.custom_is_additional_charges, 0) = 0")
+		count_query.append("AND COALESCE(i.custom_is_additional_charges, 0) = 0")
 
 	return base_query, count_query
 
@@ -726,12 +733,16 @@ def _get_unfiltered_total_count(pos_doc, category: str | None, search: str | Non
 	Count total items matching filters WITHOUT stock/bin filters.
 	This is used when hide_unavailable_items is enabled to show the real total.
 	"""
+	has_additional_flag = frappe.db.has_column("Item", "custom_is_additional_charges")
+
 	unfiltered_count_query = [
 		"SELECT COUNT(DISTINCT i.name) as total",
 		"FROM `tabItem` i",
 		"WHERE i.disabled = 0",
 		"AND i.is_stock_item = 1",
 	]
+	if has_additional_flag:
+		unfiltered_count_query.append("AND COALESCE(i.custom_is_additional_charges, 0) = 0")
 	unfiltered_count_params: list[object] = []
 
 	# Apply item group filter from POS profile

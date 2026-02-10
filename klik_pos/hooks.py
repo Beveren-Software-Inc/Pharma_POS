@@ -69,7 +69,8 @@ fixtures = [
 					"POS Profile-custom_allow_item_tax_template",
 					"POS Profile-custom_allow_additional_amounts",
 					"Sales Invoice-custom_remarks",
-					"Sales Invoice-custom_remark"
+					"Sales Invoice-custom_remark",
+     "Item-custom_is_additional_charges"
 				),
 			]
 		],
