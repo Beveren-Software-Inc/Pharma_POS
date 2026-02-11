@@ -77,10 +77,8 @@ def get_sales_invoices(limit=100, start=0, search="", skip_opening_entry_filter=
 			start=start,
 		)
 
-		count_rows = frappe.get_all(
-			"Sales Invoice", filters=filters, or_filters=or_filters, fields=["count(name) as total"]
-		)
-		total_count = count_rows[0].total if count_rows else 0
+		# Use Frappe's safe COUNT API instead of raw SQL string
+		total_count = frappe.db.count("Sales Invoice", filters=filters, cache=False)
 
 		# Batch fetch related data
 		invoice_names = [inv.name for inv in invoices]

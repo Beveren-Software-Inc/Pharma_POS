@@ -254,7 +254,7 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
                 <select
                   value={selectedProfile}
                   onChange={(e) => handleProfileChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-white text-gray-900 dark:text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   disabled={!!profilesLoading || !!isLoadingPaymentModes}
                 >
                   {(!posProfiles || posProfiles.length === 0) && (
@@ -309,7 +309,7 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
                           step="0.01"
                           value={method.opening_amount || ''}
                           onChange={(e) => updatePaymentAmount(index, parseFloat(e.target.value) || 0)}
-                          className="w-24 px-2 py-1 border border-gray-300 rounded text-right focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          className="w-24 px-2 py-1 border border-gray-300 rounded text-right bg-white dark:bg-white text-gray-900 dark:text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
                           placeholder="0.00"
                           disabled={profilesLoading}
                         />
