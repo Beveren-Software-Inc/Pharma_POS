@@ -78,6 +78,8 @@ interface CartState {
   redeemLoyaltyPoints: number | null
   /** General additional amount (e.g. syringe, misc charges) - only when POS allows */
   generalAdditionalAmount: number
+  /** Remark for additional amounts (goes to Sales Invoice.custom_remark) */
+  additionalRemark: string | null
 
   // Actions
   addToCart: (item: Omit<CartItem, 'quantity'>) => Promise<void>
@@ -92,6 +94,7 @@ interface CartState {
   setSelectedCustomer: (customer: Customer | null) => Promise<void>
   setRedeemLoyaltyPoints: (points: number | null) => void
   setGeneralAdditionalAmount: (amount: number) => void
+  setAdditionalRemark: (remark: string | null) => void
   updatePricesForCustomer: (customerId?: string) => Promise<void>
   applyPricingRules: () => Promise<void>
 }
@@ -104,6 +107,7 @@ export const useCartStore = create<CartState>()(
       selectedCustomer: null,
       redeemLoyaltyPoints: null,
       generalAdditionalAmount: 0,
+      additionalRemark: null,
 
       addToCart: async (item) => {
         const state = get();
@@ -299,11 +303,16 @@ export const useCartStore = create<CartState>()(
           selectedCustomer: null,
           redeemLoyaltyPoints: null,
           generalAdditionalAmount: 0,
+          additionalRemark: null,
         }));
       },
 
       setGeneralAdditionalAmount: (amount) => set(() => ({
         generalAdditionalAmount: Math.max(0, amount)
+      })),
+
+      setAdditionalRemark: (remark) => set(() => ({
+        additionalRemark: remark && remark.trim().length ? remark.trim() : null,
       })),
 
       setRedeemLoyaltyPoints: (points) => set(() => ({ redeemLoyaltyPoints: points })),

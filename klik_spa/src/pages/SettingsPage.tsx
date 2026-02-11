@@ -341,7 +341,7 @@ export default function SettingsPage() {
   const renderAboutSettings = () => (
     <div className="space-y-6">
       <div className="text-center">
-        <img src="/assets/klik_pos/klik_spa/beveren-logo-180.png" alt="KLiK PoS" className="w-16 h-16 mx-auto mb-4 rounded-full object-cover" />
+        <img src="/assets/klik_pos/images/ROSE_LOGO.png" alt="KLiK PoS" className="w-16 h-16 mx-auto mb-4 rounded-full object-cover" />
         <h3 className="text-xl font-semibold text-gray-900 dark:text-white">KLiK PoS</h3>
         <p className="text-gray-600 dark:text-gray-400">Version 2.1.0</p>
       </div>

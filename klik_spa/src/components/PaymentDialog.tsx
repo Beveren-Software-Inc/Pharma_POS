@@ -83,6 +83,8 @@ interface PaymentDialogProps {
   redeemLoyaltyPoints?: number | null;
   /** General additional amount (e.g. syringe, misc) - only when POS allows */
   generalAdditionalAmount?: number;
+  /** Remark for additional amounts (comes from AdditionalAmountModal) */
+  additionalRemark?: string | null;
 }
 
 interface PaymentMethod {
@@ -142,7 +144,7 @@ export default function PaymentDialog({
   itemDiscounts = {},
   redeemLoyaltyPoints = null,
   generalAdditionalAmount = 0,
-
+  additionalRemark = null,
 }: PaymentDialogProps) {
   const [selectedSalesTaxCharges, setSelectedSalesTaxCharges] = useState("");
   const [paymentAmounts, setPaymentAmounts] = useState<PaymentAmount>({});
@@ -439,13 +441,12 @@ export default function PaymentDialog({
 
   // Calculate totals with memoization for performance
   const calculations = useMemo(() => {
-    // Use discounted price if available, otherwise use original price; include item additional_amount
+    // Use discounted price if available, otherwise use original price (additional charges handled separately)
     const subtotal = cartItems.reduce(
       (sum, item) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const itemPrice = (item as any).discountedPrice || item.price;
-        const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
-        return sum + itemPrice * item.quantity + itemAdditional;
+        return sum + itemPrice * item.quantity;
       },
       0
     );
@@ -454,6 +455,13 @@ export default function PaymentDialog({
       0
     );
     const taxableAmount = Math.max(0, subtotal - couponDiscount);
+
+    // Total additional amount = general + sum of per-item additional amounts (shown in payment dialog)
+    const itemAdditionalTotal = cartItems.reduce(
+      (sum, item) => sum + ((item as { additional_amount?: number }).additional_amount || 0),
+      0
+    );
+    const totalAdditionalAmount = (generalAdditionalAmount || 0) + itemAdditionalTotal;
 
     if (isItemTaxTemplateMode) {
       // Tax from item tax template per item (exclusive)
@@ -466,7 +474,7 @@ export default function PaymentDialog({
         taxAmount += (itemTotal * rate) / 100;
       });
       taxAmount = parseFloat(taxAmount.toFixed(3));
-      const grandTotal = taxableAmount + taxAmount + (generalAdditionalAmount || 0) + roundOffAmount;
+      const grandTotal = taxableAmount + taxAmount + totalAdditionalAmount + roundOffAmount;
       return {
         subtotal,
         couponDiscount,
@@ -474,6 +482,7 @@ export default function PaymentDialog({
         taxAmount,
         grandTotal,
         generalAdditionalAmount: generalAdditionalAmount || 0,
+        totalAdditionalAmount,
         selectedTax: null,
         isInclusive: false,
       };
@@ -505,8 +514,9 @@ export default function PaymentDialog({
       couponDiscount,
       taxableAmount,
       taxAmount,
-      grandTotal: grandTotal + (generalAdditionalAmount || 0) + roundOffAmount,
+      grandTotal: grandTotal + totalAdditionalAmount + roundOffAmount,
       generalAdditionalAmount: generalAdditionalAmount || 0,
+      totalAdditionalAmount,
       selectedTax,
       isInclusive,
     };
@@ -1010,6 +1020,8 @@ export default function PaymentDialog({
       outstandingAmount: outstandingAmount,
       appliedCoupons,
       generalAdditionalAmount: generalAdditionalAmount || 0,
+      // Remark from Additional Amounts modal -> Sales Invoice.custom_remark
+      additionalRemark: additionalRemark && additionalRemark.trim().length ? additionalRemark.trim() : null,
       businessType: posDetails?.business_type,
       deliveryPersonnel: deliveryPersonnel || null,
       deliveryVia: deliveryVia || null,
@@ -1133,6 +1145,8 @@ export default function PaymentDialog({
       roundOffAmount,
       grandTotal: calculations.grandTotal,
       generalAdditionalAmount: generalAdditionalAmount || 0,
+      // Remark from Additional Amounts modal -> Sales Invoice.custom_remark
+      additionalRemark: additionalRemark && additionalRemark.trim().length ? additionalRemark.trim() : null,
       appliedCoupons,
       status: "held",
       businessType: posDetails?.business_type,
@@ -1323,11 +1337,11 @@ export default function PaymentDialog({
 
                 {/* Invoice Preview for Mobile */}
                 {invoiceData && (
-                  <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 p-4">
+                  <div className="bg-white rounded-lg border border-gray-200 p-4 dark:bg-white dark:border-gray-200">
                     <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 text-center">
                       Invoice Preview:
                     </h4>
-                    <div className="border border-gray-300 dark:border-gray-600 rounded p-3 bg-gray-50 dark:bg-gray-700 max-h-64 overflow-y-auto">
+                    <div className="border border-gray-300 rounded p-3 bg-gray-50 max-h-64 overflow-y-auto dark:border-gray-300 dark:bg-gray-50">
                       <DisplayPrintPreview invoice={invoiceData} />
                     </div>
                   </div>
@@ -1482,6 +1496,16 @@ export default function PaymentDialog({
                         : formatCurrency(calculations.taxAmount)}
                     </span>
                   </div>
+                  {calculations.totalAdditionalAmount > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">
+                        Additional Amount
+                      </span>
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        {formatCurrency(calculations.totalAdditionalAmount)}
+                      </span>
+                    </div>
+                  )}
                   {roundOffAmount !== 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">
@@ -2311,6 +2335,16 @@ export default function PaymentDialog({
                             : formatCurrency(calculations.taxAmount)}
                         </span>
                       </div>
+{calculations.totalAdditionalAmount > 0 && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-600 dark:text-gray-400">
+                                Additional Amount
+                              </span>
+                              <span className="font-medium text-gray-900 dark:text-white">
+                                {formatCurrency(calculations.totalAdditionalAmount)}
+                              </span>
+                            </div>
+                          )}
                       {roundOffAmount !== 0 && (
                         <div className="flex justify-between">
                           <span className="text-gray-600 dark:text-gray-400">
@@ -2397,7 +2431,7 @@ export default function PaymentDialog({
                 <h5 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 text-center">
                   Print Format Preview:
                 </h5>
-                <div className="border border-gray-300 dark:border-gray-600 rounded p-2 bg-gray-50 dark:bg-gray-700">
+                <div className="border border-gray-300 rounded p-2 bg-gray-50 dark:border-gray-300 dark:bg-gray-50">
                   <DisplayPrintPreview invoice={invoiceData} />
                 </div>
               </div>

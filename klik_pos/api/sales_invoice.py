@@ -633,6 +633,7 @@ def create_and_submit_invoice(data):
 			redeem_loyalty_points,
 			loyalty_points,
 			general_additional_amount,
+			additional_remark,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -658,6 +659,7 @@ def create_and_submit_invoice(data):
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
 			general_additional_amount=general_additional_amount,
+			additional_remark=additional_remark,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -737,6 +739,7 @@ def create_draft_invoice(data):
 			redeem_loyalty_points,
 			loyalty_points,
 			general_additional_amount,
+			additional_remark,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -754,6 +757,7 @@ def create_draft_invoice(data):
 			redeem_loyalty_points=redeem_loyalty_points,
 			loyalty_points=loyalty_points,
 			general_additional_amount=general_additional_amount,
+			additional_remark=additional_remark,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -819,7 +823,10 @@ def parse_invoice_data(data):
 		redeem_loyalty_points = 0
 
 	# General additional amount (e.g. syringe, misc) - only when POS allows
-	general_additional_amount = flt(data.get("generalAdditionalAmount") or data.get("general_additional_amount") or 0)
+	general_additional_amount = flt(
+		data.get("generalAdditionalAmount") or data.get("general_additional_amount") or 0
+	)
+	additional_remark = data.get("additionalRemark") or data.get("additional_remark")
 
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
@@ -839,6 +846,7 @@ def parse_invoice_data(data):
 		redeem_loyalty_points,
 		loyalty_points,
 		general_additional_amount,
+		additional_remark,
 	)
 
 
@@ -858,6 +866,7 @@ def build_sales_invoice_doc(
 	redeem_loyalty_points=0,
 	loyalty_points=0,
 	general_additional_amount=0.0,
+	additional_remark=None,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -918,6 +927,10 @@ def build_sales_invoice_doc(
 	pos_profile = _get_active_pos_profile()
 	_set_pos_profile_fields(doc, pos_profile, customer, business_type)
 
+	# Set additional remark on invoice if field exists
+	if additional_remark and frappe.db.has_column("Sales Invoice", "custom_remark"):
+		doc.custom_remark = additional_remark
+
 	# Set posting details
 	_set_posting_fields(doc)
 
@@ -932,6 +945,9 @@ def build_sales_invoice_doc(
 
 	# Add items to invoice
 	_populate_invoice_items(doc, items, pos_profile)
+
+	# Append additional charge items using the special service item
+	_append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark)
 
 	# Populate tax details
 	_populate_tax_details(doc)
@@ -1188,6 +1204,67 @@ def _add_item_tax_template_to_item(item_data, item, pos_profile):
 		item_data["item_tax_template"] = item_tax_template
 
 
+def _append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark=None):
+	"""Map additional amounts to a dedicated service Item (custom_is_additional_charges = 1)."""
+	# Sum per-item additional amounts from payload
+	total_item_additional = sum(
+		flt(it.get("additional_amount") or it.get("additionalAmount") or 0) for it in items
+	)
+
+	general_additional_amount = flt(general_additional_amount or 0)
+
+	if total_item_additional <= 0 and general_additional_amount <= 0:
+		return
+
+	# Find the special service item
+	try:
+		extra_item_code = frappe.db.get_value(
+			"Item",
+			{"custom_is_additional_charges": 1, "disabled": 0},
+			"name",
+		)
+	except Exception:
+		extra_item_code = None
+
+	if not extra_item_code:
+		frappe.log_error(
+			"Additional charges item not found",
+			"Item with custom_is_additional_charges=1 is required for additional amounts",
+		)
+		return
+
+	warehouse = pos_profile.warehouse
+	cost_center = pos_profile.cost_center
+
+	# Per-item aggregated additional charges
+	if total_item_additional > 0:
+		doc.append(
+			"items",
+			{
+				"item_code": extra_item_code,
+				"qty": 1,
+				"rate": flt(total_item_additional, doc.precision("grand_total") or 2),
+				"description": "Item-based additional charges",
+				"warehouse": warehouse,
+				"cost_center": cost_center,
+			},
+		)
+
+	# General additional amount
+	if general_additional_amount > 0:
+		doc.append(
+			"items",
+			{
+				"item_code": extra_item_code,
+				"qty": 1,
+				"rate": flt(general_additional_amount, doc.precision("grand_total") or 2),
+				"description": additional_remark or "Additional charges",
+				"warehouse": warehouse,
+				"cost_center": cost_center,
+			},
+		)
+
+
 def _populate_tax_details(doc):
 	"""Populate tax details from the taxes and charges template."""
 	if not doc.taxes_and_charges:
@@ -1214,52 +1291,14 @@ def _populate_tax_details(doc):
 
 
 def _add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_profile):
-	"""Add item-level and general additional amounts as tax rows when POS allows."""
-	if not getattr(pos_profile, "custom_allow_additional_amounts", 0):
-		return
+	"""Do NOT push additional amounts into the Sales Taxes and Charges table.
 
-	total_item_additional = sum(flt(it.get("additional_amount") or it.get("additionalAmount") or 0) for it in items)
-	if total_item_additional <= 0 and (general_additional_amount or 0) <= 0:
-		return
-
-	# Use write-off account or default income account for additional charges
-	account = pos_profile.write_off_account
-	if not account:
-		company_doc = frappe.get_cached_doc("Company", doc.company)
-		account = company_doc.default_income_account
-	if not account:
-		return
-
-	cost_center = pos_profile.cost_center or frappe.db.get_value("Company", doc.company, "cost_center")
-
-	if total_item_additional > 0:
-		doc.append(
-			"taxes",
-			{
-				"charge_type": "Actual",
-				"account_head": account,
-				"description": "Item Additional Amounts",
-				"cost_center": cost_center,
-				"tax_amount": flt(total_item_additional, 2),
-				"category": "Total",
-				"add_deduct_tax": "Add",
-				"included_in_print_rate": 0,
-			},
-		)
-	if general_additional_amount and flt(general_additional_amount) > 0:
-		doc.append(
-			"taxes",
-			{
-				"charge_type": "Actual",
-				"account_head": account,
-				"description": "Additional Amount",
-				"cost_center": cost_center,
-				"tax_amount": flt(general_additional_amount, 2),
-				"category": "Total",
-				"add_deduct_tax": "Add",
-				"included_in_print_rate": 0,
-			},
-		)
+	Updated requirement:
+	- Additional amounts should be treated purely as separate line items
+	  (see _append_additional_charge_items) and must not appear as
+	  Actual rows under any account in the taxes table.
+	"""
+	return
 
 
 def _add_payment_entries(doc, mode_of_payment):
@@ -1298,6 +1337,30 @@ def get_tax_template(template_name):
 
 	return _cached_item_accounts[cache_key]
 
+def get_item_tax_template(template_name):
+	"""
+	Optimized tax template getter with caching.
+	Custom helper function to fetch Item Tax Template.
+	Returns the full template document or raises an error if not found.
+	"""
+	global _cached_item_accounts
+
+	if not template_name:
+		return None
+
+	cache_key = f"item_tax_template_{template_name}"
+	if cache_key not in _cached_item_accounts:
+		try:
+			# Fetch Item Tax Template instead of Sales Taxes and Charges Template
+			template_doc = frappe.get_doc("Item Tax Template", template_name)
+			_cached_item_accounts[cache_key] = template_doc
+		except frappe.DoesNotExistError:
+			frappe.throw(f"Item Tax Template '{template_name}' not found")
+		except Exception as e:
+			frappe.log_error(f"Error fetching item tax template {template_name}: {e!s}")
+			_cached_item_accounts[cache_key] = None
+
+	return _cached_item_accounts[cache_key]
 
 def get_customer_billing_currency(customer):
 	try:
@@ -1615,19 +1678,24 @@ def set_grand_total_with_roundoff(doc, method):
 	calculate_taxes_and_totals.calculate_totals = custom_calculate_totals
 
 
+
 def set_total_taxes_for_item_template(doc, method):
 	"""
 	When using item tax template mode (POS Profile.custom_allow_item_tax_template),
 	ensure Sales Invoice.total_taxes_and_charges reflects the actual tax amount,
 	even if no Sales Taxes and Charges Template / taxes rows are set.
+	
+	Creates separate tax rows for each unique item tax template to show individual
+	tax calculations per template.
 	"""
+	
 	# Only adjust Sales Invoices
 	if doc.doctype != "Sales Invoice":
 		return
 
 	# If ERPNext has already populated taxes or a non-zero total_taxes_and_charges, do nothing
-	if doc.get("taxes") or (doc.total_taxes_and_charges or 0):
-		return
+	# if doc.get("taxes") or (doc.total_taxes_and_charges or 0):
+	# 	return
 
 	# Check if current POS profile is in item tax template mode
 	pos_profile = None
@@ -1650,14 +1718,124 @@ def set_total_taxes_for_item_template(doc, method):
 		grand_total += doc.custom_roundoff_amount or 0
 
 	tax_amount = grand_total - net_total
-	if tax_amount <= 0:
-		return
+	# if tax_amount <= 0:
+	# 	return
 
+	# Set the numeric total so ERPNext reports and GL stay correct
 	doc.total_taxes_and_charges = flt(
 		tax_amount, doc.precision("total_taxes_and_charges") or 2
 	)
+	# Populate the Sales Taxes and Charges table with per-template totals
+	# Important: this runs *after* calculate_taxes_and_totals, so these rows are
+	# informational only and will not change the already-computed totals.
+	# if doc.get("taxes"):
+	# 	# If taxes already exist, don't touch them
+	# 	return
 
+	# Aggregate tax per template - keep templates separate
+	template_cache = {}
+	template_totals = {}  # Track calculations per template
 
+	for item in doc.get("items", []):
+		item_template = getattr(item, "item_tax_template", None)
+		if not item_template:
+			continue
+
+		if item_template not in template_cache:
+			template_cache[item_template] = get_item_tax_template(item_template)
+		tax_doc = template_cache[item_template]
+		if not tax_doc:
+			continue
+
+		# Base amount for this item (the amount tax is calculated on)
+		item_base = getattr(item, "net_amount", None) or getattr(item, "base_net_amount", None) or item.amount or 0
+		if not item_base:
+			continue
+
+		# Initialize template tracking
+		if item_template not in template_totals:
+			template_totals[item_template] = {
+				'base_amount': 0,
+				'tax_rows': {}
+			}
+
+		template_totals[item_template]['base_amount'] += item_base
+
+		# Item Tax Template has child table "taxes" with fields:
+		# - tax_type (Link to Account)
+		# - tax_rate (percentage)
+		
+		for tax_row in tax_doc.taxes:
+			
+			# Get the tax account and rate from Item Tax Template structure
+			tax_account = tax_row.tax_type  # This is the account head
+			tax_rate = tax_row.tax_rate or 0
+			
+			if not tax_account:
+				continue
+
+			# Create unique key for this tax row within this template
+			row_key = tax_account  # Item Tax Template doesn't have cost center per row
+
+			if row_key not in template_totals[item_template]['tax_rows']:
+				template_totals[item_template]['tax_rows'][row_key] = {
+					'account_head': tax_account,
+					'rate': tax_rate,
+					'tax_amount': 0
+				}
+
+			# Calculate tax for this item
+			row_tax = (item_base * tax_rate) / 100.0
+			template_totals[item_template]['tax_rows'][row_key]['tax_amount'] += row_tax
+
+	if not template_totals:
+		return
+	
+	# Default cost center fallback
+	default_cc = frappe.db.get_value("Company", doc.company, "cost_center")
+
+	# Create tax rows - one set per template, and accumulate the total tax
+	total_tax = 0.0
+	for template_name, template_data in template_totals.items():
+		for row_key, row_data in template_data['tax_rows'].items():
+			# if row_data['tax_amount'] <= 0:
+			# 	continue
+
+			# Add to numeric total
+			total_tax += row_data['tax_amount']
+
+			# Create description that shows which template this is from
+			# Include the tax rate to make it clearer
+			description = f"{template_name} ({row_data['rate']}%)"
+			
+			doc.append(
+				"taxes",
+				{
+					"charge_type": "On Net Total",
+					"account_head": row_data['account_head'],
+					"description": description,
+					"cost_center": doc.cost_center or default_cc,
+					"tax_amount": flt(
+						row_data['tax_amount'],
+						doc.precision("total_taxes_and_charges") or 2,
+					),
+					
+					"category": "Total",
+					"add_deduct_tax": "Add",
+					"included_in_print_rate": 0,
+				},
+			)
+
+	# Set total_taxes_and_charges from the per-template breakdown
+	if total_tax > 0:
+		doc.total_taxes_and_charges = flt(
+			total_tax, doc.precision("total_taxes_and_charges") or 2
+		)
+		doc.base_total_taxes_and_charges = flt(
+			total_tax * (doc.conversion_rate or 1),
+			doc.precision("base_total_taxes_and_charges") or 2,
+		)
+   
 def custom_calculate_totals(self):
 	"""Main function to calculate invoice totals with custom round-off logic"""
 	# Calculate basic grand total and taxes
@@ -1804,11 +1982,23 @@ def get_writeoff_account():
 
 class CustomSalesInvoice(SalesInvoice):
 	def set_pos_fields(self, for_validate=False):
-		"""Keep taxes_and_charges blank when item tax template mode is enabled to avoid double tax calculation."""
+		"""When item tax template mode is enabled, remove any document-level
+		Sales Taxes and Charges so we don't mix template tax with per-item
+		item_tax_template tax.
+
+		The per-item taxes are then reflected by set_total_taxes_for_item_template,
+		which rebuilds the taxes table from the item_tax_template values.
+		"""
+		
 		pos = super().set_pos_fields(for_validate)
 		if pos and getattr(pos, "custom_allow_item_tax_template", 0):
 			self.taxes_and_charges = None
+			# Also clear any existing taxes rows that might have been added
+			# from a Sales Taxes and Charges Template or other logic so that
+			# set_total_taxes_for_item_template can rebuild them cleanly
+			# from item_tax_template per item.
 			self.taxes = []
+		# frappe.throw(str(self.taxes))
 		return pos
 
 	def get_gl_entries(self, warehouse_account=None):
