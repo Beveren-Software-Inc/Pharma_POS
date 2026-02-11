@@ -3,12 +3,13 @@ const fs = require("fs");
 const path = require("path");
 
 async function createIcons() {
-	const inputFile = path.join(__dirname, "public", "beveren-logo-180.png");
+	// Use ROSE_LOGO.png from app public images (favicon & PWA icons generated from it)
+	const inputFile = path.join(__dirname, "..", "public", "images", "ROSE_LOGO.png");
 	const publicDir = path.join(__dirname, "public");
 
 	// Create different icon sizes
 	const sizes = [
-		{ size: 192, filename: "icon-512x512.png" },
+		{ size: 192, filename: "icon-192x192.png" },
 		{ size: 512, filename: "icon-512x512.png" },
 	];
 

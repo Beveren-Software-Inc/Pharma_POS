@@ -48,13 +48,17 @@ export default function PrintPreview({ invoice }: PrintPreviewProps) {
     fetchPrintHTML();
   }, [invoice, posDetails, posLoading, printFormat]); // re-run when posDetails or invoice changes
 
-  if (loading) return <p>Loading Print Preview...</p>;
+  if (loading) return <p className="text-gray-600 dark:text-gray-400">Loading Print Preview...</p>;
 
+  // Always use light/print colors so preview is readable in dark mode and matches print output
   return (
-    <div className="print-preview-container p-4 bg-white shadow overflow-auto max-h-[90vh]">
+    <div
+      className="print-preview-container p-4 bg-white text-gray-900 shadow overflow-auto max-h-[90vh] dark:bg-white dark:text-gray-900"
+      style={{ colorScheme: "light" }}
+    >
       <style dangerouslySetInnerHTML={{ __html: style }} />
       <div
-        className="print-preview-content"
+        className="print-preview-content text-gray-900 dark:text-gray-900"
         dangerouslySetInnerHTML={{ __html: html }}
       />
     </div>

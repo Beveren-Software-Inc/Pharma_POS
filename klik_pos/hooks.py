@@ -4,7 +4,7 @@ app_publisher = "Beveren Sooftware Inc"
 app_description = "KLiK PoS: A Modern Point of Sale for your Business"
 app_email = "info@beverensoftware.com"
 app_license = "mit"
-app_icon_url = "/assets/klik_pos/images/klik_s.jpeg"
+app_icon_url = "/assets/klik_pos/images/ROSE_LOGO.png"
 app_icon_title = "KLiK PoS"
 app_icon_route = "/klik_pos"
 
@@ -17,7 +17,7 @@ app_icon_route = "/klik_pos"
 add_to_apps_screen = [
 	{
 		"name": "klik_pos",
-		"logo": "/assets/klik_pos/images/klik_s.jpeg",
+		"logo": "/assets/klik_pos/images/ROSE_LOGO.png",
 		"title": "KLiK PoS",
 		"route": "/klik_pos",
 	}
@@ -92,6 +92,7 @@ doc_events = {
 			"klik_pos.api.sales_invoice.set_total_taxes_for_item_template",
 			"klik_pos.api.sales_invoice.validate_sales_invoice_return",
 		],
+		
 		# "before_save": [
 		# 	"klik_pos.api.sales_invoice.sync_return_payments_before_save",
 		# ],

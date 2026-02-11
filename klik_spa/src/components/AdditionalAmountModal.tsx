@@ -40,19 +40,21 @@ export default function AdditionalAmountModal({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg mx-4 p-6 max-h-[80vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+        {/* Header: primary (beveren) slightly lighter than Apply button */}
+        <div className="flex items-center justify-between px-6 py-4 bg-beveren-500 text-white rounded-t-lg shrink-0">
+          <h3 className="text-lg font-semibold">
             Additional Amounts
           </h3>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500"
+            className="p-1 rounded hover:bg-beveren-400/80 text-white transition-colors"
           >
             <X size={20} />
           </button>
         </div>
 
+        <div className="p-6 overflow-y-auto">
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
           Add per-item and general additional charges (e.g. syringes, misc services).
         </p>
@@ -137,6 +139,7 @@ export default function AdditionalAmountModal({
           >
             Apply
           </button>
+        </div>
         </div>
       </div>
     </div>
