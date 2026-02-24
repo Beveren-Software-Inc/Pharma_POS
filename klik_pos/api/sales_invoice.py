@@ -875,10 +875,9 @@ def build_sales_invoice_doc(
 	# so avoid re-applying pricing rules on the Sales Invoice to prevent duplicate free items.
 	doc.ignore_pricing_rule = 1
 
-	# Set delivery personnel if provided
 	if delivery_personnel:
 		doc.custom_delivery_personnel = delivery_personnel
-	# Set delivery channel if provided and field exists
+
 	if delivery_via and frappe.db.has_column("Sales Invoice", "custom_delivery_via"):
 		doc.custom_delivery_via = delivery_via
 	# Set reference no if provided and field exists
@@ -888,7 +887,6 @@ def build_sales_invoice_doc(
 	if medication_order and frappe.db.has_column("Sales Invoice", "custom_medication_order"):
 		orders = medication_order
 
-		# Normalize to a list of order names
 		if isinstance(orders, str):
 			orders = [orders]
 		elif isinstance(orders, (set, tuple)):
@@ -915,7 +913,6 @@ def build_sales_invoice_doc(
 					if patient_name:
 						doc.patient = patient_name
 				except Exception:
-					# Don't block invoice creation if healthcare doc lookup fails
 					frappe.log_error(
 						frappe.get_traceback(),
 						f"Error setting patient from Medication Order {first_order}",
@@ -929,28 +926,20 @@ def build_sales_invoice_doc(
 	if additional_remark and frappe.db.has_column("Sales Invoice", "custom_remark"):
 		doc.custom_remark = additional_remark
 
-	# Set posting details
 	_set_posting_fields(doc)
 
-	# Set POS opening entry
 	_set_pos_opening_entry(doc)
 
-	# Handle round-off
 	_set_roundoff_fields(doc, roundoff_amount)
 
-	# Set taxes and charges
 	_set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile)
 
-	# Add items to invoice
 	_populate_invoice_items(doc, items, pos_profile)
 
-	# Append additional charge items using the special service item
 	_append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark)
 
-	# Populate tax details
 	_populate_tax_details(doc)
 
-	# Add additional amounts (item-level + general) as tax rows when POS allows
 	_add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_profile)
 
 	# Add payment information
@@ -1052,7 +1041,6 @@ def _set_roundoff_fields(doc, roundoff_amount):
 def _set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile):
 	"""Set the taxes and charges template. When item tax template mode is enabled, do not set."""
 	if getattr(pos_profile, "custom_allow_item_tax_template", 0):
-		# Each item has its own item_tax_template; no document-level taxes and charges
 		return
 	if sales_and_tax_charges:
 		doc.taxes_and_charges = sales_and_tax_charges
@@ -1128,9 +1116,11 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 		"cost_center": pos_profile.cost_center,
 	}
 
-	# Preserve free-item flag from cart so ERPNext knows these are promotional rows
+	# and HARD-ENFORCE zero rate on invoice line for free items
 	if item.get("is_free_item"):
 		item_data["is_free_item"] = 1
+		item_data["rate"] = 0
+		
 
 	# Add optional fields
 	_add_uom_to_item(item_data, item)
@@ -1138,7 +1128,7 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 	_add_serial_to_item(item_data, item)
 	_add_dosage_to_item(item_data, item)
 	_add_item_tax_template_to_item(item_data, item, pos_profile)
-
+	
 	return item_data
 
 
@@ -1677,6 +1667,31 @@ def set_grand_total_with_roundoff(doc, method):
 
 
 
+def enforce_zero_rate_for_free_items(doc, method):
+	"""
+	Final safety net before save/submit:
+	- Any Sales Invoice Item marked as is_free_item must have zero rate / amount.
+	- This prevents any later pricing logic from restoring the original rate.
+	"""
+	if doc.doctype != "Sales Invoice":
+		return
+
+	for item in doc.get("items", []):
+		if not getattr(item, "is_free_item", 0):
+			continue
+
+		# Hard enforce zero pricing for free lines
+		item.rate = 0
+		item.price_list_rate = 0
+		item.base_rate = 0
+		item.base_price_list_rate = 0
+		item.discount_percentage = 0
+		item.discount_amount = 0
+		item.net_rate = 0
+		item.amount = 0
+		item.net_amount = 0
+
+
 def set_total_taxes_for_item_template(doc, method):
 	"""
 	When using item tax template mode (POS Profile.custom_allow_item_tax_template),
@@ -1716,13 +1731,8 @@ def set_total_taxes_for_item_template(doc, method):
 		grand_total += doc.custom_roundoff_amount or 0
 
 	tax_amount = grand_total - net_total
-	# if tax_amount <= 0:
-	# 	return
-
-	# Set the numeric total so ERPNext reports and GL stay correct
-	doc.total_taxes_and_charges = flt(
-		tax_amount, doc.precision("total_taxes_and_charges") or 2
-	)
+	# Base tax amount from ERPNext (before adding tax on free items)
+	base_tax_amount = flt(tax_amount, doc.precision("total_taxes_and_charges") or 2)
 	# Populate the Sales Taxes and Charges table with per-template totals
 	# Important: this runs *after* calculate_taxes_and_totals, so these rows are
 	# informational only and will not change the already-computed totals.
@@ -1786,9 +1796,6 @@ def set_total_taxes_for_item_template(doc, method):
 			row_tax = (item_base * tax_rate) / 100.0
 			template_totals[item_template]['tax_rows'][row_key]['tax_amount'] += row_tax
 
-	if not template_totals:
-		return
-	
 	# Default cost center fallback
 	default_cc = frappe.db.get_value("Company", doc.company, "cost_center")
 
@@ -1796,10 +1803,7 @@ def set_total_taxes_for_item_template(doc, method):
 	total_tax = 0.0
 	for template_name, template_data in template_totals.items():
 		for row_key, row_data in template_data['tax_rows'].items():
-			# if row_data['tax_amount'] <= 0:
-			# 	continue
-
-			# Add to numeric total
+			# Add to numeric total (per-template tax based on actual billed amounts)
 			total_tax += row_data['tax_amount']
 
 			# Create description that shows which template this is from
@@ -1824,31 +1828,236 @@ def set_total_taxes_for_item_template(doc, method):
 				},
 			)
 
-	# Set total_taxes_and_charges from the per-template breakdown
-	if total_tax > 0:
+	# ------------------------------------------------------------------
+	# NEW LOGIC: Add tax on free items (is_free_item=1) as Actual rows.
+	#
+	# Requirement:
+	# - When an item is given for free (rate 0, is_free_item=1), hospital
+	#   still wants to charge the tax that would normally apply on that
+	#   item's selling rate using its Item Tax Template.
+	# - This extra tax should be visible in Sales Taxes and Charges as
+	#   separate Actual rows and included in total_taxes_and_charges.
+	# ------------------------------------------------------------------
+	free_item_tax_by_account = {}
+
+	for item in doc.get("items", []):
+		try:
+			if not getattr(item, "is_free_item", 0):
+				continue
+
+			# Use line template if set; otherwise get default from Item / Item Group (e.g. when frontend sends none)
+			item_template = getattr(item, "item_tax_template", None)
+			if not item_template:
+				from klik_pos.api import tax as tax_api
+				res = tax_api.get_item_tax_template_for_item(item.item_code, doc.company)
+				if res and res.get("item_tax_template"):
+					item_template = res["item_tax_template"]
+			if not item_template:
+				continue
+
+			tax_doc = get_item_tax_template(item_template)
+			if not tax_doc or not getattr(tax_doc, "taxes", None):
+				continue
+
+			item_code = item.item_code
+			free_base_rate = 0.0
+
+			# UOM-aware base rate:
+			# - If free item UOM differs from stock UOM, use the price for that UOM
+			#   (or derive it via conversion factor), exactly like normal UOM pricing.
+			item_uom = getattr(item, "uom", None)
+			price_list = getattr(doc, "selling_price_list", None)
+			if not price_list and getattr(doc, "pos_profile", None):
+				price_list = frappe.db.get_value(
+					"POS Profile", doc.pos_profile, "selling_price_list"
+				)
+
+			try:
+				stock_uom, standard_rate = frappe.db.get_value(
+					"Item", item_code, ["stock_uom", "standard_rate"]
+				) or (None, 0)
+			except Exception:
+				stock_uom, standard_rate = (None, 0)
+
+			standard_rate = flt(standard_rate or 0)
+
+			try:
+				# 1) If we know the item's UOM on the invoice, prefer a price for that UOM
+				if item_uom:
+					item_price_filters = {
+						"item_code": item_code,
+						"selling": 1,
+						"uom": item_uom,
+					}
+					if price_list:
+						item_price_filters["price_list"] = price_list
+
+					price_doc = frappe.get_value(
+						"Item Price",
+						item_price_filters,
+						"price_list_rate",
+					)
+
+					if not price_doc and price_list:
+						# Retry without price list restriction
+						item_price_filters.pop("price_list", None)
+						price_doc = frappe.get_value(
+							"Item Price",
+							item_price_filters,
+							"price_list_rate",
+						)
+
+					if price_doc:
+						free_base_rate = flt(price_doc or 0)
+
+				# 2) If still no rate and UOM != stock_uom, derive from stock_uom via conversion factor
+				if free_base_rate <= 0 and item_uom and stock_uom and item_uom != stock_uom:
+					conv = frappe.db.get_value(
+						"UOM Conversion Detail",
+						{
+							"parenttype": "Item",
+							"parent": item_code,
+							"uom": item_uom,
+						},
+						"conversion_factor",
+					)
+					conv = flt(conv or 0)
+					if conv > 0:
+						# Prefer standard_rate if available; otherwise use stock_uom Item Price
+						base_stock_rate = standard_rate
+						if base_stock_rate <= 0 and price_list and stock_uom:
+							stock_price = frappe.db.get_value(
+								"Item Price",
+								{
+									"item_code": item_code,
+									"price_list": price_list,
+									"uom": stock_uom,
+								},
+								"price_list_rate",
+							)
+							base_stock_rate = flt(stock_price or 0)
+						if base_stock_rate > 0:
+							free_base_rate = base_stock_rate * conv
+
+				# 3) Final fallback: standard_rate (typical selling rate)
+				if free_base_rate <= 0 and standard_rate > 0:
+					free_base_rate = standard_rate
+
+				# 4) Last resort: any Item Price in POS price list (no UOM filter)
+				if free_base_rate <= 0 and price_list:
+					any_price = frappe.db.get_value(
+						"Item Price",
+						{"item_code": item_code, "price_list": price_list},
+						"price_list_rate",
+					)
+					free_base_rate = flt(any_price or 0)
+			except Exception:
+				free_base_rate = flt(standard_rate or 0)
+
+			if free_base_rate <= 0:
+				# No sensible base rate available; skip this free item
+				continue
+
+			item_qty = flt(getattr(item, "qty", 0))
+			if item_qty <= 0:
+				continue
+
+			for tax_row in tax_doc.taxes:
+				tax_account = tax_row.tax_type
+				tax_rate = flt(tax_row.tax_rate or 0)
+				if not tax_account or tax_rate == 0:
+					continue
+
+				# Tax is calculated on the "normal" selling value of the free item
+				item_tax_base = free_base_rate * item_qty
+				free_tax_amount = (item_tax_base * tax_rate) / 100.0
+				if free_tax_amount <= 0:
+					continue
+
+				if tax_account not in free_item_tax_by_account:
+					free_item_tax_by_account[tax_account] = 0.0
+				free_item_tax_by_account[tax_account] += free_tax_amount
+		except Exception:
+			# Never block invoice creation because of free-item tax issues
+			frappe.log_error(
+				frappe.get_traceback(),
+				"Error calculating tax for free item on Sales Invoice",
+			)
+			continue
+
+	# Append Actual tax rows for free-item tax and include in totals
+	free_items_total_tax = 0.0
+	if free_item_tax_by_account:
+		for account_head, amount in free_item_tax_by_account.items():
+			if amount <= 0:
+				continue
+
+			free_items_total_tax += amount
+			doc.append(
+				"taxes",
+				{
+					"charge_type": "Actual",
+					"account_head": account_head,
+					"description": "Tax on free items",
+					"cost_center": doc.cost_center or default_cc,
+					"tax_amount": flt(
+						amount, doc.precision("total_taxes_and_charges") or 2
+					),
+					"base_tax_amount": flt(
+						amount * (doc.conversion_rate or 1),
+						doc.precision("base_total_taxes_and_charges") or 2,
+					),
+					"category": "Total",
+					"add_deduct_tax": "Add",
+					"included_in_print_rate": 0,
+				},
+			)
+
+	# Final numeric totals = base tax (from ERPNext) + explicit per-template tax
+	# breakdown (total_tax) + additional tax on free items.
+	total_tax_with_free = base_tax_amount + total_tax + free_items_total_tax
+	if total_tax_with_free > 0:
 		doc.total_taxes_and_charges = flt(
-			total_tax, doc.precision("total_taxes_and_charges") or 2
+			total_tax_with_free, doc.precision("total_taxes_and_charges") or 2
 		)
 		doc.base_total_taxes_and_charges = flt(
-			total_tax * (doc.conversion_rate or 1),
+			total_tax_with_free * (doc.conversion_rate or 1),
 			doc.precision("base_total_taxes_and_charges") or 2,
+		)
+
+		# Ensure grand_total matches net_total + all taxes (UI behavior)
+		net_total = flt(doc.net_total or 0, doc.precision("net_total") or 2)
+		doc.grand_total = flt(
+			net_total + doc.total_taxes_and_charges,
+			doc.precision("grand_total") or 2,
+		)
+		doc.base_grand_total = flt(
+			doc.grand_total * (doc.conversion_rate or 1),
+			doc.precision("base_grand_total") or 2,
 		)
    
 def custom_calculate_totals(self):
 	"""Main function to calculate invoice totals with custom round-off logic"""
 	# Calculate basic grand total and taxes
 	if self.doc.get("taxes"):
-		self.doc.grand_total = flt(self.doc.get("taxes")[-1].total) + flt(self.doc.get("grand_total_diff"))
-	else:
-		self.doc.grand_total = flt(self.doc.net_total)
-
-	if self.doc.get("taxes"):
-		self.doc.total_taxes_and_charges = flt(
-			self.doc.grand_total - self.doc.net_total - flt(self.doc.get("grand_total_diff")),
-			self.doc.precision("total_taxes_and_charges"),
-		)
+		# If hooks (like item tax template mode) already set total_taxes_and_charges,
+		# keep that; otherwise, fall back to ERPNext-style computation from last tax row.
+		if not self.doc.total_taxes_and_charges:
+			last_total = flt(getattr(self.doc.get("taxes")[-1], "total", 0))
+			self.doc.total_taxes_and_charges = flt(
+				last_total - flt(self.doc.net_total) - flt(self.doc.get("grand_total_diff")),
+				self.doc.precision("total_taxes_and_charges"),
+			)
 	else:
 		self.doc.total_taxes_and_charges = 0.0
+
+	# Grand total = net total + all taxes (including free-item tax) + any grand_total_diff
+	self.doc.grand_total = flt(
+		flt(self.doc.net_total)
+		+ flt(self.doc.total_taxes_and_charges or 0)
+		+ flt(self.doc.get("grand_total_diff")),
+		self.doc.precision("grand_total"),
+	)
 	# Apply existing roundoff amount
 	if (
 		self.doc.doctype == "Sales Invoice"

@@ -167,3 +167,142 @@ def get_item_tax_template_rates(templates):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "get_item_tax_template_rates")
 		return {"success": False, "error": str(e), "rates": {}}
+
+
+@frappe.whitelist(allow_guest=True)
+def get_free_item_tax_amount(items):
+	"""
+	Return total tax amount for a list of free items (item_code, qty, optional uom).
+	Used by the frontend to include tax on free items in the grand total.
+	Uses the same logic as Sales Invoice free-item tax:
+	- Item/Item Group default Item Tax Template
+	- UOM-aware base rate (price for that UOM or derived via conversion factor)
+	- Then template tax rate
+	"""
+	from frappe.utils import flt
+
+	try:
+		if not items:
+			return {"success": True, "total_tax": 0.0}
+		if isinstance(items, str):
+			items = frappe.parse_json(items)
+		items = [x for x in items if x.get("item_code") and flt(x.get("qty"), 0) > 0]
+		if not items:
+			return {"success": True, "total_tax": 0.0}
+
+		company = frappe.defaults.get_user_default("Company")
+		if not company:
+			return {"success": True, "total_tax": 0.0}
+
+		pos = get_current_pos_profile()
+		price_list = getattr(pos, "selling_price_list", None) or None
+
+		total_tax = 0.0
+		for row in items:
+			item_code = row.get("item_code")
+			qty = flt(row.get("qty"), 0)
+			item_uom = row.get("uom")
+			if not item_code or qty <= 0:
+				continue
+
+			res = get_item_tax_template_for_item(item_code, company)
+			template = res.get("item_tax_template") if res else None
+			if not template:
+				continue
+
+			rate_res = get_item_tax_template_rate(template)
+			tax_rate = flt(rate_res.get("rate"), 0) if rate_res else 0
+			if tax_rate <= 0:
+				continue
+
+			# --- UOM-aware base rate, mirroring Sales Invoice free-item logic ---
+			base_rate = 0.0
+			try:
+				stock_uom, standard_rate = frappe.db.get_value(
+					"Item", item_code, ["stock_uom", "standard_rate"]
+				) or (None, 0)
+			except Exception:
+				stock_uom, standard_rate = (None, 0)
+
+			standard_rate = flt(standard_rate or 0)
+
+			try:
+				# 1) Prefer Item Price for the requested UOM (if provided)
+				if item_uom:
+					item_price_filters = {
+						"item_code": item_code,
+						"selling": 1,
+						"uom": item_uom,
+					}
+					if price_list:
+						item_price_filters["price_list"] = price_list
+
+					price_doc = frappe.get_value(
+						"Item Price",
+						item_price_filters,
+						"price_list_rate",
+					)
+
+					if not price_doc and price_list:
+						item_price_filters.pop("price_list", None)
+						price_doc = frappe.get_value(
+							"Item Price",
+							item_price_filters,
+							"price_list_rate",
+						)
+
+					if price_doc:
+						base_rate = flt(price_doc or 0)
+
+				# 2) If still no rate and UOM != stock_uom, derive from stock_uom via conversion factor
+				if base_rate <= 0 and item_uom and stock_uom and item_uom != stock_uom:
+					conv = frappe.db.get_value(
+						"UOM Conversion Detail",
+						{
+							"parenttype": "Item",
+							"parent": item_code,
+							"uom": item_uom,
+						},
+						"conversion_factor",
+					)
+					conv = flt(conv or 0)
+					if conv > 0:
+						base_stock_rate = standard_rate
+						if base_stock_rate <= 0 and price_list and stock_uom:
+							stock_price = frappe.db.get_value(
+								"Item Price",
+								{
+									"item_code": item_code,
+									"price_list": price_list,
+									"uom": stock_uom,
+								},
+								"price_list_rate",
+							)
+							base_stock_rate = flt(stock_price or 0)
+						if base_stock_rate > 0:
+							base_rate = base_stock_rate * conv
+
+				# 3) Final fallback: standard_rate
+				if base_rate <= 0 and standard_rate > 0:
+					base_rate = standard_rate
+
+				# 4) Last resort: any Item Price in POS price list (no UOM filter)
+				if base_rate <= 0 and price_list:
+					any_price = frappe.db.get_value(
+						"Item Price",
+						{"item_code": item_code, "price_list": price_list},
+						"price_list_rate",
+					)
+					base_rate = flt(any_price or 0)
+			except Exception:
+				base_rate = flt(standard_rate or 0)
+
+			if base_rate <= 0:
+				continue
+
+			total_tax += (base_rate * qty * tax_rate) / 100.0
+
+		return {"success": True, "total_tax": round(float(total_tax), 3)}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "get_free_item_tax_amount")
+		return {"success": False, "error": str(e), "total_tax": 0.0}

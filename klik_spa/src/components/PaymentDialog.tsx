@@ -60,6 +60,7 @@ import {
 import DeliveryPersonnelModal from "./DeliveryPersonnelModal";
 import { useDeliveryPersonnel } from "../hooks/useDeliveryPersonnel";
 import { useItemTaxTemplateRates } from "../hooks/useItemTaxTemplateRates";
+import { useFreeItemTaxAmount } from "../hooks/useFreeItemTaxAmount";
 
 interface PaymentDialogProps {
   isOpen: boolean;
@@ -223,6 +224,7 @@ export default function PaymentDialog({
     .map((item) => (item as { item_tax_template?: string }).item_tax_template)
     .filter(Boolean) as string[];
   const { rates: itemTaxTemplateRates } = useItemTaxTemplateRates(itemTaxTemplateNames);
+  const freeItemTaxAmount = useFreeItemTaxAmount(cartItems, isItemTaxTemplateMode);
 
 
 
@@ -464,7 +466,7 @@ export default function PaymentDialog({
     const totalAdditionalAmount = (generalAdditionalAmount || 0) + itemAdditionalTotal;
 
     if (isItemTaxTemplateMode) {
-      // Tax from item tax template per item (exclusive)
+      // Tax from item tax template per item (exclusive); free items contribute 0 to this (rate is 0)
       let taxAmount = 0;
       cartItems.forEach((item) => {
         const itemPrice = (item as { discountedPrice?: number }).discountedPrice || item.price;
@@ -474,12 +476,14 @@ export default function PaymentDialog({
         taxAmount += (itemTotal * rate) / 100;
       });
       taxAmount = parseFloat(taxAmount.toFixed(3));
-      const grandTotal = taxableAmount + taxAmount + totalAdditionalAmount + roundOffAmount;
+      // Include tax on free items (backend adds same as Actual rows; user pays this)
+      const totalTaxAmount = taxAmount + (freeItemTaxAmount || 0);
+      const grandTotal = taxableAmount + totalTaxAmount + totalAdditionalAmount + roundOffAmount;
       return {
         subtotal,
         couponDiscount,
         taxableAmount,
-        taxAmount,
+        taxAmount: totalTaxAmount,
         grandTotal,
         generalAdditionalAmount: generalAdditionalAmount || 0,
         totalAdditionalAmount,
@@ -529,6 +533,7 @@ export default function PaymentDialog({
     isItemTaxTemplateMode,
     itemTaxTemplateRates,
     generalAdditionalAmount,
+    freeItemTaxAmount,
   ]);
 
   // Fetch loyalty redemption preview so amount_to_pay = grandTotal - loyalty_amount
