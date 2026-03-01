@@ -412,3 +412,35 @@ def _create_and_submit_closing_doc(opening_entry, data, payment_data, user):
 		frappe.logger().warning("Failed to clear POS profile cache after closing entry", exc_info=True)
 
 	return doc
+
+
+def _patch_erpnext_pos_opening_entry():
+	"""
+	ERPNext's check_open_pos_exists blocks if ANY user has an open entry for a pos_profile.
+	That breaks shared profiles: User B cannot open when User A has the same profile open.
+	We change it to: block only if THIS user already has an open entry for this profile
+	(one open entry per user per profile). Same validation runs on UI and backend submit.
+	"""
+	from erpnext.accounts.doctype.pos_opening_entry import pos_opening_entry as erpnext_poe
+
+	def check_open_pos_exists_per_user(self):
+		# Block only if this same user already has another open entry for this profile (shared profiles allowed)
+		existing = frappe.get_all(
+			"POS Opening Entry",
+			filters={"pos_profile": self.pos_profile, "user": self.user, "status": "Open"},
+			pluck="name",
+		)
+		if self.name:
+			existing = [n for n in existing if n != self.name]
+		if existing:
+			frappe.throw(
+				title=_("POS Opening Entry Exists"),
+				msg=_(
+					"{0} is open. Close the POS or cancel the existing POS Opening Entry to create a new POS Opening Entry."
+				).format(frappe.bold(self.pos_profile)),
+			)
+
+	erpnext_poe.POSOpeningEntry.check_open_pos_exists = check_open_pos_exists_per_user
+
+
+_patch_erpnext_pos_opening_entry()
