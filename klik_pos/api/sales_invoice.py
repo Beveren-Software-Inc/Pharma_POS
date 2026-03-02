@@ -632,6 +632,8 @@ def create_and_submit_invoice(data):
 			loyalty_points,
 			general_additional_amount,
 			additional_remark,
+			delivery_distance_km,
+			delivery_charge_amount,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -658,6 +660,8 @@ def create_and_submit_invoice(data):
 			loyalty_points=loyalty_points,
 			general_additional_amount=general_additional_amount,
 			additional_remark=additional_remark,
+			delivery_distance_km=delivery_distance_km,
+			delivery_charge_amount=delivery_charge_amount,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -738,6 +742,8 @@ def create_draft_invoice(data):
 			loyalty_points,
 			general_additional_amount,
 			additional_remark,
+			delivery_distance_km,
+			delivery_charge_amount,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -756,6 +762,8 @@ def create_draft_invoice(data):
 			loyalty_points=loyalty_points,
 			general_additional_amount=general_additional_amount,
 			additional_remark=additional_remark,
+			delivery_distance_km=delivery_distance_km,
+			delivery_charge_amount=delivery_charge_amount,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -826,6 +834,14 @@ def parse_invoice_data(data):
 	)
 	additional_remark = data.get("additionalRemark") or data.get("additional_remark")
 
+	# Delivery distance (km) and delivery charge amount (from Select Delivery Personnel modal)
+	delivery_distance_km = flt(
+		data.get("deliveryDistanceKm") or data.get("delivery_distance_km") or 0
+	)
+	delivery_charge_amount = flt(
+		data.get("deliveryChargeAmount") or data.get("delivery_charge_amount") or 0
+	)
+
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
 
@@ -845,6 +861,8 @@ def parse_invoice_data(data):
 		loyalty_points,
 		general_additional_amount,
 		additional_remark,
+		delivery_distance_km,
+		delivery_charge_amount,
 	)
 
 
@@ -865,6 +883,8 @@ def build_sales_invoice_doc(
 	loyalty_points=0,
 	general_additional_amount=0.0,
 	additional_remark=None,
+	delivery_distance_km=0.0,
+	delivery_charge_amount=0.0,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -936,6 +956,9 @@ def build_sales_invoice_doc(
 	_populate_invoice_items(doc, items, pos_profile)
 
 	_append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark)
+
+	# Delivery charge as a separate invoice item
+	_append_delivery_charge_item(doc, delivery_charge_amount, pos_profile, delivery_distance_km)
 
 	_populate_tax_details(doc)
 
@@ -1253,6 +1276,44 @@ def _append_additional_charge_items(doc, items, general_additional_amount, pos_p
 				"cost_center": cost_center,
 			},
 		)
+
+
+def _append_delivery_charge_item(doc, delivery_charge_amount, pos_profile, delivery_distance_km=0.0):
+	"""Append Delivery Charge as a dedicated item row, if any amount was provided."""
+
+	delivery_charge_amount = flt(delivery_charge_amount or 0)
+	if delivery_charge_amount <= 0:
+		return
+
+	from klik_pos.api.delivery_charges import _ensure_delivery_charge_item
+
+	try:
+		item_code = _ensure_delivery_charge_item()
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(),
+			"Failed to ensure Delivery Charge item",
+		)
+		return
+
+	warehouse = getattr(pos_profile, "warehouse", None)
+	cost_center = getattr(pos_profile, "cost_center", None)
+
+	description = "Delivery Charge"
+	if delivery_distance_km:
+		description = f"Delivery Charge ({flt(delivery_distance_km)} km)"
+
+	doc.append(
+		"items",
+		{
+			"item_code": item_code,
+			"qty": 1,
+			"rate": flt(delivery_charge_amount, doc.precision("grand_total") or 2),
+			"description": description,
+			"warehouse": warehouse,
+			"cost_center": cost_center,
+		},
+	)
 
 
 def _populate_tax_details(doc):

@@ -8,7 +8,13 @@ import { useDeliveryChannels } from "../hooks/useDeliveryChannels";
 interface DeliveryPersonnelModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelect: (selection: { personnelName: string | null; deliveryVia: string | null; referenceNo?: string | null }) => void;
+  onSelect: (selection: {
+    personnelName: string | null;
+    deliveryVia: string | null;
+    referenceNo?: string | null;
+    distanceKm?: number | null;
+    deliveryFee?: number | null;
+  }) => void;
 }
 
 export default function DeliveryPersonnelModal({
@@ -26,6 +32,11 @@ export default function DeliveryPersonnelModal({
   const [selectedPersonnel, setSelectedPersonnel] = useState<string>("");
   const [personnelSearchQuery, setPersonnelSearchQuery] = useState<string>("");
   const [isPersonnelDropdownOpen, setIsPersonnelDropdownOpen] = useState<boolean>(false);
+  const [distanceKm, setDistanceKm] = useState<string>("");
+  const [deliveryFee, setDeliveryFee] = useState<string>("");
+  const [deliveryFeeLoading, setDeliveryFeeLoading] = useState<boolean>(false);
+  const [deliveryFeeError, setDeliveryFeeError] = useState<string | null>(null);
+  const [requiresManualFee, setRequiresManualFee] = useState<boolean>(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -34,17 +45,72 @@ export default function DeliveryPersonnelModal({
       setReferenceNo("");
       setSelectedPersonnel("");
       setPersonnelSearchQuery("");
-      // Don't reset dropdown visibility - let it open on focus like customer/patient search
-      // Auto-open channel dropdown when channels are loaded so list shows immediately
-      if (!channelsLoading) {
-        setIsChannelDropdownOpen(true);
-        setIsPersonnelDropdownOpen(false);
-      }
+      setDistanceKm("");
+      setDeliveryFee("");
+      setDeliveryFeeLoading(false);
+      setDeliveryFeeError(null);
+      setRequiresManualFee(false);
+      // Do not auto-open any dropdowns; let user click into the field first
+      setIsChannelDropdownOpen(false);
+      setIsPersonnelDropdownOpen(false);
     } else {
       setIsChannelDropdownOpen(false);
       setIsPersonnelDropdownOpen(false);
     }
   }, [isOpen, channelsLoading]);
+
+  // Fetch suggested delivery fee from backend when personnel is selected and distance is entered
+  useEffect(() => {
+    const d = parseFloat(distanceKm);
+    if (!selectedPersonnel || !distanceKm.trim() || Number.isNaN(d) || d <= 0) {
+      setDeliveryFeeLoading(false);
+      setDeliveryFeeError(null);
+      setRequiresManualFee(false);
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        setDeliveryFeeLoading(true);
+        setDeliveryFeeError(null);
+
+        const res = await fetch(
+          `/api/method/klik_pos.api.delivery_charges.get_delivery_fee?distance=${encodeURIComponent(
+            d.toString()
+          )}`,
+          { credentials: "include" }
+        );
+        const data = await res.json();
+        if (cancelled) return;
+        const msg = data?.message || {};
+        if (msg.success && typeof msg.fee === "number") {
+          setDeliveryFee(msg.fee.toString());
+          setRequiresManualFee(!!msg.requires_manual);
+        } else {
+          setRequiresManualFee(true);
+          setDeliveryFeeError(
+            (msg && msg.error) || "Failed to fetch delivery fee. Please enter it manually."
+          );
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Error fetching delivery fee:", err);
+        setRequiresManualFee(true);
+        setDeliveryFeeError("Failed to fetch delivery fee. Please enter it manually.");
+      } finally {
+        if (!cancelled) {
+          setDeliveryFeeLoading(false);
+        }
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPersonnel, distanceKm]);
 
   const filteredChannels = useMemo(() => {
     if (!channelSearchQuery.trim()) return channels;
@@ -95,6 +161,8 @@ export default function DeliveryPersonnelModal({
         personnelName: selectedPersonnel || null,
         deliveryVia: selectedChannel || null,
         referenceNo: referenceNo.trim() || null,
+        distanceKm: distanceKm && !Number.isNaN(parseFloat(distanceKm)) ? parseFloat(distanceKm) : null,
+        deliveryFee: deliveryFee && !Number.isNaN(parseFloat(deliveryFee)) ? parseFloat(deliveryFee) : null,
       });
       onClose();
     }
@@ -198,7 +266,6 @@ export default function DeliveryPersonnelModal({
                     onMouseDown={() => setIsChannelDropdownOpen(true)}
                     onBlur={handleChannelInputBlur}
                     className="w-full pl-10 pr-10 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
-                    autoFocus
                   />
                   <ChevronDown
                     className={`absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500 transition-transform ${
@@ -328,6 +395,55 @@ export default function DeliveryPersonnelModal({
                   </div>
                 )}
               </div>
+              {/* Delivery distance and fee - only show when personnel is selected */}
+              {selectedPersonnel && (
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Delivery Distance (km)
+                    </div>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.1"
+                      placeholder="Enter distance in km..."
+                      value={distanceKm}
+                      onChange={(e) => setDistanceKm(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Delivery Charge
+                      </div>
+                      {deliveryFeeLoading && (
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          Calculating...
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.001"
+                      placeholder={
+                        requiresManualFee
+                          ? "Enter delivery charge manually..."
+                          : "Auto-calculated, you can adjust..."
+                      }
+                      value={deliveryFee}
+                      onChange={(e) => setDeliveryFee(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
+                    />
+                    {deliveryFeeError && (
+                      <div className="mt-1 text-xs text-orange-500 dark:text-orange-400">
+                        {deliveryFeeError}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
