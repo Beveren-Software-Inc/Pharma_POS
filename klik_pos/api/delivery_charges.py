@@ -126,44 +126,54 @@ def _ensure_delivery_charge_item():
 
 @frappe.whitelist()
 def get_delivery_charge_tax_amount(amount, company=None):
-	"""Calculate tax on the given delivery charge amount using the Delivery Charge item's Item Tax Template.
-
-	This mirrors how ERPNext will tax the Delivery Charge line:
-	- Find (or create) the Delivery Charge item.
-	- Read its item_tax_template.
-	- Sum all tax_rate values on that template.
-	- Tax amount = amount * total_rate / 100.
-	"""
 
 	amount = flt(amount or 0)
+	print(f"Calculating tax for delivery charge amount: {amount}")
+
 	if amount <= 0:
 		return {"success": True, "tax": 0.0}
 
-	company = company or frappe.defaults.get_user_default("Company")
-
 	item_code = _ensure_delivery_charge_item()
 
-	# Direct item_tax_template on Item
-	item_tax_template = frappe.db.get_value("Item", item_code, "item_tax_template")
-	if not item_tax_template:
-		# No template means no item-specific tax; rely on general POS template instead
+	# STEP 1: get Item Tax rows from Item child table
+	item_tax_rows = frappe.get_all(
+		"Item Tax",
+		filters={"parent": item_code},
+		fields=["item_tax_template"]
+	)
+
+	print(f"Found {len(item_tax_rows)} tax template rows for item {item_code}")
+
+	if not item_tax_rows:
 		return {"success": True, "tax": 0.0}
 
-	try:
-		template_doc = frappe.get_doc("Item Tax Template", item_tax_template)
-	except Exception:
-		return {"success": False, "tax": 0.0, "error": "Item Tax Template not found for Delivery Charge item."}
-
 	total_rate = 0.0
-	for row in getattr(template_doc, "taxes", []):
-		# Optional: filter by company if template is multi-company; most setups just use one company-wide rate
-		if company and getattr(row, "company", None) and row.company != company:
+
+	# STEP 2: fetch tax rates from each template
+	for row in item_tax_rows:
+		if not row.item_tax_template:
 			continue
-		total_rate += flt(getattr(row, "tax_rate", 0) or 0)
+
+		template_taxes = frappe.get_all(
+			"Item Tax Template Detail",
+			filters={"parent": row.item_tax_template},
+			fields=["tax_rate"]
+		)
+
+		for tax in template_taxes:
+			total_rate += flt(tax.tax_rate or 0)
 
 	if total_rate <= 0:
 		return {"success": True, "tax": 0.0}
 
 	tax_amount = amount * total_rate / 100.0
-	return {"success": True, "tax": round(float(tax_amount), 3)}
 
+	print(
+		f"Calculated tax amount {tax_amount} "
+		f"for delivery charge {amount} with total rate {total_rate}%"
+	)
+
+	return {
+		"success": True,
+		"tax": round(float(tax_amount), 3)
+	}
