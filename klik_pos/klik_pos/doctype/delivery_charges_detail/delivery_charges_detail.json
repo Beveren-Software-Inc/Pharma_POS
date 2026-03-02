@@ -1,0 +1,58 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-03-02 15:42:39.784710",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "distance_threshold",
+  "amount",
+  "column_break_nfkr",
+  "delivery_fee"
+ ],
+ "fields": [
+  {
+   "fieldname": "distance_threshold",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Distance Threshold(Km)"
+  },
+  {
+   "fieldname": "column_break_nfkr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Amount Threshold",
+   "options": "currency"
+  },
+  {
+   "fieldname": "delivery_fee",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Delivery Fee",
+   "options": "currency"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-03-02 15:52:12.390107",
+ "modified_by": "Administrator",
+ "module": "KLiK PoS",
+ "name": "Delivery Charges Detail",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}
