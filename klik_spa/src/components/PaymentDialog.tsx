@@ -60,6 +60,7 @@ import {
 import DeliveryPersonnelModal from "./DeliveryPersonnelModal";
 import { useDeliveryPersonnel } from "../hooks/useDeliveryPersonnel";
 import { useItemTaxTemplateRates } from "../hooks/useItemTaxTemplateRates";
+import { useFreeItemTaxAmount } from "../hooks/useFreeItemTaxAmount";
 
 interface PaymentDialogProps {
   isOpen: boolean;
@@ -195,6 +196,9 @@ export default function PaymentDialog({
   const [selectedDeliveryPersonnel, setSelectedDeliveryPersonnel] = useState<string | null>(null);
   const [selectedDeliveryVia, setSelectedDeliveryVia] = useState<string | null>(null);
   const [selectedReferenceNo, setSelectedReferenceNo] = useState<string | null>(null);
+  const [deliveryDistanceKm, setDeliveryDistanceKm] = useState<number | null>(null);
+  const [deliveryChargeAmount, setDeliveryChargeAmount] = useState<number | null>(null);
+  const [deliveryChargeTaxAmount, setDeliveryChargeTaxAmount] = useState<number | null>(null);
 
   // Hooks
   const { posDetails, loading: posLoading } = usePOSDetails();
@@ -223,6 +227,7 @@ export default function PaymentDialog({
     .map((item) => (item as { item_tax_template?: string }).item_tax_template)
     .filter(Boolean) as string[];
   const { rates: itemTaxTemplateRates } = useItemTaxTemplateRates(itemTaxTemplateNames);
+  const freeItemTaxAmount = useFreeItemTaxAmount(cartItems, isItemTaxTemplateMode);
 
 
 
@@ -464,7 +469,7 @@ export default function PaymentDialog({
     const totalAdditionalAmount = (generalAdditionalAmount || 0) + itemAdditionalTotal;
 
     if (isItemTaxTemplateMode) {
-      // Tax from item tax template per item (exclusive)
+      // Tax from item tax template per item (exclusive); free items contribute 0 to this (rate is 0)
       let taxAmount = 0;
       cartItems.forEach((item) => {
         const itemPrice = (item as { discountedPrice?: number }).discountedPrice || item.price;
@@ -474,12 +479,16 @@ export default function PaymentDialog({
         taxAmount += (itemTotal * rate) / 100;
       });
       taxAmount = parseFloat(taxAmount.toFixed(3));
-      const grandTotal = taxableAmount + taxAmount + totalAdditionalAmount + roundOffAmount;
+      // Include tax on free items (backend adds same as Actual rows; user pays this)
+      const totalTaxAmount = taxAmount + (freeItemTaxAmount || 0) + (deliveryChargeTaxAmount || 0);
+      const deliveryCharge = deliveryChargeAmount || 0;
+      const grandTotal =
+        taxableAmount + totalTaxAmount + totalAdditionalAmount + roundOffAmount + deliveryCharge;
       return {
         subtotal,
         couponDiscount,
         taxableAmount,
-        taxAmount,
+        taxAmount: totalTaxAmount,
         grandTotal,
         generalAdditionalAmount: generalAdditionalAmount || 0,
         totalAdditionalAmount,
@@ -509,12 +518,15 @@ export default function PaymentDialog({
       grandTotal = taxableAmount + taxAmount;
     }
 
+    const deliveryCharge = deliveryChargeAmount || 0;
+    const deliveryChargeTax = deliveryChargeTaxAmount || 0;
+
     return {
       subtotal,
       couponDiscount,
       taxableAmount,
       taxAmount,
-      grandTotal: grandTotal + totalAdditionalAmount + roundOffAmount,
+      grandTotal: grandTotal + totalAdditionalAmount + roundOffAmount + deliveryCharge + deliveryChargeTax,
       generalAdditionalAmount: generalAdditionalAmount || 0,
       totalAdditionalAmount,
       selectedTax,
@@ -529,6 +541,9 @@ export default function PaymentDialog({
     isItemTaxTemplateMode,
     itemTaxTemplateRates,
     generalAdditionalAmount,
+    freeItemTaxAmount,
+    deliveryChargeTaxAmount,
+    deliveryChargeAmount,
   ]);
 
   // Fetch loyalty redemption preview so amount_to_pay = grandTotal - loyalty_amount
@@ -663,6 +678,46 @@ export default function PaymentDialog({
       setRoundOffInput("0.00");
     }
   }, [roundOffEnabled, roundOffAmount]);
+
+  // Keep an estimated tax amount for the Delivery Charge in sync with the current fee
+  useEffect(() => {
+    const amount = typeof deliveryChargeAmount === "number" ? deliveryChargeAmount : 0;
+    if (!amount || amount <= 0) {
+      setDeliveryChargeTaxAmount(null);
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const params = new URLSearchParams({
+          amount: String(amount),
+        });
+        const res = await fetch(
+          `/api/method/klik_pos.api.delivery_charges.get_delivery_charge_tax_amount?${params.toString()}`,
+          { method: "GET", headers: { "Content-Type": "application/json" }, credentials: "include" }
+        );
+        const data = await res.json();
+        if (cancelled) return;
+
+        if (data?.message?.success && typeof data.message.tax === "number") {
+          setDeliveryChargeTaxAmount(data.message.tax);
+        } else {
+          setDeliveryChargeTaxAmount(null);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to fetch delivery charge tax amount:", err);
+        setDeliveryChargeTaxAmount(null);
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deliveryChargeAmount]);
 
   if (!isOpen) return null;
   if (isLoading || posLoading) return <div className="p-6">Loading...</div>;
@@ -921,7 +976,11 @@ export default function PaymentDialog({
     }
   };
 
-  const processPayment = async (deliveryPersonnel: string | null = null, deliveryVia: string | null = null, referenceNo: string | null = null) => {
+  const processPayment = async (
+    deliveryPersonnel: string | null = null,
+    deliveryVia: string | null = null,
+    referenceNo: string | null = null
+  ) => {
     if (!selectedCustomer || !selectedCustomer.name) {
       toast.error("Kindly select a customer");
       return;
@@ -1026,6 +1085,8 @@ export default function PaymentDialog({
       deliveryPersonnel: deliveryPersonnel || null,
       deliveryVia: deliveryVia || null,
       referenceNo: referenceNo || null,
+      deliveryDistanceKm: deliveryDistanceKm ?? null,
+      deliveryChargeAmount: deliveryChargeAmount ?? 0,
       // Patient Medication Orders - from itemDiscounts or cart item; backend also extracts from items
       medicationOrder: (() => {
         const orders = new Set<string>();
@@ -1093,11 +1154,27 @@ export default function PaymentDialog({
     await processPayment(selectedDeliveryPersonnel, selectedDeliveryVia, selectedReferenceNo);
   };
 
-  const handleDeliveryPersonnelSelect = (selection: { personnelName: string | null; deliveryVia: string | null; referenceNo?: string | null }) => {
+  const handleDeliveryPersonnelSelect = (selection: {
+    personnelName: string | null;
+    deliveryVia: string | null;
+    referenceNo?: string | null;
+    distanceKm?: number | null;
+    deliveryFee?: number | null;
+  }) => {
     // Called from the footer-triggered modal only; just store selection
     setSelectedDeliveryPersonnel(selection.personnelName || null);
     setSelectedDeliveryVia(selection.deliveryVia);
     setSelectedReferenceNo(selection.referenceNo ?? null);
+    setDeliveryDistanceKm(
+      typeof selection.distanceKm === "number" && !Number.isNaN(selection.distanceKm)
+        ? selection.distanceKm
+        : null
+    );
+    setDeliveryChargeAmount(
+      typeof selection.deliveryFee === "number" && !Number.isNaN(selection.deliveryFee)
+        ? selection.deliveryFee
+        : null
+    );
     setShowDeliveryPersonnelModal(false);
   };
 
@@ -1106,6 +1183,16 @@ export default function PaymentDialog({
     if (!selectedDeliveryPersonnel) return null;
     const person = deliveryPersonnelList.find((p) => p.name === selectedDeliveryPersonnel);
     return person?.delivery_personnel || selectedDeliveryPersonnel;
+  };
+
+  const clearDeliverySelection = () => {
+    if (invoiceSubmitted || isProcessingPayment) return;
+    setSelectedDeliveryPersonnel(null);
+    setSelectedDeliveryVia(null);
+    setSelectedReferenceNo(null);
+    setDeliveryDistanceKm(null);
+    setDeliveryChargeAmount(null);
+    setDeliveryChargeTaxAmount(null);
   };
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleViewInvoice = (invoice: any) => {
@@ -1153,6 +1240,8 @@ export default function PaymentDialog({
       deliveryPersonnel: selectedDeliveryPersonnel || null,
       deliveryVia: selectedDeliveryVia || null,
       referenceNo: selectedReferenceNo || null,
+      deliveryDistanceKm: deliveryDistanceKm ?? null,
+      deliveryChargeAmount: deliveryChargeAmount ?? 0,
     };
 
     try {
@@ -2695,23 +2784,41 @@ export default function PaymentDialog({
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Delivery Personnel
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowDeliveryPersonnelModal(true)}
-                    disabled={invoiceSubmitted || isProcessingPayment}
-                    className={`w-full max-w-xs px-4 py-2 text-left border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between ${
-                      invoiceSubmitted || isProcessingPayment
-                        ? "cursor-not-allowed opacity-50"
-                        : "cursor-pointer"
-                    }`}
-                  >
-                    <span>
-                      {getSelectedDeliveryPersonnelName() || (
-                        <span className="text-gray-500 dark:text-gray-400">Select Delivery Personnel</span>
-                      )}
-                    </span>
-                    <ChevronDown size={16} className="text-gray-400 dark:text-gray-500 flex-shrink-0 ml-2" />
-                  </button>
+                  <div className="flex items-center space-x-2 max-w-xs">
+                    <button
+                      type="button"
+                      onClick={() => setShowDeliveryPersonnelModal(true)}
+                      disabled={invoiceSubmitted || isProcessingPayment}
+                      className={`flex-1 px-4 py-2 text-left border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between ${
+                        invoiceSubmitted || isProcessingPayment
+                          ? "cursor-not-allowed opacity-50"
+                          : "cursor-pointer"
+                      }`}
+                    >
+                      <span className="truncate">
+                        {getSelectedDeliveryPersonnelName() || (
+                          <span className="text-gray-500 dark:text-gray-400">
+                            Select Delivery Personnel
+                          </span>
+                        )}
+                      </span>
+                      <ChevronDown
+                        size={16}
+                        className="text-gray-400 dark:text-gray-500 flex-shrink-0 ml-2"
+                      />
+                    </button>
+                    {(selectedDeliveryPersonnel || deliveryChargeAmount) && (
+                      <button
+                        type="button"
+                        onClick={clearDeliverySelection}
+                        disabled={invoiceSubmitted || isProcessingPayment}
+                        className="p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-400 hover:text-red-500 hover:border-red-400 dark:hover:text-red-400 dark:hover:border-red-400 transition-colors"
+                        title="Clear delivery selection"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
               <div className={`flex justify-end space-x-4 ${isDeliveryRequired ? '' : 'w-full'}`}>
@@ -2743,23 +2850,41 @@ export default function PaymentDialog({
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Delivery Personnel
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowDeliveryPersonnelModal(true)}
-                    disabled={invoiceSubmitted || isProcessingPayment}
-                    className={`w-full max-w-xs px-4 py-2 text-left border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between ${
-                      invoiceSubmitted || isProcessingPayment
-                        ? "cursor-not-allowed opacity-50"
-                        : "cursor-pointer"
-                    }`}
-                  >
-                    <span>
-                      {getSelectedDeliveryPersonnelName() || (
-                        <span className="text-gray-500 dark:text-gray-400">Select Delivery Personnel</span>
-                      )}
-                    </span>
-                    <ChevronDown size={16} className="text-gray-400 dark:text-gray-500 flex-shrink-0 ml-2" />
-                  </button>
+                  <div className="flex items-center space-x-2 max-w-xs">
+                    <button
+                      type="button"
+                      onClick={() => setShowDeliveryPersonnelModal(true)}
+                      disabled={invoiceSubmitted || isProcessingPayment}
+                      className={`flex-1 px-4 py-2 text-left border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between ${
+                        invoiceSubmitted || isProcessingPayment
+                          ? "cursor-not-allowed opacity-50"
+                          : "cursor-pointer"
+                      }`}
+                    >
+                      <span className="truncate">
+                        {getSelectedDeliveryPersonnelName() || (
+                          <span className="text-gray-500 dark:text-gray-400">
+                            Select Delivery Personnel
+                          </span>
+                        )}
+                      </span>
+                      <ChevronDown
+                        size={16}
+                        className="text-gray-400 dark:text-gray-500 flex-shrink-0 ml-2"
+                      />
+                    </button>
+                    {(selectedDeliveryPersonnel || deliveryChargeAmount) && (
+                      <button
+                        type="button"
+                        onClick={clearDeliverySelection}
+                        disabled={invoiceSubmitted || isProcessingPayment}
+                        className="p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-400 hover:text-red-500 hover:border-red-400 dark:hover:text-red-400 dark:hover:border-red-400 transition-colors"
+                        title="Clear delivery selection"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
               <div className={`flex justify-end space-x-4 ${isDeliveryRequired ? '' : 'w-full'}`}>

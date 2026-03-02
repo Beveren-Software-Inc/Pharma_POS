@@ -380,21 +380,21 @@ def check_invoice_return_eligibility(invoice_id):
 	"""
 	try:
 		invoice = frappe.get_doc("Sales Invoice", invoice_id)
-		
+
 		if invoice.is_return:
 			return {"can_return": False, "reason": "This invoice is already a return."}
-		
+
 		if invoice.docstatus != 1:
 			return {"can_return": False, "reason": "Only submitted invoices can be returned."}
-		
+
 		# Use the validation function
 		can_return, error_message = validate_return_restrictions(invoice)
-		
+
 		return {
 			"can_return": can_return,
 			"reason": error_message if not can_return else None,
 		}
-	
+
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), f"Error checking return eligibility for invoice {invoice_id}")
 		return {"can_return": False, "reason": f"Error checking eligibility: {str(e)}"}
@@ -436,7 +436,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 	# Batch fetch item custom fields and item group flags
 	item_group_map = {}
 	item_refrigerated_map = {}
-	
+
 	if item_codes:
 		item_groups = list(set([item.item_group for item in items_data if item.item_group]))
 		if item_groups:
@@ -447,7 +447,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 			""".format(",".join([f"'{ig}'" for ig in item_groups]))
 			ig_data = frappe.db.sql(item_group_query, as_dict=True)
 			item_group_map = {ig.name: bool(ig.custom_non_returnable) for ig in ig_data}
-		
+
 		# Fetch item custom_is_refrigerated_ flag
 		if frappe.db.has_column("Item", "custom_is_refrigerated_"):
 			item_query = """
@@ -461,7 +461,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 	# Get invoice date for refrigerated check
 	invoice_doc = frappe.get_doc("Sales Invoice", invoice_id)
 	invoice_date_raw = invoice_doc.posting_date or invoice_doc.creation
-	
+
 	invoice_date = None
 	try:
 		if invoice_date_raw:
@@ -470,7 +470,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 				invoice_date = frappe.utils.getdate(str(invoice_date_raw))
 	except Exception:
 		pass
-	
+
 	# Fallback to today if conversion failed
 	if not invoice_date or not isinstance(invoice_date, date_type):
 		invoice_date = frappe.utils.today()
@@ -483,22 +483,22 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 					invoice_date = frappe.utils.today()
 			except Exception:
 				invoice_date = frappe.utils.today()
-	
+
 	# Get today's date
 	today_date = frappe.utils.today()
 	if not isinstance(today_date, date_type):
 		today_date = frappe.utils.getdate(today_date)
-	
+
 	days_since_invoice = (today_date - invoice_date).days
 
 	items = []
 	for item in items_data:
 		returned_qty_value = returned_qty_map.get(item.item_code, 0)
 		available_qty = round(item.qty - returned_qty_value, 6)
-		
+
 		# NEW RULE: If invoice is older than 14 days, mark all items as non-returnable
 		if days_since_invoice > 14:
-			
+
 			items.append(
 				{
 					"item_code": item.item_code,
@@ -510,21 +510,21 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 					"returned_qty": returned_qty_value,
 					"available_qty": available_qty,
 					"item_group": item.item_group,
-					"is_non_returnable": True,  
+					"is_non_returnable": True,
 					"is_refrigerated_overdue": False,
 				}
 			)
 			continue
-		
-	
+
+
 		is_non_returnable = False
 		if item.item_group and item.item_group in item_group_map:
 			is_non_returnable = item_group_map[item.item_group]
-		
+
 		is_refrigerated = False
 		if item.item_code in item_refrigerated_map:
 			is_refrigerated = item_refrigerated_map[item.item_code]
-		
+
 		items.append(
 			{
 				"item_code": item.item_code,
@@ -632,6 +632,8 @@ def create_and_submit_invoice(data):
 			loyalty_points,
 			general_additional_amount,
 			additional_remark,
+			delivery_distance_km,
+			delivery_charge_amount,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -658,6 +660,8 @@ def create_and_submit_invoice(data):
 			loyalty_points=loyalty_points,
 			general_additional_amount=general_additional_amount,
 			additional_remark=additional_remark,
+			delivery_distance_km=delivery_distance_km,
+			delivery_charge_amount=delivery_charge_amount,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -738,6 +742,8 @@ def create_draft_invoice(data):
 			loyalty_points,
 			general_additional_amount,
 			additional_remark,
+			delivery_distance_km,
+			delivery_charge_amount,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -756,6 +762,8 @@ def create_draft_invoice(data):
 			loyalty_points=loyalty_points,
 			general_additional_amount=general_additional_amount,
 			additional_remark=additional_remark,
+			delivery_distance_km=delivery_distance_km,
+			delivery_charge_amount=delivery_charge_amount,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -826,6 +834,14 @@ def parse_invoice_data(data):
 	)
 	additional_remark = data.get("additionalRemark") or data.get("additional_remark")
 
+	# Delivery distance (km) and delivery charge amount (from Select Delivery Personnel modal)
+	delivery_distance_km = flt(
+		data.get("deliveryDistanceKm") or data.get("delivery_distance_km") or 0
+	)
+	delivery_charge_amount = flt(
+		data.get("deliveryChargeAmount") or data.get("delivery_charge_amount") or 0
+	)
+
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
 
@@ -845,6 +861,8 @@ def parse_invoice_data(data):
 		loyalty_points,
 		general_additional_amount,
 		additional_remark,
+		delivery_distance_km,
+		delivery_charge_amount,
 	)
 
 
@@ -865,20 +883,20 @@ def build_sales_invoice_doc(
 	loyalty_points=0,
 	general_additional_amount=0.0,
 	additional_remark=None,
+	delivery_distance_km=0.0,
+	delivery_charge_amount=0.0,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
 	doc.customer = customer
 	doc.due_date = frappe.utils.nowdate()
 	doc.custom_delivery_date = frappe.utils.nowdate()
-	# POS already applied ERPNext pricing rules (discounts + free items) on the cart,
-	# so avoid re-applying pricing rules on the Sales Invoice to prevent duplicate free items.
+
 	doc.ignore_pricing_rule = 1
 
-	# Set delivery personnel if provided
 	if delivery_personnel:
 		doc.custom_delivery_personnel = delivery_personnel
-	# Set delivery channel if provided and field exists
+
 	if delivery_via and frappe.db.has_column("Sales Invoice", "custom_delivery_via"):
 		doc.custom_delivery_via = delivery_via
 	# Set reference no if provided and field exists
@@ -888,7 +906,6 @@ def build_sales_invoice_doc(
 	if medication_order and frappe.db.has_column("Sales Invoice", "custom_medication_order"):
 		orders = medication_order
 
-		# Normalize to a list of order names
 		if isinstance(orders, str):
 			orders = [orders]
 		elif isinstance(orders, (set, tuple)):
@@ -915,7 +932,6 @@ def build_sales_invoice_doc(
 					if patient_name:
 						doc.patient = patient_name
 				except Exception:
-					# Don't block invoice creation if healthcare doc lookup fails
 					frappe.log_error(
 						frappe.get_traceback(),
 						f"Error setting patient from Medication Order {first_order}",
@@ -929,28 +945,23 @@ def build_sales_invoice_doc(
 	if additional_remark and frappe.db.has_column("Sales Invoice", "custom_remark"):
 		doc.custom_remark = additional_remark
 
-	# Set posting details
 	_set_posting_fields(doc)
 
-	# Set POS opening entry
 	_set_pos_opening_entry(doc)
 
-	# Handle round-off
 	_set_roundoff_fields(doc, roundoff_amount)
 
-	# Set taxes and charges
 	_set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile)
 
-	# Add items to invoice
 	_populate_invoice_items(doc, items, pos_profile)
 
-	# Append additional charge items using the special service item
 	_append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark)
 
-	# Populate tax details
+	# Delivery charge as a separate invoice item
+	_append_delivery_charge_item(doc, delivery_charge_amount, pos_profile, delivery_distance_km)
+
 	_populate_tax_details(doc)
 
-	# Add additional amounts (item-level + general) as tax rows when POS allows
 	_add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_profile)
 
 	# Add payment information
@@ -1052,7 +1063,6 @@ def _set_roundoff_fields(doc, roundoff_amount):
 def _set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile):
 	"""Set the taxes and charges template. When item tax template mode is enabled, do not set."""
 	if getattr(pos_profile, "custom_allow_item_tax_template", 0):
-		# Each item has its own item_tax_template; no document-level taxes and charges
 		return
 	if sales_and_tax_charges:
 		doc.taxes_and_charges = sales_and_tax_charges
@@ -1128,9 +1138,14 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 		"cost_center": pos_profile.cost_center,
 	}
 
-	# Preserve free-item flag from cart so ERPNext knows these are promotional rows
+	# and HARD-ENFORCE zero rate on invoice line for free items
+	# Set allow_zero_valuation_rate so stock ledger accepts zero rate (per-row setting)
 	if item.get("is_free_item"):
 		item_data["is_free_item"] = 1
+		item_data["rate"] = 0
+		item_data["allow_zero_valuation_rate"] = 1
+	item_data["allow_zero_valuation_rate"] = 1
+
 
 	# Add optional fields
 	_add_uom_to_item(item_data, item)
@@ -1261,6 +1276,44 @@ def _append_additional_charge_items(doc, items, general_additional_amount, pos_p
 				"cost_center": cost_center,
 			},
 		)
+
+
+def _append_delivery_charge_item(doc, delivery_charge_amount, pos_profile, delivery_distance_km=0.0):
+	"""Append Delivery Charge as a dedicated item row, if any amount was provided."""
+
+	delivery_charge_amount = flt(delivery_charge_amount or 0)
+	if delivery_charge_amount <= 0:
+		return
+
+	from klik_pos.api.delivery_charges import _ensure_delivery_charge_item
+
+	try:
+		item_code = _ensure_delivery_charge_item()
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(),
+			"Failed to ensure Delivery Charge item",
+		)
+		return
+
+	warehouse = getattr(pos_profile, "warehouse", None)
+	cost_center = getattr(pos_profile, "cost_center", None)
+
+	description = "Delivery Charge"
+	if delivery_distance_km:
+		description = f"Delivery Charge ({flt(delivery_distance_km)} km)"
+
+	doc.append(
+		"items",
+		{
+			"item_code": item_code,
+			"qty": 1,
+			"rate": flt(delivery_charge_amount, doc.precision("grand_total") or 2),
+			"description": description,
+			"warehouse": warehouse,
+			"cost_center": cost_center,
+		},
+	)
 
 
 def _populate_tax_details(doc):
@@ -1433,25 +1486,25 @@ def validate_return_restrictions(invoice_doc):
 	Validate if an invoice can be returned based on:
 	1. Item Group custom_non_returnable field
 	2. Item custom_is_refrigerated_ field (after 14 days)
-	
+
 	Args:
 		invoice_doc: Sales Invoice document (original invoice if this is a return)
-	
+
 	Returns:
 		tuple: (can_return: bool, error_message: str)
 	"""
 	if not invoice_doc or not invoice_doc.items:
 		return True, None
-	
+
 	original_invoice = invoice_doc
 	if invoice_doc.is_return and invoice_doc.return_against:
 		try:
 			original_invoice = frappe.get_doc("Sales Invoice", invoice_doc.return_against)
 		except Exception:
 			original_invoice = invoice_doc
-	
+
 	invoice_date_raw = original_invoice.posting_date or original_invoice.creation
-	
+
 	invoice_date = None
 	try:
 		if invoice_date_raw:
@@ -1460,7 +1513,7 @@ def validate_return_restrictions(invoice_doc):
 				invoice_date = frappe.utils.getdate(str(invoice_date_raw))
 	except Exception:
 		pass
-	
+
 	if not invoice_date or not isinstance(invoice_date, date_type):
 		invoice_date = frappe.utils.today()
 		if not isinstance(invoice_date, date_type):
@@ -1472,25 +1525,25 @@ def validate_return_restrictions(invoice_doc):
 					invoice_date = frappe.utils.today()
 			except Exception:
 				invoice_date = frappe.utils.today()
-	
+
 	today_date = frappe.utils.today()
 	if not isinstance(today_date, date_type):
 		today_date = frappe.utils.getdate(today_date)
-	
+
 	# Now safe to subtract
 	days_since_invoice = (today_date - invoice_date).days
-	
+
 	# NEW RULE: All invoices older than 14 days cannot be returned
 	if days_since_invoice > 14:
 		return False, f"Cannot return this invoice. Invoice is {days_since_invoice} days old. Returns are only allowed within 14 days of the invoice date."
-	
+
 	# For invoices <= 14 days, check item/group restrictions
 	non_returnable_items = []
 	refrigerated_items = []
-	
+
 	for item in original_invoice.items:
 		item_code = item.item_code
-		
+
 		# Check Item Group non-returnable flag
 		if item.item_group:
 			try:
@@ -1499,7 +1552,7 @@ def validate_return_restrictions(invoice_doc):
 					non_returnable_items.append(f"{item_code} ({item.item_name or item_code})")
 			except Exception:
 				pass
-		
+
 		# Check Item refrigerated flag (no age restriction needed here since we already checked invoice age)
 		try:
 			item_doc = frappe.get_doc("Item", item_code)
@@ -1507,22 +1560,22 @@ def validate_return_restrictions(invoice_doc):
 				refrigerated_items.append(f"{item_code} ({item.item_name or item_code})")
 		except Exception:
 			pass
-	
+
 	error_parts = []
 	if non_returnable_items:
 		error_parts.append(f"Items from non-returnable groups: {', '.join(non_returnable_items[:3])}")
 		if len(non_returnable_items) > 3:
 			error_parts[-1] += f" and {len(non_returnable_items) - 3} more"
-	
+
 	if refrigerated_items:
 		error_parts.append(f"Refrigerated items: {', '.join(refrigerated_items[:3])}")
 		if len(refrigerated_items) > 3:
 			error_parts[-1] += f" and {len(refrigerated_items) - 3} more"
-	
+
 	if error_parts:
 		error_message = "Cannot return this invoice. " + ". ".join(error_parts) + "."
 		return False, error_message
-	
+
 	return True, None
 
 
@@ -1533,15 +1586,15 @@ def validate_sales_invoice_return(doc, method):
 	"""
 	if doc.doctype != "Sales Invoice":
 		return
-	
+
 	# Only validate if this is a return invoice
 	if not doc.is_return:
 		return
-	
+
 	# Skip validation for draft documents (they haven't been submitted yet)
 	if doc.docstatus == 0:
 		return
-	
+
 	can_return, error_message = validate_return_restrictions(doc)
 	if not can_return:
 		frappe.throw(_(error_message))
@@ -1557,7 +1610,7 @@ def return_sales_invoice(invoice_name):
 
 		if original_invoice.is_return:
 			frappe.throw("This invoice is already a return.")
-		
+
 		# Validate return restrictions
 		can_return, error_message = validate_return_restrictions(original_invoice)
 		if not can_return:
@@ -1677,16 +1730,42 @@ def set_grand_total_with_roundoff(doc, method):
 
 
 
+def enforce_zero_rate_for_free_items(doc, method):
+	"""
+	Final safety net before save/submit:
+	- Any Sales Invoice Item marked as is_free_item must have zero rate / amount.
+	- This prevents any later pricing logic from restoring the original rate.
+	"""
+	if doc.doctype != "Sales Invoice":
+		return
+
+	for item in doc.get("items", []):
+		if not getattr(item, "is_free_item", 0):
+			continue
+
+		# Hard enforce zero pricing for free lines
+		item.rate = 0
+		item.price_list_rate = 0
+		item.base_rate = 0
+		item.base_price_list_rate = 0
+		item.discount_percentage = 0
+		item.discount_amount = 0
+		item.net_rate = 0
+		item.amount = 0
+		item.net_amount = 0
+		item.allow_zero_valuation_rate = 1
+
+
 def set_total_taxes_for_item_template(doc, method):
 	"""
 	When using item tax template mode (POS Profile.custom_allow_item_tax_template),
 	ensure Sales Invoice.total_taxes_and_charges reflects the actual tax amount,
 	even if no Sales Taxes and Charges Template / taxes rows are set.
-	
+
 	Creates separate tax rows for each unique item tax template to show individual
 	tax calculations per template.
 	"""
-	
+
 	# Only adjust Sales Invoices
 	if doc.doctype != "Sales Invoice":
 		return
@@ -1716,13 +1795,8 @@ def set_total_taxes_for_item_template(doc, method):
 		grand_total += doc.custom_roundoff_amount or 0
 
 	tax_amount = grand_total - net_total
-	# if tax_amount <= 0:
-	# 	return
-
-	# Set the numeric total so ERPNext reports and GL stay correct
-	doc.total_taxes_and_charges = flt(
-		tax_amount, doc.precision("total_taxes_and_charges") or 2
-	)
+	# Base tax amount from ERPNext (before adding tax on free items)
+	base_tax_amount = flt(tax_amount, doc.precision("total_taxes_and_charges") or 2)
 	# Populate the Sales Taxes and Charges table with per-template totals
 	# Important: this runs *after* calculate_taxes_and_totals, so these rows are
 	# informational only and will not change the already-computed totals.
@@ -1762,13 +1836,13 @@ def set_total_taxes_for_item_template(doc, method):
 		# Item Tax Template has child table "taxes" with fields:
 		# - tax_type (Link to Account)
 		# - tax_rate (percentage)
-		
+
 		for tax_row in tax_doc.taxes:
-			
+
 			# Get the tax account and rate from Item Tax Template structure
 			tax_account = tax_row.tax_type  # This is the account head
 			tax_rate = tax_row.tax_rate or 0
-			
+
 			if not tax_account:
 				continue
 
@@ -1786,9 +1860,6 @@ def set_total_taxes_for_item_template(doc, method):
 			row_tax = (item_base * tax_rate) / 100.0
 			template_totals[item_template]['tax_rows'][row_key]['tax_amount'] += row_tax
 
-	if not template_totals:
-		return
-	
 	# Default cost center fallback
 	default_cc = frappe.db.get_value("Company", doc.company, "cost_center")
 
@@ -1796,16 +1867,15 @@ def set_total_taxes_for_item_template(doc, method):
 	total_tax = 0.0
 	for template_name, template_data in template_totals.items():
 		for row_key, row_data in template_data['tax_rows'].items():
-			# if row_data['tax_amount'] <= 0:
-			# 	continue
-
-			# Add to numeric total
+			# Add to numeric total (per-template tax based on actual billed amounts)
 			total_tax += row_data['tax_amount']
 
 			# Create description that shows which template this is from
 			# Include the tax rate to make it clearer
 			description = f"{template_name} ({row_data['rate']}%)"
-			
+
+			tax_amt = flt(row_data['tax_amount'], doc.precision("total_taxes_and_charges") or 2)
+			base_tax_amt = flt(tax_amt * (doc.conversion_rate or 1), doc.precision("base_total_taxes_and_charges") or 2)
 			doc.append(
 				"taxes",
 				{
@@ -1813,42 +1883,245 @@ def set_total_taxes_for_item_template(doc, method):
 					"account_head": row_data['account_head'],
 					"description": description,
 					"cost_center": doc.cost_center or default_cc,
-					"tax_amount": flt(
-						row_data['tax_amount'],
-						doc.precision("total_taxes_and_charges") or 2,
-					),
-					
+					"tax_amount": tax_amt,
+					"base_tax_amount": base_tax_amt,
+					"tax_amount_after_discount_amount": tax_amt,
+					"base_tax_amount_after_discount_amount": base_tax_amt,
 					"category": "Total",
 					"add_deduct_tax": "Add",
 					"included_in_print_rate": 0,
 				},
 			)
 
-	# Set total_taxes_and_charges from the per-template breakdown
-	if total_tax > 0:
+	# ------------------------------------------------------------------
+	# NEW LOGIC: Add tax on free items (is_free_item=1) as Actual rows.
+	#
+	# Requirement:
+	# - When an item is given for free (rate 0, is_free_item=1), hospital
+	#   still wants to charge the tax that would normally apply on that
+	#   item's selling rate using its Item Tax Template.
+	# - This extra tax should be visible in Sales Taxes and Charges as
+	#   separate Actual rows and included in total_taxes_and_charges.
+	# ------------------------------------------------------------------
+	free_item_tax_by_account = {}
+
+	for item in doc.get("items", []):
+		try:
+			if not getattr(item, "is_free_item", 0):
+				continue
+
+			# Use line template if set; otherwise get default from Item / Item Group (e.g. when frontend sends none)
+			item_template = getattr(item, "item_tax_template", None)
+			if not item_template:
+				from klik_pos.api import tax as tax_api
+				res = tax_api.get_item_tax_template_for_item(item.item_code, doc.company)
+				if res and res.get("item_tax_template"):
+					item_template = res["item_tax_template"]
+			if not item_template:
+				continue
+
+			tax_doc = get_item_tax_template(item_template)
+			if not tax_doc or not getattr(tax_doc, "taxes", None):
+				continue
+
+			item_code = item.item_code
+			free_base_rate = 0.0
+
+			# UOM-aware base rate:
+			# - If free item UOM differs from stock UOM, use the price for that UOM
+			#   (or derive it via conversion factor), exactly like normal UOM pricing.
+			item_uom = getattr(item, "uom", None)
+			price_list = getattr(doc, "selling_price_list", None)
+			if not price_list and getattr(doc, "pos_profile", None):
+				price_list = frappe.db.get_value(
+					"POS Profile", doc.pos_profile, "selling_price_list"
+				)
+
+			try:
+				stock_uom, standard_rate = frappe.db.get_value(
+					"Item", item_code, ["stock_uom", "standard_rate"]
+				) or (None, 0)
+			except Exception:
+				stock_uom, standard_rate = (None, 0)
+
+			standard_rate = flt(standard_rate or 0)
+
+			try:
+				# 1) If we know the item's UOM on the invoice, prefer a price for that UOM
+				if item_uom:
+					item_price_filters = {
+						"item_code": item_code,
+						"selling": 1,
+						"uom": item_uom,
+					}
+					if price_list:
+						item_price_filters["price_list"] = price_list
+
+					price_doc = frappe.get_value(
+						"Item Price",
+						item_price_filters,
+						"price_list_rate",
+					)
+
+					if not price_doc and price_list:
+						# Retry without price list restriction
+						item_price_filters.pop("price_list", None)
+						price_doc = frappe.get_value(
+							"Item Price",
+							item_price_filters,
+							"price_list_rate",
+						)
+
+					if price_doc:
+						free_base_rate = flt(price_doc or 0)
+
+				# 2) If still no rate and UOM != stock_uom, derive from stock_uom via conversion factor
+				if free_base_rate <= 0 and item_uom and stock_uom and item_uom != stock_uom:
+					conv = frappe.db.get_value(
+						"UOM Conversion Detail",
+						{
+							"parenttype": "Item",
+							"parent": item_code,
+							"uom": item_uom,
+						},
+						"conversion_factor",
+					)
+					conv = flt(conv or 0)
+					if conv > 0:
+						# Prefer standard_rate if available; otherwise use stock_uom Item Price
+						base_stock_rate = standard_rate
+						if base_stock_rate <= 0 and price_list and stock_uom:
+							stock_price = frappe.db.get_value(
+								"Item Price",
+								{
+									"item_code": item_code,
+									"price_list": price_list,
+									"uom": stock_uom,
+								},
+								"price_list_rate",
+							)
+							base_stock_rate = flt(stock_price or 0)
+						if base_stock_rate > 0:
+							free_base_rate = base_stock_rate * conv
+
+				# 3) Final fallback: standard_rate (typical selling rate)
+				if free_base_rate <= 0 and standard_rate > 0:
+					free_base_rate = standard_rate
+
+				# 4) Last resort: any Item Price in POS price list (no UOM filter)
+				if free_base_rate <= 0 and price_list:
+					any_price = frappe.db.get_value(
+						"Item Price",
+						{"item_code": item_code, "price_list": price_list},
+						"price_list_rate",
+					)
+					free_base_rate = flt(any_price or 0)
+			except Exception:
+				free_base_rate = flt(standard_rate or 0)
+
+			if free_base_rate <= 0:
+				# No sensible base rate available; skip this free item
+				continue
+
+			item_qty = flt(getattr(item, "qty", 0))
+			if item_qty <= 0:
+				continue
+
+			for tax_row in tax_doc.taxes:
+				tax_account = tax_row.tax_type
+				tax_rate = flt(tax_row.tax_rate or 0)
+				if not tax_account or tax_rate == 0:
+					continue
+
+				# Tax is calculated on the "normal" selling value of the free item
+				item_tax_base = free_base_rate * item_qty
+				free_tax_amount = (item_tax_base * tax_rate) / 100.0
+				if free_tax_amount <= 0:
+					continue
+
+				if tax_account not in free_item_tax_by_account:
+					free_item_tax_by_account[tax_account] = 0.0
+				free_item_tax_by_account[tax_account] += free_tax_amount
+		except Exception:
+			# Never block invoice creation because of free-item tax issues
+			frappe.log_error(
+				frappe.get_traceback(),
+				"Error calculating tax for free item on Sales Invoice",
+			)
+			continue
+
+	# Append Actual tax rows for free-item tax and include in totals
+	free_items_total_tax = 0.0
+	if free_item_tax_by_account:
+		for account_head, amount in free_item_tax_by_account.items():
+			if amount <= 0:
+				continue
+
+			free_items_total_tax += amount
+			tax_amt = flt(amount, doc.precision("total_taxes_and_charges") or 2)
+			base_tax_amt = flt(amount * (doc.conversion_rate or 1), doc.precision("base_total_taxes_and_charges") or 2)
+			doc.append(
+				"taxes",
+				{
+					"charge_type": "Actual",
+					"account_head": account_head,
+					"description": "Tax on free items",
+					"cost_center": doc.cost_center or default_cc,
+					"tax_amount": tax_amt,
+					"base_tax_amount": base_tax_amt,
+					"tax_amount_after_discount_amount": tax_amt,
+					"base_tax_amount_after_discount_amount": base_tax_amt,
+					"category": "Total",
+					"add_deduct_tax": "Add",
+					"included_in_print_rate": 0,
+				},
+			)
+
+	# Final numeric totals = base tax (from ERPNext) + explicit per-template tax
+	# breakdown (total_tax) + additional tax on free items.
+	total_tax_with_free = base_tax_amount + total_tax + free_items_total_tax
+	if total_tax_with_free > 0:
 		doc.total_taxes_and_charges = flt(
-			total_tax, doc.precision("total_taxes_and_charges") or 2
+			total_tax_with_free, doc.precision("total_taxes_and_charges") or 2
 		)
 		doc.base_total_taxes_and_charges = flt(
-			total_tax * (doc.conversion_rate or 1),
+			total_tax_with_free * (doc.conversion_rate or 1),
 			doc.precision("base_total_taxes_and_charges") or 2,
 		)
-   
+
+		# Ensure grand_total matches net_total + all taxes (UI behavior)
+		net_total = flt(doc.net_total or 0, doc.precision("net_total") or 2)
+		doc.grand_total = flt(
+			net_total + doc.total_taxes_and_charges,
+			doc.precision("grand_total") or 2,
+		)
+		doc.base_grand_total = flt(
+			doc.grand_total * (doc.conversion_rate or 1),
+			doc.precision("base_grand_total") or 2,
+		)
+
 def custom_calculate_totals(self):
 	"""Main function to calculate invoice totals with custom round-off logic"""
 	# Calculate basic grand total and taxes
 	if self.doc.get("taxes"):
-		self.doc.grand_total = flt(self.doc.get("taxes")[-1].total) + flt(self.doc.get("grand_total_diff"))
-	else:
-		self.doc.grand_total = flt(self.doc.net_total)
-
-	if self.doc.get("taxes"):
-		self.doc.total_taxes_and_charges = flt(
-			self.doc.grand_total - self.doc.net_total - flt(self.doc.get("grand_total_diff")),
-			self.doc.precision("total_taxes_and_charges"),
-		)
+		# If hooks (like item tax template mode) already set total_taxes_and_charges,
+		# keep that; otherwise, fall back to ERPNext-style computation from last tax row.
+		if not self.doc.total_taxes_and_charges:
+			last_total = flt(getattr(self.doc.get("taxes")[-1], "total", 0))
+			self.doc.total_taxes_and_charges = flt(
+				last_total - flt(self.doc.net_total) - flt(self.doc.get("grand_total_diff")),
+				self.doc.precision("total_taxes_and_charges"),
+			)
 	else:
 		self.doc.total_taxes_and_charges = 0.0
+
+	# Grand total = net total + all taxes (including free-item tax) + any grand_total_diff
+	self.doc.grand_total = flt(
+		flt(self.doc.net_total)
+		+ flt(self.doc.total_taxes_and_charges or 0)
+		+ flt(self.doc.get("grand_total_diff")),
+		self.doc.precision("grand_total"),
+	)
 	# Apply existing roundoff amount
 	if (
 		self.doc.doctype == "Sales Invoice"
@@ -1987,7 +2260,7 @@ class CustomSalesInvoice(SalesInvoice):
 		The per-item taxes are then reflected by set_total_taxes_for_item_template,
 		which rebuilds the taxes table from the item_tax_template values.
 		"""
-		
+
 		pos = super().set_pos_fields(for_validate)
 		if pos and getattr(pos, "custom_allow_item_tax_template", 0):
 			self.taxes_and_charges = None
@@ -2454,7 +2727,7 @@ def create_partial_return(
 
 		if original_invoice.is_return:
 			frappe.throw("This invoice is already a return.")
-		
+
 		# NEW RULE: Check if invoice is older than 14 days first
 		invoice_date_raw = original_invoice.posting_date or original_invoice.creation
 		invoice_date = None
@@ -2465,7 +2738,7 @@ def create_partial_return(
 					invoice_date = frappe.utils.getdate(str(invoice_date_raw))
 		except Exception:
 			pass
-		
+
 		if not invoice_date or not isinstance(invoice_date, date_type):
 			invoice_date = frappe.utils.today()
 			if not isinstance(invoice_date, date_type):
@@ -2477,27 +2750,27 @@ def create_partial_return(
 						invoice_date = frappe.utils.today()
 				except Exception:
 					invoice_date = frappe.utils.today()
-		
+
 		today_date = frappe.utils.today()
 		if not isinstance(today_date, date_type):
 			today_date = frappe.utils.getdate(today_date)
-		
+
 		days_since_invoice = (today_date - invoice_date).days
-		
+
 		# Block all returns if invoice is older than 14 days
 		if days_since_invoice > 14:
 			frappe.throw(f"Cannot return this invoice. Invoice is {days_since_invoice} days old. Returns are only allowed within 14 days of the invoice date.")
-		
+
 		# Validate return restrictions for items being returned (only for invoices <= 14 days)
 		# Check if any of the return_items belong to non-returnable groups or are refrigerated
 		if return_items:
 			# Get item codes being returned
 			return_item_codes = [item.get("item_code") for item in return_items if item.get("return_qty", 0) > 0]
-			
+
 			# Check each item being returned
 			non_returnable_items = []
 			refrigerated_items = []
-			
+
 			for item_code in return_item_codes:
 				# Find the original item in the invoice
 				original_item = None
@@ -2505,10 +2778,10 @@ def create_partial_return(
 					if inv_item.item_code == item_code:
 						original_item = inv_item
 						break
-				
+
 				if not original_item:
 					continue
-				
+
 				# Check Item Group
 				if original_item.item_group:
 					try:
@@ -2517,7 +2790,7 @@ def create_partial_return(
 							non_returnable_items.append(f"{item_code} ({original_item.item_name or item_code})")
 					except Exception:
 						pass
-				
+
 				# Check refrigerated (no age restriction needed since we already checked invoice age)
 				try:
 					item_doc = frappe.get_doc("Item", item_code)
@@ -2525,19 +2798,19 @@ def create_partial_return(
 						refrigerated_items.append(f"{item_code} ({original_item.item_name or item_code})")
 				except Exception:
 					pass
-			
+
 			# Build error messages
 			error_parts = []
 			if non_returnable_items:
 				error_parts.append(f"Items from non-returnable groups: {', '.join(non_returnable_items[:3])}")
 				if len(non_returnable_items) > 3:
 					error_parts[-1] += f" and {len(non_returnable_items) - 3} more"
-			
+
 			if refrigerated_items:
 				error_parts.append(f"Refrigerated items: {', '.join(refrigerated_items[:3])}")
 				if len(refrigerated_items) > 3:
 					error_parts[-1] += f" and {len(refrigerated_items) - 3} more"
-			
+
 			if error_parts:
 				error_message = "Cannot return selected items. " + ". ".join(error_parts) + "."
 				frappe.throw(error_message)
