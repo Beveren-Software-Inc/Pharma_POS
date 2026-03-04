@@ -59,6 +59,7 @@ import {
 } from "../services/emailTemplateService";
 import DeliveryPersonnelModal from "./DeliveryPersonnelModal";
 import { useDeliveryPersonnel } from "../hooks/useDeliveryPersonnel";
+import { useDeliveryChannels } from "../hooks/useDeliveryChannels";
 import { useItemTaxTemplateRates } from "../hooks/useItemTaxTemplateRates";
 import { useFreeItemTaxAmount } from "../hooks/useFreeItemTaxAmount";
 
@@ -199,12 +200,15 @@ export default function PaymentDialog({
   const [deliveryDistanceKm, setDeliveryDistanceKm] = useState<number | null>(null);
   const [deliveryChargeAmount, setDeliveryChargeAmount] = useState<number | null>(null);
   const [deliveryChargeTaxAmount, setDeliveryChargeTaxAmount] = useState<number | null>(null);
+  // When true, this is a company delivery via channel only (pay later, no POS payment now)
+  const [isCompanyDelivery, setIsCompanyDelivery] = useState(false);
 
   // Hooks
   const { posDetails, loading: posLoading } = usePOSDetails();
   const { modes, isLoading, error } = usePaymentModes(typeof posDetails?.name === 'string' ? posDetails.name : '');
   const { salesTaxCharges, defaultTax } = useSalesTaxCharges();
   const { personnel: deliveryPersonnelList } = useDeliveryPersonnel();
+  const { channels: deliveryChannels } = useDeliveryChannels();
   const navigate = useNavigate();
 
   // Determine if this is B2B business type
@@ -600,7 +604,7 @@ export default function PaymentDialog({
   }, [isOpen, defaultTax, selectedSalesTaxCharges]);
 
   useEffect(() => {
-    if (isOpen && modes.length > 0) {
+    if (isOpen && modes.length > 0 && !isCompanyDelivery) {
       const defaultMode = modes.find((mode) => mode.default === 1);
       if (defaultMode && Object.keys(paymentAmounts).length === 0) {
         const defaultAmount = parseFloat(effectiveGrandTotal.toFixed(3));
@@ -608,7 +612,7 @@ export default function PaymentDialog({
         setPaymentAmounts({ [defaultMode.mode_of_payment]: defaultAmount });
       }
     }
-  }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C]);
+  }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery]);
 
   useEffect(() => {
 
@@ -718,6 +722,29 @@ export default function PaymentDialog({
       cancelled = true;
     };
   }, [deliveryChargeAmount]);
+
+  // When a delivery personnel is selected (paid now), auto-fill payment with full amount
+  // including delivery charges, but only if there is no existing non-zero payment.
+  useEffect(() => {
+    if (!selectedDeliveryPersonnel || isCompanyDelivery) return;
+    if (!isOpen || modes.length === 0) return;
+
+    const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
+    if (hasAnyPayment) return;
+
+    const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+    if (!defaultMode) return;
+
+    const amount = parseFloat(effectiveGrandTotal.toFixed(3));
+    setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
+  }, [
+    selectedDeliveryPersonnel,
+    isCompanyDelivery,
+    isOpen,
+    modes,
+    paymentAmounts,
+    effectiveGrandTotal,
+  ]);
 
   if (!isOpen) return null;
   if (isLoading || posLoading) return <div className="p-6">Loading...</div>;
@@ -1175,6 +1202,47 @@ export default function PaymentDialog({
         ? selection.deliveryFee
         : null
     );
+    const hasPersonnel = !!selection.personnelName;
+    const hasChannel = !!selection.deliveryVia;
+
+    // Company delivery: channel selected, no personnel -> pay later, clear all payments
+    if (hasChannel && !hasPersonnel) {
+      setIsCompanyDelivery(true);
+      // Try to use Delivery Channel's mode_of_payment; fall back to default POS mode if missing.
+      const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
+      let mop = channel?.mode_of_payment || null;
+      if (!mop && modes.length > 0) {
+        const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+        mop = defaultMode?.mode_of_payment || null;
+      }
+
+      if (mop) {
+        // Create one payment row with amount 0.0 to satisfy ERPNext POS validation
+        setPaymentAmounts({ [mop]: 0 });
+      } else {
+        // As a safety net, keep payments empty if we truly have no Mode of Payment to use
+        setPaymentAmounts({});
+      }
+      setRoundOffAmount(0);
+      setRoundOffInput("0.000");
+    } else {
+      // Normal (immediate) delivery: allow payments
+      setIsCompanyDelivery(false);
+
+      // If we now have a delivery personnel (paid now) and no existing payments,
+      // auto-fill default payment method with the full effective grand total (incl. delivery).
+      if (hasPersonnel && isOpen && modes.length > 0) {
+        const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
+        if (!hasAnyPayment) {
+          const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+          if (defaultMode) {
+            const amount = parseFloat(effectiveGrandTotal.toFixed(3));
+            setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
+          }
+        }
+      }
+    }
+
     setShowDeliveryPersonnelModal(false);
   };
 

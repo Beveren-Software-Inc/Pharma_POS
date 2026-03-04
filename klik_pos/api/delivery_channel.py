@@ -13,7 +13,9 @@ def get_delivery_channel_list():
 
 		channels = frappe.get_all(
 			"Delivery Channel",
-			fields=["name", "delivery_via"],
+			# Include mode_of_payment so frontend can create POS payment rows
+			# even when company deliveries are paid later (amount 0.0).
+			fields=["name", "delivery_via", "mode_of_payment"],
 			order_by="delivery_via asc",
 		)
 		return {"success": True, "data": channels}

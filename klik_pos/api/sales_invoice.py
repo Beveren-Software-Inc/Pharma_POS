@@ -2308,6 +2308,26 @@ def get_writeoff_account():
 
 
 class CustomSalesInvoice(SalesInvoice):
+	def validate_pos_paid_amount(self):
+		"""
+		Override ERPNext's strict POS payment validation.
+
+		Standard behavior (in core) throws:
+		  "At least one mode of payment is required for POS invoice."
+		when:
+		  - len(self.payments) == 0
+		  - self.is_pos is true
+		  - grand_total > 0
+
+		For KLiK PoS we want to allow:
+		  - Company deliveries or special flows where invoice is POS-style
+		    but actual payment is handled later via AR or external systems.
+
+		So we completely skip this validation and let the rest of the
+		submit logic proceed even if there are no payment rows.
+		"""
+		return
+
 	def set_pos_fields(self, for_validate=False):
 		"""When item tax template mode is enabled, remove any document-level
 		Sales Taxes and Charges so we don't mix template tax with per-item

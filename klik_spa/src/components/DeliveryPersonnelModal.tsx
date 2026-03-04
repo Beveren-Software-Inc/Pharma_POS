@@ -192,16 +192,11 @@ export default function DeliveryPersonnelModal({
   const handleChannelInputFocus = () => setIsChannelDropdownOpen(true);
   const handlePersonnelInputFocus = () => setIsPersonnelDropdownOpen(true);
 
-  const handleChannelInputBlur = (e: React.FocusEvent) => {
-    // Delay close to allow click on dropdown item to register (like customer/patient search)
+  const handleChannelInputBlur = () => {
+    // As soon as focus leaves the input (cursor outside), hide the Delivery Channel dropdown
     setTimeout(() => {
-      const activeElement = document.activeElement;
-      const wrapper = e.currentTarget.closest(".relative")?.parentElement;
-      const dropdown = wrapper?.querySelector(".absolute");
-      if (!dropdown?.contains(activeElement)) {
-        setIsChannelDropdownOpen(false);
-      }
-    }, 200);
+      setIsChannelDropdownOpen(false);
+    }, 0);
   };
 
   const handlePersonnelInputBlur = (e: React.FocusEvent) => {
@@ -283,7 +278,11 @@ export default function DeliveryPersonnelModal({
                           <button
                             key={c.name}
                             type="button"
-                            onClick={() => handleSelectChannel(c.name, c.delivery_via || c.name)}
+                            onMouseDown={(e) => {
+                              // Use mousedown so selection happens before input blur closes the dropdown
+                              e.preventDefault();
+                              handleSelectChannel(c.name, c.delivery_via || c.name);
+                            }}
                             className={`w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
                               selectedChannel === c.name
                                 ? "bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400"
