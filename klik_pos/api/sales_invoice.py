@@ -1679,7 +1679,6 @@ def return_sales_invoice(invoice_name):
 
 		for item in return_doc.items:
 			item.qty = -abs(item.qty)
-
 		# Mirror original round-off/write-off as POSITIVE on return; totals logic handles sign for returns
 		try:
 			if getattr(original_invoice, "custom_roundoff_amount", 0):
@@ -1759,7 +1758,9 @@ def set_base_roundoff_amount(doc, method):
 
 
 def set_grand_total_with_roundoff(doc, method):
+	
 	"""Modify grand total calculation to include round-off amount"""
+	
 	from erpnext.controllers.taxes_and_totals import calculate_taxes_and_totals
 
 	if not doc.doctype == "Sales Invoice":
@@ -1811,6 +1812,7 @@ def set_total_taxes_for_item_template(doc, method):
 	# Only adjust Sales Invoices
 	if doc.doctype != "Sales Invoice":
 		return
+	doc.set("taxes", [])
 
 	# If ERPNext has already populated taxes or a non-zero total_taxes_and_charges, do nothing
 	# if doc.get("taxes") or (doc.total_taxes_and_charges or 0):
@@ -2156,9 +2158,48 @@ def set_total_taxes_for_item_template(doc, method):
 			doc.precision("base_grand_total") or 2,
 		)
 
+	# ------------------------------------------------------------------
+	# Fix POS payment summary when our custom tax logic changes grand_total
+	# after ERPNext has already computed payments/change/outstanding.
+	#
+	# Example symptom (your invoice ACC-SINV-2026-00150):
+	# - grand_total = 7.536
+	# - paid_amount = 7.536
+	# - but change_amount = 1.256 and outstanding_amount = 1.256
+	#
+	# This happens because ERPNext computed change/outstanding BEFORE our
+	# free-item tax hook adjusted total_taxes_and_charges and grand_total,
+	# so those summary fields became inconsistent.
+	#
+	# Here we correct that ONLY when the invoice is effectively fully paid:
+	# if paid_amount == grand_total (within rounding) on a POS invoice,
+	# we force outstanding and change to zero so status becomes "Paid".
+	# ------------------------------------------------------------------
+	if getattr(doc, "is_pos", 0):
+		prec = doc.precision("grand_total") or 2
+		paid = flt(doc.paid_amount or 0, prec)
+		total = flt(doc.grand_total or 0, prec)
+		if abs(paid - total) <= (10 ** -prec):
+			doc.outstanding_amount = 0
+			doc.change_amount = 0
+			doc.base_change_amount = 0
+	# 	desired_payment = final_total
+		
+	# 	doc.payments[0].amount = desired_payment
+	# 	for p in doc.payments[1:]:
+	# 		p.amount = 0
+		
+	# 	doc.paid_amount = desired_payment
+	# 	doc.base_paid_amount = flt(
+	# 		desired_payment * (doc.conversion_rate or 1),
+	# 		doc.precision("base_grand_total") or 2,
+	# 	)
+	# 	doc.outstanding_amount = 0
+
 def custom_calculate_totals(self):
 	"""Main function to calculate invoice totals with custom round-off logic"""
 	# Calculate basic grand total and taxes
+	frappe.throw(str("Maniac"))
 	if self.doc.get("taxes"):
 		# If hooks (like item tax template mode) already set total_taxes_and_charges,
 		# keep that; otherwise, fall back to ERPNext-style computation from last tax row.
@@ -2178,12 +2219,14 @@ def custom_calculate_totals(self):
 		+ flt(self.doc.get("grand_total_diff")),
 		self.doc.precision("grand_total"),
 	)
+	
 	# Apply existing roundoff amount
 	if (
 		self.doc.doctype == "Sales Invoice"
 		and self.doc.custom_roundoff_account
 		and self.doc.custom_roundoff_amount
 	):
+		
 		adjustment = self.doc.custom_roundoff_amount or 0
 
 		# For returns, add the round-off to reduce the negative magnitude (e.g., -13 + 3.01 = -9.99)
@@ -2284,7 +2327,6 @@ def create_roundoff_writeoff_entry(self):
 		write_off_amount = -self.doc.custom_roundoff_amount
 	else:
 		write_off_amount = self.doc.custom_roundoff_amount
-
 	roundoff_entry = {
 		"charge_type": "Actual",
 		"account_head": self.doc.custom_roundoff_account,
@@ -2309,24 +2351,18 @@ def get_writeoff_account():
 
 class CustomSalesInvoice(SalesInvoice):
 	def validate_pos_paid_amount(self):
-		"""
-		Override ERPNext's strict POS payment validation.
-
-		Standard behavior (in core) throws:
-		  "At least one mode of payment is required for POS invoice."
-		when:
-		  - len(self.payments) == 0
-		  - self.is_pos is true
-		  - grand_total > 0
-
-		For KLiK PoS we want to allow:
-		  - Company deliveries or special flows where invoice is POS-style
-		    but actual payment is handled later via AR or external systems.
-
-		So we completely skip this validation and let the rest of the
-		submit logic proceed even if there are no payment rows.
-		"""
+		"""Skip core POS paid-amount validation; handled by KLiK PoS logic."""
 		return
+
+	# def verify_payment_amount_is_negative(self):
+	# 	"""
+	# 	Skip ERPNext's requirement that POS return payment amounts must be negative.
+
+	# 	Our return/payment flows (including tax and roundoff adjustments) can result
+	# 	in small floating-point differences, and we don't want these to block
+	# 	invoice submission. Frontend already ensures the intended sign; we trust it.
+	# 	"""
+	# 	return
 
 	def set_pos_fields(self, for_validate=False):
 		"""When item tax template mode is enabled, remove any document-level
@@ -2366,15 +2402,13 @@ class CustomSalesInvoice(SalesInvoice):
 
 		gl_entries = make_regional_gl_entries(gl_entries, self)
 
-		# merge gl entries before adding pos entries
-		gl_entries = merge_similar_entries(gl_entries)
-
 		self.make_loyalty_point_redemption_gle(gl_entries)
-		self.make_pos_gl_entries(gl_entries)
-
+		# self.make_pos_gl_entries(gl_entries)
+		
 		self.make_write_off_gl_entry(gl_entries)
+		
 		self.make_gle_for_rounding_adjustment(gl_entries)
-
+		
 		return gl_entries
 
 	def make_roundoff_gl_entry(self, gl_entries):
@@ -3014,7 +3048,7 @@ def create_partial_return(
 					"amount": -abs(final_return_amount),
 				},
 			)
-		print("Mko 3", -abs(final_return_amount))
+		
 		# Recalculate totals (payment amount stays as user entered)
 		try:
 			return_doc.calculate_taxes_and_totals()
@@ -3132,3 +3166,28 @@ def submit_draft_invoice(invoice_id):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), f"Error submitting draft invoice {invoice_id}")
 		return {"success": False, "error": str(e)}
+
+def finalize_paid_amount(self, method=None):
+	"""
+	Final step before submit:
+	- Update each payment row amount to match the grand_total
+	- Update doc.paid_amount accordingly
+	- Enforce negative payment amounts if required
+	"""
+	if self.is_return:
+		if not getattr(self, "payments", None):
+			return
+
+		# Set each payment row to match grand_total
+		for entry in self.payments:
+			# Match the payment to grand_total
+			entry.amount = flt(self.grand_total)
+
+			# Optional: enforce negative for returns
+			if entry.amount > 0 and getattr(self, "is_return", 0):
+				frappe.throw(
+					_("Row #{0} (Payment Table): Amount must be negative").format(entry.idx)
+				)
+		# Update Sales Invoice fields
+		self.paid_amount = flt(sum([flt(p.amount) for p in self.payments]))
+		self.outstanding_amount = flt(self.grand_total - self.paid_amount)

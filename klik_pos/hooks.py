@@ -96,6 +96,9 @@ doc_events = {
 			"klik_pos.api.sales_invoice.set_total_taxes_for_item_template",
 			"klik_pos.api.sales_invoice.validate_sales_invoice_return",
 		],
+		"on_submit": [
+			"klik_pos.api.sales_invoice.finalize_paid_amount",
+		],
 		
 		# "before_save": [
 		# 	"klik_pos.api.sales_invoice.sync_return_payments_before_save",
