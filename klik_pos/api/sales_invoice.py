@@ -1600,6 +1600,42 @@ def validate_sales_invoice_return(doc, method):
 		frappe.throw(_(error_message))
 
 
+def ensure_negative_payments_for_pos_return(doc, method):
+	"""
+	ERPNext enforces that POS return invoices must have negative payment row amounts
+	(via Sales Invoice.verify_payment_amount_is_negative()).
+
+	App `validate` hooks run *after* ERPNext's validate, so this must run in
+	`before_validate` to normalize signs before ERPNext checks them.
+	"""
+	if doc.doctype != "Sales Invoice":
+		return
+	if not getattr(doc, "is_return", 0):
+		return
+	if not getattr(doc, "is_pos", 0):
+		return
+
+	for p in doc.get("payments", []):
+		try:
+			amt = flt(getattr(p, "amount", 0) or 0)
+		except Exception:
+			amt = 0
+		if amt > 0:
+			p.amount = -abs(amt)
+
+	# Keep paid amounts consistent for return sign convention
+	try:
+		if flt(getattr(doc, "paid_amount", 0) or 0) > 0:
+			doc.paid_amount = -abs(flt(doc.paid_amount or 0))
+	except Exception:
+		pass
+	try:
+		if flt(getattr(doc, "base_paid_amount", 0) or 0) > 0:
+			doc.base_paid_amount = -abs(flt(doc.base_paid_amount or 0))
+	except Exception:
+		pass
+
+
 @frappe.whitelist()
 def return_sales_invoice(invoice_name):
 	try:
@@ -1635,6 +1671,11 @@ def return_sales_invoice(invoice_name):
 
 		return_doc.is_return = 1
 		return_doc.posting_date = frappe.utils.nowdate()
+
+		# Important: do not carry over original tax rows into the return.
+		# Taxes must be recalculated based on the return's items (and our free-item tax hook).
+		return_doc.set("taxes", [])
+		return_doc.taxes_and_charges = None
 
 		for item in return_doc.items:
 			item.qty = -abs(item.qty)
@@ -1682,18 +1723,19 @@ def return_sales_invoice(invoice_name):
 			desired_payment = abs(flt(final_total, return_doc.precision("grand_total")))
 			if desired_payment > 0:
 				if return_doc.payments and len(return_doc.payments) > 0:
-					# For returns, record refund as positive amount on payment row
-					return_doc.payments[0].amount = desired_payment
+					# For returns, ERPNext requires payment table amounts to be negative
+					# (verify_payment_amount_is_negative). Store refund as negative.
+					return_doc.payments[0].amount = -desired_payment
 					for _p in return_doc.payments[1:]:
 						_p.amount = 0
 				else:
 					return_doc.append(
 						"payments",
-						{"mode_of_payment": "Cash", "amount": desired_payment},
+						{"mode_of_payment": "Cash", "amount": -desired_payment},
 					)
-			# Sync totals fields
-			return_doc.paid_amount = desired_payment
-			return_doc.base_paid_amount = desired_payment * (return_doc.conversion_rate or 1)
+			# Sync totals: for return, paid_amount is negative (refund given)
+			return_doc.paid_amount = -desired_payment
+			return_doc.base_paid_amount = -desired_payment * (return_doc.conversion_rate or 1)
 			return_doc.outstanding_amount = 0
 			return_doc.save(ignore_permissions=True)
 
@@ -1807,6 +1849,7 @@ def set_total_taxes_for_item_template(doc, method):
 	# Aggregate tax per template - keep templates separate
 	template_cache = {}
 	template_totals = {}  # Track calculations per template
+	is_return = 1 if getattr(doc, "is_return", 0) else 0
 
 	for item in doc.get("items", []):
 		item_template = getattr(item, "item_tax_template", None)
@@ -1819,8 +1862,13 @@ def set_total_taxes_for_item_template(doc, method):
 		if not tax_doc:
 			continue
 
-		# Base amount for this item (the amount tax is calculated on)
+		# Base amount for this item (the amount tax is calculated on).
+		# For returns, item amount/net_amount can still be positive when built from mapped doc
+		# (only qty is flipped). Force tax base to match net_total sign so tax is negative on returns.
 		item_base = getattr(item, "net_amount", None) or getattr(item, "base_net_amount", None) or item.amount or 0
+		item_base = flt(item_base or 0)
+		if is_return and item_base > 0:
+			item_base = -abs(item_base)
 		if not item_base:
 			continue
 
@@ -1902,8 +1950,11 @@ def set_total_taxes_for_item_template(doc, method):
 	#   item's selling rate using its Item Tax Template.
 	# - This extra tax should be visible in Sales Taxes and Charges as
 	#   separate Actual rows and included in total_taxes_and_charges.
+	# - On returns (is_return=1), item qty is negative; we still add
+	#   "Tax on free items" rows with negative amounts so GL debits/credits balance.
 	# ------------------------------------------------------------------
 	free_item_tax_by_account = {}
+	is_return = 1 if getattr(doc, "is_return", 0) else 0
 
 	for item in doc.get("items", []):
 		try:
@@ -2023,9 +2074,12 @@ def set_total_taxes_for_item_template(doc, method):
 				# No sensible base rate available; skip this free item
 				continue
 
+			# For returns, qty is negative; use abs(qty) for tax base and apply sign when aggregating
 			item_qty = flt(getattr(item, "qty", 0))
-			if item_qty <= 0:
+			if item_qty == 0:
 				continue
+			item_qty_for_tax = abs(item_qty)
+			sign = -1 if is_return else 1
 
 			for tax_row in tax_doc.taxes:
 				tax_account = tax_row.tax_type
@@ -2034,9 +2088,9 @@ def set_total_taxes_for_item_template(doc, method):
 					continue
 
 				# Tax is calculated on the "normal" selling value of the free item
-				item_tax_base = free_base_rate * item_qty
-				free_tax_amount = (item_tax_base * tax_rate) / 100.0
-				if free_tax_amount <= 0:
+				item_tax_base = free_base_rate * item_qty_for_tax
+				free_tax_amount = (item_tax_base * tax_rate) / 100.0 * sign
+				if free_tax_amount == 0:
 					continue
 
 				if tax_account not in free_item_tax_by_account:
@@ -2051,10 +2105,11 @@ def set_total_taxes_for_item_template(doc, method):
 			continue
 
 	# Append Actual tax rows for free-item tax and include in totals
+	# For returns, amount can be negative (reversal of tax on free items).
 	free_items_total_tax = 0.0
 	if free_item_tax_by_account:
 		for account_head, amount in free_item_tax_by_account.items():
-			if amount <= 0:
+			if amount == 0:
 				continue
 
 			free_items_total_tax += amount
@@ -2079,8 +2134,9 @@ def set_total_taxes_for_item_template(doc, method):
 
 	# Final numeric totals = base tax (from ERPNext) + explicit per-template tax
 	# breakdown (total_tax) + additional tax on free items.
+	# For returns, total_tax_with_free can be negative; still update doc totals.
 	total_tax_with_free = base_tax_amount + total_tax + free_items_total_tax
-	if total_tax_with_free > 0:
+	if total_tax_with_free != 0:
 		doc.total_taxes_and_charges = flt(
 			total_tax_with_free, doc.precision("total_taxes_and_charges") or 2
 		)
@@ -2835,6 +2891,11 @@ def create_partial_return(
 		return_doc.is_return = 1
 		return_doc.posting_date = frappe.utils.nowdate()
 		return_doc.custom_delivery_date = frappe.utils.nowdate()
+
+		# Important: do not carry over original tax rows into the partial return.
+		# We'll recalculate taxes from the filtered returned items only.
+		return_doc.set("taxes", [])
+		return_doc.taxes_and_charges = None
 
 		# Set the current POS opening entry
 		current_opening_entry = get_current_pos_opening_entry()

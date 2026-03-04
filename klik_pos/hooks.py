@@ -86,6 +86,9 @@ fixtures = [
 
 doc_events = {
 	"Sales Invoice": {
+		"before_validate": [
+			"klik_pos.api.sales_invoice.ensure_negative_payments_for_pos_return",
+		],
 		"validate": [
 			"klik_pos.api.sales_invoice.enforce_zero_rate_for_free_items",
 			"klik_pos.api.sales_invoice.set_base_roundoff_amount",
