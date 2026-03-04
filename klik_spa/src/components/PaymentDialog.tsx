@@ -723,6 +723,27 @@ export default function PaymentDialog({
     };
   }, [deliveryChargeAmount]);
 
+  // When delivery personnel is selected (paid now) and delivery charges change the grand total,
+  // keep the POS payment in sync by auto-filling the default payment method with the latest
+  // effective grand total. This avoids having to click the payment method button again.
+  useEffect(() => {
+    if (!isOpen || isCompanyDelivery) return;
+    if (!selectedDeliveryPersonnel) return;
+    if (modes.length === 0) return;
+
+    const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+    if (!defaultMode) return;
+
+    const amount = parseFloat(effectiveGrandTotal.toFixed(3));
+    setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
+  }, [
+    isOpen,
+    isCompanyDelivery,
+    selectedDeliveryPersonnel,
+    modes,
+    effectiveGrandTotal,
+  ]);
+
   // When a delivery personnel is selected (paid now), auto-fill payment with full amount
   // including delivery charges, but only if there is no existing non-zero payment.
   useEffect(() => {
