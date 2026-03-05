@@ -7,6 +7,7 @@ from frappe import _
 from frappe.utils import flt, cint
 from datetime import datetime, timedelta, date as date_type
 
+
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
 # Performance optimization: Cache frequently accessed data
@@ -405,9 +406,9 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 	Fetch invoice items and calculate returned/available quantities.
 	Includes item_group and custom_is_refrigerated_ for return validation.
 	"""
-	# Batch fetch all items for this invoice with item_group
+	# Batch fetch all items for this invoice with item_group and name (for 1:1 matching on return)
 	items_query = """
-		SELECT sii.item_code, sii.item_name, sii.qty, sii.rate, sii.amount, sii.description, sii.item_group
+		SELECT sii.name, sii.item_code, sii.item_name, sii.qty, sii.rate, sii.amount, sii.description, sii.item_group
 		FROM `tabSales Invoice Item` sii
 		WHERE sii.parent = %s
 	"""
@@ -2218,7 +2219,6 @@ def custom_calculate_totals(self):
 		+ flt(self.doc.get("grand_total_diff")),
 		self.doc.precision("grand_total"),
 	)
-	frappe.throw(str(self.doc.net_total))
 	# Apply existing roundoff amount
 	if (
 		self.doc.doctype == "Sales Invoice"
@@ -2313,6 +2313,10 @@ def custom_calculate_totals(self):
 					# For negative totals, add to reach .00 (e.g., -50.01 + 0.01 = -50)
 					self.doc.grand_total += small_amount
 					self.doc.base_grand_total = self.doc.grand_total * (self.doc.conversion_rate or 1)
+					frappe.throw(str(_("Grand total has a small negative decimal part ({decimal_part}). Adjusting to {grand_total}.").format(
+						decimal_part=decimal_part,
+						grand_total=self.doc.grand_total
+					)))
 	# print("Round-off amount before adjustment:", self.doc.custom_roundoff_amount)
 
 	self.set_rounded_total()
@@ -2409,13 +2413,16 @@ class CustomSalesInvoice(SalesInvoice):
 
 		gl_entries = make_regional_gl_entries(gl_entries, self)
 
+		# Merge before adding POS payment entries (same as standard Sales Invoice)
+		gl_entries = merge_similar_entries(gl_entries)
+
 		self.make_loyalty_point_redemption_gle(gl_entries)
-		# self.make_pos_gl_entries(gl_entries)
-		
+		self.make_pos_gl_entries(gl_entries)
+
 		self.make_write_off_gl_entry(gl_entries)
-		
+
 		self.make_gle_for_rounding_adjustment(gl_entries)
-		
+
 		return gl_entries
 
 	def make_roundoff_gl_entry(self, gl_entries):
@@ -2968,15 +2975,31 @@ def create_partial_return(
 		return_doc.custom_base_roundoff_amount = 0
 		return_doc.custom_roundoff_account = get_writeoff_account()
 
-		# Filter items to only include selected ones with return quantities
+		# Filter items to only include selected ones with return quantities.
+		# Match 1:1 by prevdoc_detail_docname when provided (so same item_code paid+free lines map correctly).
+		# Otherwise match by item_code but use each return_doc item at most once to avoid duplicating one line.
+		remaining_items = list(return_doc.items)
 		filtered_items = []
 		for return_item in return_items:
-			if return_item.get("return_qty", 0) > 0:
-				for item in return_doc.items:
-					if item.item_code == return_item["item_code"]:
-						item.qty = -abs(return_item["return_qty"])
-						filtered_items.append(item)
+			if return_item.get("return_qty", 0) <= 0:
+				continue
+			line_name = return_item.get("prevdoc_detail_docname")
+			matched = None
+			if line_name:
+				for i, item in enumerate(remaining_items):
+					if getattr(item, "name", None) == line_name or getattr(item, "prevdoc_detail_docname", None) == line_name:
+						matched = (i, item)
 						break
+			if matched is None:
+				for i, item in enumerate(remaining_items):
+					if item.item_code == return_item.get("item_code"):
+						matched = (i, item)
+						break
+			if matched is not None:
+				i, item = matched
+				item.qty = -abs(return_item["return_qty"])
+				filtered_items.append(item)
+				remaining_items.pop(i)
 
 		return_doc.items = filtered_items
 
@@ -3174,9 +3197,7 @@ def submit_draft_invoice(invoice_id):
 		frappe.log_error(frappe.get_traceback(), f"Error submitting draft invoice {invoice_id}")
 		return {"success": False, "error": str(e)}
 
-from frappe.utils import flt
-import frappe
-from frappe import _
+
 
 def finalize_paid_amount(self, method=None):
 	"""
@@ -3185,7 +3206,6 @@ def finalize_paid_amount(self, method=None):
 	- Update doc.paid_amount accordingly
 	- Enforce negative payment amounts if required
 	"""
-
 	if not self.is_return:
 		return
 
