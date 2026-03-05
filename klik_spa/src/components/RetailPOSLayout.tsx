@@ -132,7 +132,7 @@ export default function RetailPOSLayout() {
   }, [scalePrefix])
 
   const addOrIncreaseWithQuantity = useCallback(async (item: MenuItem, quantity: number) => {
-    const existingItem = cartItems.find((cartItem) => cartItem.id === item.id)
+    const existingItem = cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
     if (existingItem) {
       updateQuantity(item.id, existingItem.quantity + quantity)
     } else {
@@ -166,8 +166,24 @@ export default function RetailPOSLayout() {
 
   // Separate function for adding items to cart (used by both click and barcode)
   const addItemToCart = (item: MenuItem) => {
-    const existingItem = cartItems.find((cartItem) => cartItem.id === item.id)
-    if (existingItem) {
+    const allowDuplicatePos =
+      posDetails?.custom_allow_duplicate_items_in_pos === 1 ||
+      posDetails?.custom_allow_duplicate_items_in_pos === true ||
+      posDetails?.custom_allow_duplicate_items_in_pos === "1"
+    const itemHasSerialOrBatch =
+      item.has_serial_no === 1 ||
+      item.has_serial_no === true ||
+      item.has_serial_no === "1" ||
+      item.has_batch_no === 1 ||
+      item.has_batch_no === true ||
+      item.has_batch_no === "1"
+    const allowDuplicateForItem = allowDuplicatePos && itemHasSerialOrBatch
+
+    const existingItem = !allowDuplicateForItem
+      ? cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
+      : undefined
+
+    if (existingItem && !allowDuplicateForItem) {
       updateQuantity(item.id, existingItem.quantity + 1)
     } else {
       const uomToUse = resolveUomForCart(item)
@@ -186,6 +202,9 @@ export default function RetailPOSLayout() {
             uom: uomToUse,
             item_code: item.id,
             item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
+            has_serial_no: item.has_serial_no,
+            has_batch_no: item.has_batch_no,
+            allowDuplicate: allowDuplicateForItem,
           })
         }).catch(() => {
           addToCart({
@@ -198,6 +217,9 @@ export default function RetailPOSLayout() {
             uom: uomToUse,
             item_code: item.id,
             item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
+            has_serial_no: item.has_serial_no,
+            has_batch_no: item.has_batch_no,
+            allowDuplicate: allowDuplicateForItem,
           })
         })
       } else {
@@ -211,6 +233,9 @@ export default function RetailPOSLayout() {
           uom: uomToUse,
           item_code: item.id,
           item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
+          has_serial_no: item.has_serial_no,
+          has_batch_no: item.has_batch_no,
+          allowDuplicate: allowDuplicateForItem,
         })
       }
     }

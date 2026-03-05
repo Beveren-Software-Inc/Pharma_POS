@@ -70,7 +70,8 @@ fixtures = [
 					"POS Profile-custom_allow_additional_amounts",
 					"Sales Invoice-custom_remarks",
 					"Sales Invoice-custom_remark",
-     "Item-custom_is_additional_charges"
+					"Item-custom_is_additional_charges",
+					"POS Profile-custom_allow_duplicate_items_in_pos",
 				),
 			]
 		],

@@ -618,6 +618,14 @@ def _get_item_select_fields() -> str:
 	if frappe.db.has_column("Item", "custom_active_substances"):
 		select_fields += ", i.custom_active_substances"
 
+	# Optional stock tracking fields (serial / batch); safe-guarded by has_column checks
+	if frappe.db.has_column("Item", "has_serial_no"):
+		select_fields += ", i.has_serial_no"
+	if frappe.db.has_column("Item", "has_batch_no"):
+		select_fields += ", i.has_batch_no"
+	elif frappe.db.has_column("Item", "has_batch"):
+		select_fields += ", i.has_batch"
+
 	return select_fields
 
 
@@ -716,10 +724,14 @@ def _append_search_filter(
 						SELECT 1 FROM `tabItem Barcode` ib
 						WHERE ib.parent = i.name AND ib.barcode LIKE %s
 					)
+					OR EXISTS (
+						SELECT 1 FROM `tabSerial No` sn
+						WHERE sn.item_code = i.name AND sn.serial_no LIKE %s
+					)
 				)
 			"""
 	query_parts.append(search_condition)
-	params.extend([search_term, search_term, search_term, search_term])
+	params.extend([search_term, search_term, search_term, search_term, search_term])
 
 
 def _get_total_count(count_query: list[str], count_params: list[object]) -> int:
@@ -944,6 +956,14 @@ def _build_enriched_items(
 			enriched_item["custom_route_of_administration"] = item.get("custom_route_of_administration")
 		if item.get("custom_active_substances"):
 			enriched_item["custom_active_substances"] = item.get("custom_active_substances")
+
+		# Serial / batch flags so frontend can decide duplicate-line behaviour
+		if "has_serial_no" in item:
+			enriched_item["has_serial_no"] = int(item.get("has_serial_no") or 0)
+		# Normalise has_batch / has_batch_no as has_batch_no on the payload
+		if "has_batch_no" in item or "has_batch" in item:
+			raw_batch_flag = item.get("has_batch_no") if "has_batch_no" in item else item.get("has_batch")
+			enriched_item["has_batch_no"] = int(raw_batch_flag or 0)
 
 		if item_tax_template_map and item_code in item_tax_template_map:
 			enriched_item["item_tax_template"] = item_tax_template_map[item_code]

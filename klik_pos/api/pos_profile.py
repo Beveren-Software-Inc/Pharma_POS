@@ -180,6 +180,9 @@ def get_pos_details():
 		"custom_is_pharmacy": int(getattr(pos, "custom_is_pharmacy", 0) or 0),
 		"custom_allow_item_tax_template": int(getattr(pos, "custom_allow_item_tax_template", 0) or 0),
 		"custom_allow_additional_amounts": int(getattr(pos, "custom_allow_additional_amounts", 0) or 0),
+		"custom_allow_duplicate_items_in_pos": int(
+			getattr(pos, "custom_allow_duplicate_items_in_pos", 0) or 0
+		),
 	}
 	return details
 
