@@ -2199,7 +2199,6 @@ def set_total_taxes_for_item_template(doc, method):
 def custom_calculate_totals(self):
 	"""Main function to calculate invoice totals with custom round-off logic"""
 	# Calculate basic grand total and taxes
-	frappe.throw(str("Maniac"))
 	if self.doc.get("taxes"):
 		# If hooks (like item tax template mode) already set total_taxes_and_charges,
 		# keep that; otherwise, fall back to ERPNext-style computation from last tax row.
@@ -2219,7 +2218,7 @@ def custom_calculate_totals(self):
 		+ flt(self.doc.get("grand_total_diff")),
 		self.doc.precision("grand_total"),
 	)
-	
+	frappe.throw(str(self.doc.net_total))
 	# Apply existing roundoff amount
 	if (
 		self.doc.doctype == "Sales Invoice"
@@ -2352,6 +2351,14 @@ def get_writeoff_account():
 class CustomSalesInvoice(SalesInvoice):
 	def validate_pos_paid_amount(self):
 		"""Skip core POS paid-amount validation; handled by KLiK PoS logic."""
+		return
+
+	def validate_pos(self):
+		"""Skip core POS validation that expects payments on POS Invoices to be negative.
+
+		Our frontend ensures the intended sign of payment amounts, and our return flows
+		can result in small floating-point differences that we don't want to block invoice submission.
+		"""
 		return
 
 	# def verify_payment_amount_is_negative(self):
@@ -3167,6 +3174,10 @@ def submit_draft_invoice(invoice_id):
 		frappe.log_error(frappe.get_traceback(), f"Error submitting draft invoice {invoice_id}")
 		return {"success": False, "error": str(e)}
 
+from frappe.utils import flt
+import frappe
+from frappe import _
+
 def finalize_paid_amount(self, method=None):
 	"""
 	Final step before submit:
@@ -3174,20 +3185,64 @@ def finalize_paid_amount(self, method=None):
 	- Update doc.paid_amount accordingly
 	- Enforce negative payment amounts if required
 	"""
-	if self.is_return:
-		if not getattr(self, "payments", None):
-			return
 
-		# Set each payment row to match grand_total
-		for entry in self.payments:
-			# Match the payment to grand_total
-			entry.amount = flt(self.grand_total)
+	if not self.is_return:
+		return
 
-			# Optional: enforce negative for returns
-			if entry.amount > 0 and getattr(self, "is_return", 0):
-				frappe.throw(
-					_("Row #{0} (Payment Table): Amount must be negative").format(entry.idx)
-				)
-		# Update Sales Invoice fields
-		self.paid_amount = flt(sum([flt(p.amount) for p in self.payments]))
-		self.outstanding_amount = flt(self.grand_total - self.paid_amount)
+	if not self.payments:
+		return
+
+	# 1️⃣ Update each payment row in DB
+	for entry in self.payments:
+		amount = flt(self.grand_total)
+
+		if amount > 0:
+			frappe.throw(
+				_("Row #{0} (Payment Table): Amount must be negative").format(entry.idx)
+			)
+
+		# Update child table row
+		frappe.db.set_value(
+			entry.doctype,
+			entry.name,
+			"amount",
+			amount,
+			update_modified=False
+		)
+
+	# 2️⃣ Calculate totals
+	paid_amount = flt(sum(flt(self.grand_total) for _ in self.payments))
+	outstanding_amount = flt(self.grand_total - paid_amount)
+
+	# 3️⃣ Update parent document fields
+	frappe.db.set_value(
+		self.doctype,
+		self.name,
+		"paid_amount",
+		paid_amount,
+		update_modified=False
+	)
+	
+	frappe.db.set_value(
+		self.doctype,
+		self.name,
+		"base_paid_amount",
+		paid_amount * (self.conversion_rate or 1),
+		update_modified=False
+	)
+
+	frappe.db.set_value(
+		self.doctype,
+		self.name,
+		"outstanding_amount",
+		outstanding_amount,
+		update_modified=False
+	)
+
+	frappe.db.set_value(
+		self.doctype,
+		self.name,
+		"is_consolidated",
+		1,
+		update_modified=False
+	)
