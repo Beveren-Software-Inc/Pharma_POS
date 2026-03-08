@@ -31,6 +31,8 @@
   {
    "fieldname": "mode_of_payment",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Default Mode of Payment",
    "options": "Mode of Payment"
   }
@@ -38,7 +40,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-03-04 12:16:29.932413",
+ "modified": "2026-03-08 12:39:32.371212",
  "modified_by": "Administrator",
  "module": "KLiK PoS",
  "name": "Delivery Channel",

@@ -9,6 +9,7 @@
   "currency",
   "column_break_qicp",
   "posting_date",
+  "standard_delivery_charges",
   "section_break_sbmv",
   "delivery_fees"
  ],
@@ -45,13 +46,18 @@
    "fieldtype": "Link",
    "label": "Currency",
    "options": "Currency"
+  },
+  {
+   "fieldname": "standard_delivery_charges",
+   "fieldtype": "Currency",
+   "label": "Standard Delivery Charges"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-03-02 15:51:11.859644",
+ "modified": "2026-03-08 12:53:30.034703",
  "modified_by": "Administrator",
  "module": "KLiK PoS",
  "name": "Delivery Charges",

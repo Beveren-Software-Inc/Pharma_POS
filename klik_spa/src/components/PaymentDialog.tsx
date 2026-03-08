@@ -58,6 +58,7 @@ import {
   type EmailTemplate
 } from "../services/emailTemplateService";
 import DeliveryPersonnelModal from "./DeliveryPersonnelModal";
+import InsuranceModal, { type HealthInsuranceOption } from "./InsuranceModal";
 import { useDeliveryPersonnel } from "../hooks/useDeliveryPersonnel";
 import { useDeliveryChannels } from "../hooks/useDeliveryChannels";
 import { useItemTaxTemplateRates } from "../hooks/useItemTaxTemplateRates";
@@ -202,6 +203,10 @@ export default function PaymentDialog({
   const [deliveryChargeTaxAmount, setDeliveryChargeTaxAmount] = useState<number | null>(null);
   // When true, this is a company delivery via channel only (pay later, no POS payment now)
   const [isCompanyDelivery, setIsCompanyDelivery] = useState(false);
+
+  // Insurance (Health Insurance): optional split of payment
+  const [showInsuranceModal, setShowInsuranceModal] = useState(false);
+  const [selectedHealthInsurance, setSelectedHealthInsurance] = useState<HealthInsuranceOption | null>(null);
 
   // Hooks
   const { posDetails, loading: posLoading } = usePOSDetails();
@@ -779,17 +784,34 @@ export default function PaymentDialog({
     return 0; // Keep original order for non-default methods
   });
 
-  const paymentMethods: PaymentMethod[] = sortedModes.map((mode) => {
-    const { icon, color } = getIconAndColor(mode.type || "Default");
-    return {
-      id: mode.mode_of_payment,
-      name: mode.mode_of_payment,
-      icon,
-      color,
-      enabled: true,
-      amount: paymentAmounts[mode.mode_of_payment] || 0,
-    };
-  });
+  // Include insurance mode of payment in the list when insurance is selected but not in POS modes
+  const insuranceModeId = selectedHealthInsurance?.mode_of_payment || null;
+  const hasInsuranceModeInModes = insuranceModeId && modes.some((m) => m.mode_of_payment === insuranceModeId);
+  const paymentMethods: PaymentMethod[] = [
+    ...sortedModes.map((mode) => {
+      const { icon, color } = getIconAndColor(mode.type || "Default");
+      return {
+        id: mode.mode_of_payment,
+        name: mode.mode_of_payment,
+        icon,
+        color,
+        enabled: true,
+        amount: paymentAmounts[mode.mode_of_payment] || 0,
+      };
+    }),
+    ...(selectedHealthInsurance && insuranceModeId && !hasInsuranceModeInModes
+      ? [
+          {
+            id: insuranceModeId,
+            name: insuranceModeId,
+            icon: getIconAndColor("Default").icon,
+            color: "bg-teal-600",
+            enabled: true,
+            amount: paymentAmounts[insuranceModeId] || 0,
+          } as PaymentMethod,
+        ]
+      : []),
+  ];
 
   const getRoundTargetMethodId = (): string | null => {
     // If there's an active method and it exists in payment amounts, use it
@@ -1147,6 +1169,10 @@ export default function PaymentDialog({
       })(),
       redeemLoyaltyPoints: !!(redeemLoyaltyPoints && redeemLoyaltyPoints > 0),
       loyaltyPoints: redeemLoyaltyPoints ?? 0,
+      healthInsurance: selectedHealthInsurance?.name || null,
+      insuranceAmount: selectedHealthInsurance
+        ? roundCurrency((effectiveGrandTotal * (Number(selectedHealthInsurance.insurance_coverage_) || 0)) / 100)
+        : 0,
     };
 
     try {
@@ -1283,7 +1309,32 @@ export default function PaymentDialog({
     setDeliveryChargeAmount(null);
     setDeliveryChargeTaxAmount(null);
   };
-//eslint-disable-next-line @typescript-eslint/no-explicit-any
+
+  const handleInsuranceSelect = (insurance: HealthInsuranceOption | null) => {
+    setSelectedHealthInsurance(insurance);
+    setShowInsuranceModal(false);
+    if (!insurance || invoiceSubmitted || isProcessingPayment) return;
+    const coverage = Number(insurance.insurance_coverage_) || 0;
+    const insuranceMode = insurance.mode_of_payment || null;
+    if (!insuranceMode || coverage <= 0) return;
+    const grandTotal = effectiveGrandTotal;
+    const insuranceAmount = roundCurrency((grandTotal * coverage) / 100);
+    const patientAmount = roundCurrency(grandTotal - insuranceAmount);
+    const cashMode = modes.find((m) => (m.type || "").toLowerCase() === "cash")?.mode_of_payment
+      || modes[0]?.mode_of_payment;
+    if (!cashMode) return;
+    setPaymentAmounts({
+      [insuranceMode]: insuranceAmount,
+      [cashMode]: patientAmount,
+    });
+  };
+
+  const clearInsuranceSelection = () => {
+    if (invoiceSubmitted || isProcessingPayment) return;
+    setSelectedHealthInsurance(null);
+  };
+
+  //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleViewInvoice = (invoice: any) => {
     navigate(`/invoice/${invoice.name}`);
   };
@@ -1543,9 +1594,24 @@ export default function PaymentDialog({
                 {/* Payment Methods - Only show for B2C */}
                 {(isB2C || isB2B) && (
                   <div>
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                      Payment Methods
-                    </h2>
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                        Payment Methods
+                      </h2>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!selectedHealthInsurance}
+                          onChange={() => {
+                            if (selectedHealthInsurance) clearInsuranceSelection();
+                            else setShowInsuranceModal(true);
+                          }}
+                          disabled={invoiceSubmitted || isProcessingPayment}
+                          className="rounded border-gray-300 dark:border-gray-600 text-beveren-600 focus:ring-beveren-500"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">Insurance</span>
+                      </label>
+                    </div>
                     <div className="flex space-x-3 overflow-x-auto pb-2">
                       {paymentMethods.map((method) => (
                         <div
@@ -2290,9 +2356,24 @@ export default function PaymentDialog({
               <div className="space-y-6">
                 {/* Payment Methods */}
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                    Payment Methods
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                      Payment Methods
+                    </h3>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!selectedHealthInsurance}
+                        onChange={() => {
+                          if (selectedHealthInsurance) clearInsuranceSelection();
+                          else setShowInsuranceModal(true);
+                        }}
+                        disabled={invoiceSubmitted || isProcessingPayment}
+                        className="rounded border-gray-300 dark:border-gray-600 text-beveren-600 focus:ring-beveren-500"
+                      />
+                      <span className="text-sm text-gray-700 dark:text-gray-300">Insurance</span>
+                    </label>
+                  </div>
                   <div className="flex space-x-4 overflow-x-auto pb-2">
                     {paymentMethods.map((method) => (
                       <div
@@ -3029,6 +3110,15 @@ export default function PaymentDialog({
         isOpen={showDeliveryPersonnelModal}
         onClose={() => setShowDeliveryPersonnelModal(false)}
         onSelect={handleDeliveryPersonnelSelect}
+        grandTotal={effectiveGrandTotal}
+      />
+
+      {/* Insurance (Health Insurance) Modal */}
+      <InsuranceModal
+        isOpen={showInsuranceModal}
+        onClose={() => setShowInsuranceModal(false)}
+        onSelect={handleInsuranceSelect}
+        selectedInsurance={selectedHealthInsurance}
       />
     </div>
   );

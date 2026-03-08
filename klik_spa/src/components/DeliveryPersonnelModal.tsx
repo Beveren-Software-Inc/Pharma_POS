@@ -15,12 +15,15 @@ interface DeliveryPersonnelModalProps {
     distanceKm?: number | null;
     deliveryFee?: number | null;
   }) => void;
+  /** Current order grand total (before delivery). Used for amount-threshold check: if total >= threshold, delivery is free. */
+  grandTotal?: number | null;
 }
 
 export default function DeliveryPersonnelModal({
   isOpen,
   onClose,
   onSelect,
+  grandTotal,
 }: DeliveryPersonnelModalProps) {
   const { channels, loading: channelsLoading, error: channelsError } = useDeliveryChannels();
   const [selectedChannel, setSelectedChannel] = useState<string>("");
@@ -75,12 +78,13 @@ export default function DeliveryPersonnelModal({
         setDeliveryFeeLoading(true);
         setDeliveryFeeError(null);
 
-        const res = await fetch(
-          `/api/method/klik_pos.api.delivery_charges.get_delivery_fee?distance=${encodeURIComponent(
-            d.toString()
-          )}`,
-          { credentials: "include" }
-        );
+        let url = `/api/method/klik_pos.api.delivery_charges.get_delivery_fee?distance=${encodeURIComponent(
+          d.toString()
+        )}`;
+        if (grandTotal != null && !Number.isNaN(grandTotal)) {
+          url += `&grand_total=${encodeURIComponent(String(grandTotal))}`;
+        }
+        const res = await fetch(url, { credentials: "include" });
         const data = await res.json();
         if (cancelled) return;
         const msg = data?.message || {};
@@ -110,7 +114,7 @@ export default function DeliveryPersonnelModal({
     return () => {
       cancelled = true;
     };
-  }, [selectedPersonnel, distanceKm]);
+  }, [selectedPersonnel, distanceKm, grandTotal]);
 
   const filteredChannels = useMemo(() => {
     if (!channelSearchQuery.trim()) return channels;
