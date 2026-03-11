@@ -1579,6 +1579,14 @@ def validate_return_restrictions(invoice_doc):
 	return True, None
 
 
+def finalize_paid_amount(doc, method=None):
+	"""
+	Hook called on Sales Invoice on_submit.
+	Can be used to sync or finalize paid_amount/outstanding for POS invoices.
+	"""
+	pass
+
+
 def validate_sales_invoice_return(doc, method):
 	"""
 	Validate return restrictions before saving a Sales Invoice.
