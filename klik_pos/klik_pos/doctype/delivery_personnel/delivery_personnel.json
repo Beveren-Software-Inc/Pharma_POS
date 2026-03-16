@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "format:DP-{MM}-{####}",
+ "autoname": "field:delivery_personnel",
  "creation": "2026-01-05 10:41:53.425751",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -29,11 +29,11 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-01-21 14:34:49.366692",
+ "modified": "2026-03-08 12:47:06.583885",
  "modified_by": "Administrator",
  "module": "KLiK PoS",
  "name": "Delivery Personnel",
- "naming_rule": "Expression",
+ "naming_rule": "By fieldname",
  "owner": "Administrator",
  "permissions": [
   {

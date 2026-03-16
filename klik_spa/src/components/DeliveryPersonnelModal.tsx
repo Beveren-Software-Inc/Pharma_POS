@@ -15,12 +15,15 @@ interface DeliveryPersonnelModalProps {
     distanceKm?: number | null;
     deliveryFee?: number | null;
   }) => void;
+  /** Current order grand total (before delivery). Used for amount-threshold check: if total >= threshold, delivery is free. */
+  grandTotal?: number | null;
 }
 
 export default function DeliveryPersonnelModal({
   isOpen,
   onClose,
   onSelect,
+  grandTotal,
 }: DeliveryPersonnelModalProps) {
   const { channels, loading: channelsLoading, error: channelsError } = useDeliveryChannels();
   const [selectedChannel, setSelectedChannel] = useState<string>("");
@@ -75,12 +78,13 @@ export default function DeliveryPersonnelModal({
         setDeliveryFeeLoading(true);
         setDeliveryFeeError(null);
 
-        const res = await fetch(
-          `/api/method/klik_pos.api.delivery_charges.get_delivery_fee?distance=${encodeURIComponent(
-            d.toString()
-          )}`,
-          { credentials: "include" }
-        );
+        let url = `/api/method/klik_pos.api.delivery_charges.get_delivery_fee?distance=${encodeURIComponent(
+          d.toString()
+        )}`;
+        if (grandTotal != null && !Number.isNaN(grandTotal)) {
+          url += `&grand_total=${encodeURIComponent(String(grandTotal))}`;
+        }
+        const res = await fetch(url, { credentials: "include" });
         const data = await res.json();
         if (cancelled) return;
         const msg = data?.message || {};
@@ -110,7 +114,7 @@ export default function DeliveryPersonnelModal({
     return () => {
       cancelled = true;
     };
-  }, [selectedPersonnel, distanceKm]);
+  }, [selectedPersonnel, distanceKm, grandTotal]);
 
   const filteredChannels = useMemo(() => {
     if (!channelSearchQuery.trim()) return channels;
@@ -192,16 +196,11 @@ export default function DeliveryPersonnelModal({
   const handleChannelInputFocus = () => setIsChannelDropdownOpen(true);
   const handlePersonnelInputFocus = () => setIsPersonnelDropdownOpen(true);
 
-  const handleChannelInputBlur = (e: React.FocusEvent) => {
-    // Delay close to allow click on dropdown item to register (like customer/patient search)
+  const handleChannelInputBlur = () => {
+    // As soon as focus leaves the input (cursor outside), hide the Delivery Channel dropdown
     setTimeout(() => {
-      const activeElement = document.activeElement;
-      const wrapper = e.currentTarget.closest(".relative")?.parentElement;
-      const dropdown = wrapper?.querySelector(".absolute");
-      if (!dropdown?.contains(activeElement)) {
-        setIsChannelDropdownOpen(false);
-      }
-    }, 200);
+      setIsChannelDropdownOpen(false);
+    }, 0);
   };
 
   const handlePersonnelInputBlur = (e: React.FocusEvent) => {
@@ -283,7 +282,11 @@ export default function DeliveryPersonnelModal({
                           <button
                             key={c.name}
                             type="button"
-                            onClick={() => handleSelectChannel(c.name, c.delivery_via || c.name)}
+                            onMouseDown={(e) => {
+                              // Use mousedown so selection happens before input blur closes the dropdown
+                              e.preventDefault();
+                              handleSelectChannel(c.name, c.delivery_via || c.name);
+                            }}
                             className={`w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
                               selectedChannel === c.name
                                 ? "bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400"

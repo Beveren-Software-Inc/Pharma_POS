@@ -58,7 +58,9 @@ import {
   type EmailTemplate
 } from "../services/emailTemplateService";
 import DeliveryPersonnelModal from "./DeliveryPersonnelModal";
+import InsuranceModal, { type HealthInsuranceOption } from "./InsuranceModal";
 import { useDeliveryPersonnel } from "../hooks/useDeliveryPersonnel";
+import { useDeliveryChannels } from "../hooks/useDeliveryChannels";
 import { useItemTaxTemplateRates } from "../hooks/useItemTaxTemplateRates";
 import { useFreeItemTaxAmount } from "../hooks/useFreeItemTaxAmount";
 
@@ -199,12 +201,19 @@ export default function PaymentDialog({
   const [deliveryDistanceKm, setDeliveryDistanceKm] = useState<number | null>(null);
   const [deliveryChargeAmount, setDeliveryChargeAmount] = useState<number | null>(null);
   const [deliveryChargeTaxAmount, setDeliveryChargeTaxAmount] = useState<number | null>(null);
+  // When true, this is a company delivery via channel only (pay later, no POS payment now)
+  const [isCompanyDelivery, setIsCompanyDelivery] = useState(false);
+
+  // Insurance (Health Insurance): optional split of payment
+  const [showInsuranceModal, setShowInsuranceModal] = useState(false);
+  const [selectedHealthInsurance, setSelectedHealthInsurance] = useState<HealthInsuranceOption | null>(null);
 
   // Hooks
   const { posDetails, loading: posLoading } = usePOSDetails();
   const { modes, isLoading, error } = usePaymentModes(typeof posDetails?.name === 'string' ? posDetails.name : '');
   const { salesTaxCharges, defaultTax } = useSalesTaxCharges();
   const { personnel: deliveryPersonnelList } = useDeliveryPersonnel();
+  const { channels: deliveryChannels } = useDeliveryChannels();
   const navigate = useNavigate();
 
   // Determine if this is B2B business type
@@ -600,7 +609,7 @@ export default function PaymentDialog({
   }, [isOpen, defaultTax, selectedSalesTaxCharges]);
 
   useEffect(() => {
-    if (isOpen && modes.length > 0) {
+    if (isOpen && modes.length > 0 && !isCompanyDelivery) {
       const defaultMode = modes.find((mode) => mode.default === 1);
       if (defaultMode && Object.keys(paymentAmounts).length === 0) {
         const defaultAmount = parseFloat(effectiveGrandTotal.toFixed(3));
@@ -608,7 +617,7 @@ export default function PaymentDialog({
         setPaymentAmounts({ [defaultMode.mode_of_payment]: defaultAmount });
       }
     }
-  }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C]);
+  }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery]);
 
   useEffect(() => {
 
@@ -719,6 +728,50 @@ export default function PaymentDialog({
     };
   }, [deliveryChargeAmount]);
 
+  // When delivery personnel is selected (paid now) and delivery charges change the grand total,
+  // keep the POS payment in sync by auto-filling the default payment method with the latest
+  // effective grand total. This avoids having to click the payment method button again.
+  useEffect(() => {
+    if (!isOpen || isCompanyDelivery) return;
+    if (!selectedDeliveryPersonnel) return;
+    if (modes.length === 0) return;
+
+    const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+    if (!defaultMode) return;
+
+    const amount = parseFloat(effectiveGrandTotal.toFixed(3));
+    setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
+  }, [
+    isOpen,
+    isCompanyDelivery,
+    selectedDeliveryPersonnel,
+    modes,
+    effectiveGrandTotal,
+  ]);
+
+  // When a delivery personnel is selected (paid now), auto-fill payment with full amount
+  // including delivery charges, but only if there is no existing non-zero payment.
+  useEffect(() => {
+    if (!selectedDeliveryPersonnel || isCompanyDelivery) return;
+    if (!isOpen || modes.length === 0) return;
+
+    const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
+    if (hasAnyPayment) return;
+
+    const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+    if (!defaultMode) return;
+
+    const amount = parseFloat(effectiveGrandTotal.toFixed(3));
+    setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
+  }, [
+    selectedDeliveryPersonnel,
+    isCompanyDelivery,
+    isOpen,
+    modes,
+    paymentAmounts,
+    effectiveGrandTotal,
+  ]);
+
   if (!isOpen) return null;
   if (isLoading || posLoading) return <div className="p-6">Loading...</div>;
   if (error) return <div className="p-6 text-red-500">Error: {error}</div>;
@@ -731,17 +784,34 @@ export default function PaymentDialog({
     return 0; // Keep original order for non-default methods
   });
 
-  const paymentMethods: PaymentMethod[] = sortedModes.map((mode) => {
-    const { icon, color } = getIconAndColor(mode.type || "Default");
-    return {
-      id: mode.mode_of_payment,
-      name: mode.mode_of_payment,
-      icon,
-      color,
-      enabled: true,
-      amount: paymentAmounts[mode.mode_of_payment] || 0,
-    };
-  });
+  // Include insurance mode of payment in the list when insurance is selected but not in POS modes
+  const insuranceModeId = selectedHealthInsurance?.mode_of_payment || null;
+  const hasInsuranceModeInModes = insuranceModeId && modes.some((m) => m.mode_of_payment === insuranceModeId);
+  const paymentMethods: PaymentMethod[] = [
+    ...sortedModes.map((mode) => {
+      const { icon, color } = getIconAndColor(mode.type || "Default");
+      return {
+        id: mode.mode_of_payment,
+        name: mode.mode_of_payment,
+        icon,
+        color,
+        enabled: true,
+        amount: paymentAmounts[mode.mode_of_payment] || 0,
+      };
+    }),
+    ...(selectedHealthInsurance && insuranceModeId && !hasInsuranceModeInModes
+      ? [
+          {
+            id: insuranceModeId,
+            name: insuranceModeId,
+            icon: getIconAndColor("Default").icon,
+            color: "bg-teal-600",
+            enabled: true,
+            amount: paymentAmounts[insuranceModeId] || 0,
+          } as PaymentMethod,
+        ]
+      : []),
+  ];
 
   const getRoundTargetMethodId = (): string | null => {
     // If there's an active method and it exists in payment amounts, use it
@@ -1099,6 +1169,10 @@ export default function PaymentDialog({
       })(),
       redeemLoyaltyPoints: !!(redeemLoyaltyPoints && redeemLoyaltyPoints > 0),
       loyaltyPoints: redeemLoyaltyPoints ?? 0,
+      healthInsurance: selectedHealthInsurance?.name || null,
+      insuranceAmount: selectedHealthInsurance
+        ? roundCurrency((effectiveGrandTotal * (Number(selectedHealthInsurance.insurance_coverage_) || 0)) / 100)
+        : 0,
     };
 
     try {
@@ -1175,6 +1249,47 @@ export default function PaymentDialog({
         ? selection.deliveryFee
         : null
     );
+    const hasPersonnel = !!selection.personnelName;
+    const hasChannel = !!selection.deliveryVia;
+
+    // Company delivery: channel selected, no personnel -> pay later, clear all payments
+    if (hasChannel && !hasPersonnel) {
+      setIsCompanyDelivery(true);
+      // Try to use Delivery Channel's mode_of_payment; fall back to default POS mode if missing.
+      const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
+      let mop = channel?.mode_of_payment || null;
+      if (!mop && modes.length > 0) {
+        const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+        mop = defaultMode?.mode_of_payment || null;
+      }
+
+      if (mop) {
+        // Create one payment row with amount 0.0 to satisfy ERPNext POS validation
+        setPaymentAmounts({ [mop]: 0 });
+      } else {
+        // As a safety net, keep payments empty if we truly have no Mode of Payment to use
+        setPaymentAmounts({});
+      }
+      setRoundOffAmount(0);
+      setRoundOffInput("0.000");
+    } else {
+      // Normal (immediate) delivery: allow payments
+      setIsCompanyDelivery(false);
+
+      // If we now have a delivery personnel (paid now) and no existing payments,
+      // auto-fill default payment method with the full effective grand total (incl. delivery).
+      if (hasPersonnel && isOpen && modes.length > 0) {
+        const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
+        if (!hasAnyPayment) {
+          const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+          if (defaultMode) {
+            const amount = parseFloat(effectiveGrandTotal.toFixed(3));
+            setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
+          }
+        }
+      }
+    }
+
     setShowDeliveryPersonnelModal(false);
   };
 
@@ -1194,7 +1309,32 @@ export default function PaymentDialog({
     setDeliveryChargeAmount(null);
     setDeliveryChargeTaxAmount(null);
   };
-//eslint-disable-next-line @typescript-eslint/no-explicit-any
+
+  const handleInsuranceSelect = (insurance: HealthInsuranceOption | null) => {
+    setSelectedHealthInsurance(insurance);
+    setShowInsuranceModal(false);
+    if (!insurance || invoiceSubmitted || isProcessingPayment) return;
+    const coverage = Number(insurance.insurance_coverage_) || 0;
+    const insuranceMode = insurance.mode_of_payment || null;
+    if (!insuranceMode || coverage <= 0) return;
+    const grandTotal = effectiveGrandTotal;
+    const insuranceAmount = roundCurrency((grandTotal * coverage) / 100);
+    const patientAmount = roundCurrency(grandTotal - insuranceAmount);
+    const cashMode = modes.find((m) => (m.type || "").toLowerCase() === "cash")?.mode_of_payment
+      || modes[0]?.mode_of_payment;
+    if (!cashMode) return;
+    setPaymentAmounts({
+      [insuranceMode]: insuranceAmount,
+      [cashMode]: patientAmount,
+    });
+  };
+
+  const clearInsuranceSelection = () => {
+    if (invoiceSubmitted || isProcessingPayment) return;
+    setSelectedHealthInsurance(null);
+  };
+
+  //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleViewInvoice = (invoice: any) => {
     navigate(`/invoice/${invoice.name}`);
   };
@@ -1263,7 +1403,8 @@ export default function PaymentDialog({
 
   const formatCurrency = (amount: number) => {
     return `${currencySymbol} ${amount.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
+      minimumFractionDigits: 3,
+      maximumFractionDigits: 3,
     })}`;
   };
 
@@ -1454,9 +1595,24 @@ export default function PaymentDialog({
                 {/* Payment Methods - Only show for B2C */}
                 {(isB2C || isB2B) && (
                   <div>
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                      Payment Methods
-                    </h2>
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                        Payment Methods
+                      </h2>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!selectedHealthInsurance}
+                          onChange={() => {
+                            if (selectedHealthInsurance) clearInsuranceSelection();
+                            else setShowInsuranceModal(true);
+                          }}
+                          disabled={invoiceSubmitted || isProcessingPayment}
+                          className="rounded border-gray-300 dark:border-gray-600 text-beveren-600 focus:ring-beveren-500"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">Insurance</span>
+                      </label>
+                    </div>
                     <div className="flex space-x-3 overflow-x-auto pb-2">
                       {paymentMethods.map((method) => (
                         <div
@@ -1489,7 +1645,7 @@ export default function PaymentDialog({
                             </label>
                             <input
                               type="number"
-                              value={method.amount.toFixed(3) || ""}
+                              value={method.amount.toFixed(3) || "0.000"}
                               onChange={(e) =>
                                 handlePaymentAmountChange(
                                   method.id,
@@ -1570,7 +1726,7 @@ export default function PaymentDialog({
                   )}
                   <div className="flex justify-between">
                     <span className="text-gray-600 dark:text-gray-400">
-                      Tax ({calculations.selectedTax?.rate}%{" "}
+                      VAT ({calculations.selectedTax?.rate}%{" "}
                       {calculations.isInclusive ? "Incl." : "Excl."})
                     </span>
                     <span
@@ -2201,9 +2357,24 @@ export default function PaymentDialog({
               <div className="space-y-6">
                 {/* Payment Methods */}
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                    Payment Methods
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                      Payment Methods
+                    </h3>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!selectedHealthInsurance}
+                        onChange={() => {
+                          if (selectedHealthInsurance) clearInsuranceSelection();
+                          else setShowInsuranceModal(true);
+                        }}
+                        disabled={invoiceSubmitted || isProcessingPayment}
+                        className="rounded border-gray-300 dark:border-gray-600 text-beveren-600 focus:ring-beveren-500"
+                      />
+                      <span className="text-sm text-gray-700 dark:text-gray-300">Insurance</span>
+                    </label>
+                  </div>
                   <div className="flex space-x-4 overflow-x-auto pb-2">
                     {paymentMethods.map((method) => (
                       <div
@@ -2254,7 +2425,7 @@ export default function PaymentDialog({
                           <input
                             type="number"
                             step="0.01"
-                            value={method.amount || ""}
+                              value={method.amount.toFixed(3)}
                             onChange={(e) => {
                               setActiveMethodId(method.id);
                               const inputValue = e.target.value;
@@ -2340,7 +2511,7 @@ export default function PaymentDialog({
                 {isItemTaxTemplateMode && (
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                    Tax (from Item Tax Templates)
+                    VAT (from Item Tax Templates)
                   </h3>
                   <div className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-gray-900 dark:text-white">
                     {formatCurrency(calculations.taxAmount)}
@@ -2409,7 +2580,7 @@ export default function PaymentDialog({
                       )}
                       <div className="flex justify-between">
                         <span className="text-gray-600 dark:text-gray-400">
-                          Tax ({calculations.selectedTax?.rate}%{" "}
+                          VAT ({calculations.selectedTax?.rate}%{" "}
                           {calculations.isInclusive ? "Incl." : "Excl."})
                         </span>
                         <span
@@ -2649,7 +2820,7 @@ export default function PaymentDialog({
                   )}
                   <div className="flex justify-between">
                     <span className="text-gray-600 dark:text-gray-400">
-                      Tax ({calculations.selectedTax?.rate}%{" "}
+                      VAT ({calculations.selectedTax?.rate}%{" "}
                       {calculations.isInclusive ? "Incl." : "Excl."})
                     </span>
                     <span
@@ -2940,6 +3111,15 @@ export default function PaymentDialog({
         isOpen={showDeliveryPersonnelModal}
         onClose={() => setShowDeliveryPersonnelModal(false)}
         onSelect={handleDeliveryPersonnelSelect}
+        grandTotal={effectiveGrandTotal}
+      />
+
+      {/* Insurance (Health Insurance) Modal */}
+      <InsuranceModal
+        isOpen={showInsuranceModal}
+        onClose={() => setShowInsuranceModal(false)}
+        onSelect={handleInsuranceSelect}
+        selectedInsurance={selectedHealthInsurance}
       />
     </div>
   );

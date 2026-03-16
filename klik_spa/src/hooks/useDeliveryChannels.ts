@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export interface DeliveryChannel {
   name: string;
   delivery_via?: string;
+  mode_of_payment?: string;
 }
 
 export function useDeliveryChannels() {

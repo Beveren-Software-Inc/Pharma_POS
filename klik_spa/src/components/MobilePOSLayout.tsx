@@ -121,6 +121,19 @@ export default function MobilePOSLayout({
   const handleAddToCart = async (item: MenuItem) => {
     if (!item || item.available <= 0) return
 
+    const allowDuplicatePos =
+      posDetails?.custom_allow_duplicate_items_in_pos === 1 ||
+      posDetails?.custom_allow_duplicate_items_in_pos === true ||
+      posDetails?.custom_allow_duplicate_items_in_pos === "1"
+    const itemHasSerialOrBatch =
+      item.has_serial_no === 1 ||
+      item.has_serial_no === true ||
+      item.has_serial_no === "1" ||
+      item.has_batch_no === 1 ||
+      item.has_batch_no === true ||
+      item.has_batch_no === "1"
+    const allowDuplicateForItem = allowDuplicatePos && itemHasSerialOrBatch
+
     const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : item.uom
     let priceToUse = item.price
 
@@ -141,6 +154,9 @@ export default function MobilePOSLayout({
       uom: uomToUse,
       item_code: item.id,
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
+      has_serial_no: item.has_serial_no,
+      has_batch_no: item.has_batch_no,
+      allowDuplicate: allowDuplicateForItem,
     })
   }
 

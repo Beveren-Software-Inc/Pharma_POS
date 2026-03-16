@@ -7,6 +7,8 @@ export interface ReturnItem {
   returned_qty: number;
   available_qty: number;
   return_qty?: number;
+  /** Original Sales Invoice Item doc name; used so backend can match lines 1:1 when same item_code appears twice (e.g. paid + free). */
+  prevdoc_detail_docname?: string;
 }
 
 export interface InvoiceForReturn {
@@ -104,23 +106,28 @@ export async function createPartialReturn(
   invoiceName: string,
   returnItems: ReturnItem[],
   paymentMethod?: string,
-  returnAmount?: number
+  returnAmount?: number,
+  expectedReturnAmount?: number
 ): Promise<{success: boolean; returnInvoice?: string; message?: string; error?: string}> {
 
   const csrfToken = window.csrf_token;
   try {
+    const body: Record<string, unknown> = {
+      invoice_name: invoiceName,
+      return_items: returnItems,
+      payment_method: paymentMethod || 'Cash',
+      return_amount: returnAmount ?? 0
+    };
+    if (expectedReturnAmount != null) {
+      body.expected_return_amount = expectedReturnAmount;
+    }
     const response = await fetch(`/api/method/klik_pos.api.sales_invoice.create_partial_return`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Frappe-CSRF-Token': csrfToken
       },
-      body: JSON.stringify({
-        invoice_name: invoiceName,
-        return_items: returnItems,
-        payment_method: paymentMethod || 'Cash',
-        return_amount: returnAmount || 0
-      }),
+      body: JSON.stringify(body),
        credentials: 'include'
     });
 

@@ -22,6 +22,14 @@ export interface CartItem {
   conversion_factor?: number
   item_tax_template?: string | null
   additional_amount?: number
+  // Stock tracking flags / behaviour
+  has_serial_no?: number | boolean
+  has_batch_no?: number | boolean
+  /**
+   * When true, clicking the same product should create a new cart line
+   * instead of merging quantities (used for serial / batch managed items).
+   */
+  allowDuplicate?: boolean
 }
 
 export interface MenuItem {
@@ -38,6 +46,8 @@ export interface MenuItem {
   uom?: string
   currency_symbol?: string
   barcode?: string
+  has_serial_no?: number | boolean
+  has_batch_no?: number | boolean
 }
 
 export interface Category {

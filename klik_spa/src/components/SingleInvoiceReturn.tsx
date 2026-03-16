@@ -203,7 +203,8 @@ export default function SingleInvoiceReturn({
           amount,
           returned_qty: returnedQty,
           available_qty: Math.round((qty - returnedQty) * 1000) / 1000,  // Round to 3 decimal places (e.g. BHD)
-          return_qty: Math.round((qty - returnedQty) * 1000) / 1000  // Round to 3 decimal places (e.g. BHD)
+          return_qty: Math.round((qty - returnedQty) * 1000) / 1000,  // Round to 3 decimal places (e.g. BHD)
+          prevdoc_detail_docname: (item as { name?: string }).name  // Sales Invoice Item doc name for 1:1 matching when same item_code appears twice (paid + free)
         });
       }
 
@@ -260,7 +261,13 @@ export default function SingleInvoiceReturn({
       };
 
 
-      const result = await createPartialReturn(invoiceName, itemsToReturn, selectedPaymentMethod, returnAmount);
+      const result = await createPartialReturn(
+        invoiceName,
+        itemsToReturn,
+        selectedPaymentMethod,
+        returnAmount,
+        returnAmount  // expected_return_amount so backend does not treat tax as roundoff on full return
+      );
 
       if (result.success) {
         toast.success(`Return created successfully (${selectedPaymentMethod})`);
@@ -281,6 +288,11 @@ export default function SingleInvoiceReturn({
     (sum, item) => sum + (item.return_qty || 0) * item.rate,
     0
   );
+
+  const totalItemsValue = returnItems.reduce((sum, item) => sum + item.qty * item.rate, 0);
+  const isFullReturn =
+    totalItemsValue <= 0 ||
+    Math.abs(totalReturnAmount - totalItemsValue) < 0.01;
 
   const hasItemsToReturn = returnItems.some(item => (item.return_qty || 0) > 0);
 
@@ -342,14 +354,14 @@ export default function SingleInvoiceReturn({
                   </button>
                 </div>
                 <div className="text-right">
-                  {originalInvoicePaidAmount > 0 && totalReturnAmount !== returnAmount ? (
+                  {originalInvoicePaidAmount > 0 && !isFullReturn && totalReturnAmount !== returnAmount ? (
                     <div className="text-xs font-medium text-gray-700 dark:text-gray-300">
                       <div className="flex justify-between items-center">
-                        <span>Total Return Amount:</span>
+                        <span>Items total:</span>
                         <span>{formatCurrency(totalReturnAmount, currency)}</span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span>Paid Amount:</span>
+                        <span>Refund amount:</span>
                         <span>{formatCurrency(returnAmount, currency)}</span>
                       </div>
                       <div className="flex justify-between items-center">
@@ -360,14 +372,18 @@ export default function SingleInvoiceReturn({
                       </div>
                     </div>
                   ) : (
-                    <div className="text-lg font-bold text-black-600 dark:text-orange-400">
-                      {formatCurrency(totalReturnAmount, currency)}
-                    </div>
-                  )}
-                  {originalInvoicePaidAmount > 0 && totalReturnAmount === returnAmount && (
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Customer Paid: {formatCurrency(originalInvoicePaidAmount, currency)}
-                    </div>
+                    <>
+                      <div className="text-lg font-bold text-black-600 dark:text-orange-400">
+                        {formatCurrency(returnAmount, currency)}
+                      </div>
+                      {originalInvoicePaidAmount > 0 && (
+                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          {isFullReturn
+                            ? `Refund amount (incl. tax) • Customer paid: ${formatCurrency(originalInvoicePaidAmount, currency)}`
+                            : `Customer paid: ${formatCurrency(originalInvoicePaidAmount, currency)}`}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

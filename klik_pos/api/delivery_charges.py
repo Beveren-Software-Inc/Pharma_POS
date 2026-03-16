@@ -3,46 +3,40 @@ from frappe.utils import flt
 
 
 @frappe.whitelist()
-def get_delivery_fee(distance, company=None):
+def get_delivery_fee(distance, company=None, grand_total=None):
 	"""Return the configured delivery fee for a given distance in km.
 
 	Bands are defined in the single doctype "Delivery Charges" via the child table
 	"Delivery Charges Detail" with fields:
 	- distance_threshold (km)
-	- amount_threshold (reserved for future use)
-	- fee_charges (fee to apply)
+	- amount (Amount Threshold): if grand_total >= amount, delivery is free for this band
+	- delivery_fee (fee to apply when grand_total < amount)
 
-	Logic (distance bands):
-	- Rows are sorted by distance_threshold ascending.
-	- For the first row (e.g. 3 km):
-	  * distance < 3       -> 0 fee
-	  * distance == 3      -> fee_charges of that row
-	- For each subsequent row i with threshold T_i and previous T_{i-1}:
-	  * T_{i-1} < distance <= T_i -> fee_charges of row i
-	- If distance is greater than the last threshold:
-	  * No automatic fee; cashier must enter manually.
+	Logic:
+	1. Find the row by distance (bands sorted by distance_threshold ascending):
+	   - distance < first_threshold -> 0 fee
+	   - first_threshold <= distance <= row[i].distance_threshold -> use row i
+	   - distance > last threshold -> requires_manual
+	2. For the matched row, if amount threshold is set and grand_total is provided:
+	   - If grand_total >= amount_threshold -> free delivery (fee 0)
+	   - Else -> charge delivery_fee from that row
 	"""
 
 	distance = flt(distance or 0)
 	if distance <= 0:
 		return {"success": True, "fee": 0.0, "requires_manual": False}
 
-	company = company or frappe.defaults.get_user_default("Company")
+	grand_total = flt(grand_total) if grand_total is not None else None
 
-	filters = {}
-	if company:
-		filters["company"] = company
-
-	name = frappe.db.get_value("Delivery Charges", filters, "name")
-	if not name:
+	try:
+		doc = frappe.get_single("Delivery Charges")
+	except Exception:
 		return {
 			"success": False,
 			"fee": 0.0,
 			"requires_manual": True,
 			"error": "Delivery Charges configuration not found.",
 		}
-
-	doc = frappe.get_doc("Delivery Charges", name)
 	if not getattr(doc, "delivery_fees", None):
 		return {
 			"success": False,
@@ -60,29 +54,34 @@ def get_delivery_fee(distance, company=None):
 			"error": "No delivery fee bands configured.",
 		}
 
-	def _fee_for_row(row):
-		return flt(getattr(row, "delivery_fee", 0) or 0)
+	def _fee_for_row(row, order_total):
+		"""Apply amount threshold: if order_total >= row.amount, free delivery; else delivery_fee."""
+		fee = flt(getattr(row, "delivery_fee", 0) or 0)
+		amount_threshold = flt(getattr(row, "amount", 0) or 0)
+
+		if order_total is not None and amount_threshold > 0 and order_total >= amount_threshold:
+			return 0.0
+		return fee
 
 	first_threshold = flt(getattr(rows[0], "distance_threshold", 0) or 0)
 
-	# Anything below the first threshold: no charge
 	if distance < first_threshold:
 		return {"success": True, "fee": 0.0, "requires_manual": False}
 
-	# Exactly at the first threshold: apply its fee
 	if distance == first_threshold:
-		return {"success": True, "fee": _fee_for_row(rows[0]), "requires_manual": False}
-	
+		fee = _fee_for_row(rows[0], grand_total)
+		return {"success": True, "fee": fee, "requires_manual": False}
+
 	prev_threshold = first_threshold
+	
 	for row in rows[1:]:
 		current_threshold = flt(getattr(row, "distance_threshold", 0) or 0)
-		print(f"Checking distance {distance} against thresholds {prev_threshold} and {current_threshold}")
 		if prev_threshold < distance <= current_threshold:
-			print("here its working",row.distance_threshold,row.delivery_fee)
-			return {"success": True, "fee": _fee_for_row(row), "requires_manual": False}
+			fee = _fee_for_row(row, grand_total)
+			print("The fee is like", grand_total)
+			return {"success": True, "fee": fee, "requires_manual": False}
 		prev_threshold = current_threshold
 
-	# Above last threshold: manual entry required
 	return {"success": True, "fee": 0.0, "requires_manual": True}
 
 
@@ -102,7 +101,6 @@ def _ensure_delivery_charge_item():
 	if item_code:
 		return item_code
 
-	# Pick a reasonable Item Group
 	item_group = frappe.db.get_value("Item Group", {"item_group_name": "Services"}, "name")
 	if not item_group:
 		item_group = frappe.db.get_value("Item Group", {"is_group": 0}, "name") or "All Item Groups"
@@ -135,7 +133,6 @@ def get_delivery_charge_tax_amount(amount, company=None):
 
 	item_code = _ensure_delivery_charge_item()
 
-	# STEP 1: get Item Tax rows from Item child table
 	item_tax_rows = frappe.get_all(
 		"Item Tax",
 		filters={"parent": item_code},
@@ -149,7 +146,6 @@ def get_delivery_charge_tax_amount(amount, company=None):
 
 	total_rate = 0.0
 
-	# STEP 2: fetch tax rates from each template
 	for row in item_tax_rows:
 		if not row.item_tax_template:
 			continue
@@ -167,11 +163,6 @@ def get_delivery_charge_tax_amount(amount, company=None):
 		return {"success": True, "tax": 0.0}
 
 	tax_amount = amount * total_rate / 100.0
-
-	print(
-		f"Calculated tax amount {tax_amount} "
-		f"for delivery charge {amount} with total rate {total_rate}%"
-	)
 
 	return {
 		"success": True,

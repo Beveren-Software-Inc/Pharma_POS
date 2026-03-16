@@ -70,7 +70,9 @@ fixtures = [
 					"POS Profile-custom_allow_additional_amounts",
 					"Sales Invoice-custom_remarks",
 					"Sales Invoice-custom_remark",
-     "Item-custom_is_additional_charges"
+					"Item-custom_is_additional_charges",
+					"POS Profile-custom_allow_duplicate_items_in_pos",
+     "POS Profile-custom_autofetch_batchserial_",
 				),
 			]
 		],
@@ -86,12 +88,19 @@ fixtures = [
 
 doc_events = {
 	"Sales Invoice": {
+		"before_validate": [
+			"klik_pos.api.sales_invoice.ensure_negative_payments_for_pos_return",
+		],
 		"validate": [
 			"klik_pos.api.sales_invoice.enforce_zero_rate_for_free_items",
 			"klik_pos.api.sales_invoice.set_base_roundoff_amount",
 			"klik_pos.api.sales_invoice.set_grand_total_with_roundoff",
 			"klik_pos.api.sales_invoice.set_total_taxes_for_item_template",
 			"klik_pos.api.sales_invoice.validate_sales_invoice_return",
+		],
+		"on_submit": [
+			"klik_pos.api.sales_invoice.finalize_paid_amount",
+			"klik_pos.api.delivery_compensation.create_compensation_for_sales_invoice",
 		],
 		
 		# "before_save": [

@@ -111,7 +111,11 @@ export const useCartStore = create<CartState>()(
 
       addToCart: async (item) => {
         const state = get();
-        const existingItem = state.cartItems.find((cartItem) => cartItem.id === item.id);
+        // Only merge into an existing line when duplicates are NOT explicitly allowed.
+        // For serial / batch-managed items (allowDuplicate=true), always create a new row.
+        const existingItem = !item.allowDuplicate
+          ? state.cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
+          : undefined;
 
         // Check if item has available quantity
         if (item.available !== undefined && item.available <= 0) {
@@ -166,7 +170,9 @@ export const useCartStore = create<CartState>()(
 
       addToCartWithQuantity: async (item, quantity) => {
         const state = get();
-        const existingItem = state.cartItems.find((cartItem) => cartItem.id === item.id);
+        const existingItem = !item.allowDuplicate
+          ? state.cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
+          : undefined;
 
         // Check if item has available quantity
         if (item.available !== undefined && item.available < quantity) {
