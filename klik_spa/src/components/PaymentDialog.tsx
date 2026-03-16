@@ -1725,7 +1725,7 @@ export default function PaymentDialog({
                   )}
                   <div className="flex justify-between">
                     <span className="text-gray-600 dark:text-gray-400">
-                      Tax ({calculations.selectedTax?.rate}%{" "}
+                      VAT ({calculations.selectedTax?.rate}%{" "}
                       {calculations.isInclusive ? "Incl." : "Excl."})
                     </span>
                     <span
@@ -2510,7 +2510,7 @@ export default function PaymentDialog({
                 {isItemTaxTemplateMode && (
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                    Tax (from Item Tax Templates)
+                    VAT (from Item Tax Templates)
                   </h3>
                   <div className="px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg font-medium text-gray-900 dark:text-white">
                     {formatCurrency(calculations.taxAmount)}
@@ -2579,7 +2579,7 @@ export default function PaymentDialog({
                       )}
                       <div className="flex justify-between">
                         <span className="text-gray-600 dark:text-gray-400">
-                          Tax ({calculations.selectedTax?.rate}%{" "}
+                          VAT ({calculations.selectedTax?.rate}%{" "}
                           {calculations.isInclusive ? "Incl." : "Excl."})
                         </span>
                         <span
@@ -2819,7 +2819,7 @@ export default function PaymentDialog({
                   )}
                   <div className="flex justify-between">
                     <span className="text-gray-600 dark:text-gray-400">
-                      Tax ({calculations.selectedTax?.rate}%{" "}
+                      VAT ({calculations.selectedTax?.rate}%{" "}
                       {calculations.isInclusive ? "Incl." : "Excl."})
                     </span>
                     <span
