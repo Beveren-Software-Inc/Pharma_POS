@@ -131,41 +131,55 @@ export default function RetailPOSLayout() {
     return { isScale: true as const, baseBarcode: base, quantity: qty }
   }, [scalePrefix])
 
-  const addOrIncreaseWithQuantity = useCallback(async (item: MenuItem, quantity: number) => {
-    const existingItem = cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
+  /** Returns the newly added cart item when a new line was created (for batch/serial targeting). */
+  const addOrIncreaseWithQuantity = useCallback(async (item: MenuItem, quantity: number): Promise<{ cartLineId?: string; id: string } | void> => {
+    const allowDuplicatePos =
+      posDetails?.custom_allow_duplicate_items_in_pos === 1 ||
+      posDetails?.custom_allow_duplicate_items_in_pos === true ||
+      posDetails?.custom_allow_duplicate_items_in_pos === '1'
+    const itemHasSerialOrBatch =
+      item.has_serial_no === 1 || item.has_serial_no === true || item.has_serial_no === '1' ||
+      item.has_batch_no === 1 || item.has_batch_no === true || item.has_batch_no === '1'
+    const allowDuplicateForItem = allowDuplicatePos && itemHasSerialOrBatch
+    const existingItem = !allowDuplicateForItem
+      ? cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
+      : undefined
     if (existingItem) {
       updateQuantity(item.id, existingItem.quantity + quantity)
-    } else {
-      const uomToUse = resolveUomForCart(item)
-      let priceToUse = item.price
-
-      // If we override the UOM in pharmacy mode and no customer is selected,
-      // fetch the base price for that UOM so the cart starts with the correct rate.
-      if (isPharmacy && pharmacyDefaultUom && !selectedCustomer && pharmacyDefaultUom !== item.uom) {
-        const priceInfo = await getItemPriceForCustomer(item.id, undefined, pharmacyDefaultUom)
-        if (priceInfo?.success && priceInfo.price > 0) {
-          priceToUse = priceInfo.price
-        }
+      return
+    }
+    const uomToUse = resolveUomForCart(item)
+    let priceToUse = item.price
+    if (isPharmacy && pharmacyDefaultUom && !selectedCustomer && pharmacyDefaultUom !== item.uom) {
+      const priceInfo = await getItemPriceForCustomer(item.id, undefined, pharmacyDefaultUom)
+      if (priceInfo?.success && priceInfo.price > 0) {
+        priceToUse = priceInfo.price
       }
-
-      // Add to cart first (async), then set exact quantity to avoid initial qty=1
-      await addToCart({
-        id: item.id,
-        name: item.name,
-        category: item.category,
-        price: priceToUse,
-        image: item.image,
-        available: item.available,
-        uom: uomToUse,
-        item_code: item.id,
-        item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
-      })
+    }
+    const added = await addToCart({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      price: priceToUse,
+      image: item.image,
+      available: item.available,
+      uom: uomToUse,
+      item_code: item.id,
+      item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
+      has_serial_no: item.has_serial_no,
+      has_batch_no: item.has_batch_no,
+      allowDuplicate: allowDuplicateForItem,
+    })
+    if (quantity !== 1 && added && (added as { cartLineId?: string }).cartLineId) {
+      updateQuantity((added as { cartLineId: string }).cartLineId, quantity)
+    } else if (quantity !== 1) {
       updateQuantity(item.id, quantity)
     }
-  }, [cartItems, updateQuantity, addToCart, isPharmacy, pharmacyDefaultUom, selectedCustomer])
+    return added ? { cartLineId: (added as { cartLineId?: string }).cartLineId, id: added.id } : undefined
+  }, [cartItems, updateQuantity, addToCart, isPharmacy, pharmacyDefaultUom, selectedCustomer, posDetails])
 
-  // Separate function for adding items to cart (used by both click and barcode)
-  const addItemToCart = (item: MenuItem) => {
+  // Separate function for adding items to cart (used by both click and barcode). Returns a Promise so barcode scanner can wait for add before dispatching batch/serial.
+  const addItemToCart = (item: MenuItem): void | Promise<unknown> => {
     const allowDuplicatePos =
       posDetails?.custom_allow_duplicate_items_in_pos === 1 ||
       posDetails?.custom_allow_duplicate_items_in_pos === true ||
@@ -185,14 +199,16 @@ export default function RetailPOSLayout() {
 
     if (existingItem && !allowDuplicateForItem) {
       updateQuantity(item.id, existingItem.quantity + 1)
-    } else {
-      const uomToUse = resolveUomForCart(item)
-      const shouldFetchPrice = isPharmacy && pharmacyDefaultUom && !selectedCustomer && pharmacyDefaultUom !== item.uom
+      return
+    }
+    const uomToUse = resolveUomForCart(item)
+    const shouldFetchPrice = isPharmacy && pharmacyDefaultUom && !selectedCustomer && pharmacyDefaultUom !== item.uom
 
-      if (shouldFetchPrice) {
-        getItemPriceForCustomer(item.id, undefined, pharmacyDefaultUom).then((priceInfo) => {
+    if (shouldFetchPrice) {
+      return getItemPriceForCustomer(item.id, undefined, pharmacyDefaultUom)
+        .then((priceInfo) => {
           const priceToUse = (priceInfo?.success && priceInfo.price > 0) ? priceInfo.price : item.price
-          addToCart({
+          return addToCart({
             id: item.id,
             name: item.name,
             category: item.category,
@@ -206,8 +222,9 @@ export default function RetailPOSLayout() {
             has_batch_no: item.has_batch_no,
             allowDuplicate: allowDuplicateForItem,
           })
-        }).catch(() => {
-          addToCart({
+        })
+        .catch(() => {
+          return addToCart({
             id: item.id,
             name: item.name,
             category: item.category,
@@ -222,28 +239,21 @@ export default function RetailPOSLayout() {
             allowDuplicate: allowDuplicateForItem,
           })
         })
-      } else {
-        addToCart({
-          id: item.id,
-          name: item.name,
-          category: item.category,
-          price: item.price,
-          image: item.image,
-          available: item.available,
-          uom: uomToUse,
-          item_code: item.id,
-          item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
-          has_serial_no: item.has_serial_no,
-          has_batch_no: item.has_batch_no,
-          allowDuplicate: allowDuplicateForItem,
-        })
-      }
     }
-
-    // Show success message for barcode scanning
-    if (useScannerOnly) {
-      // Barcode scanning success handled silently
-    }
+    return addToCart({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      price: item.price,
+      image: item.image,
+      available: item.available,
+      uom: uomToUse,
+      item_code: item.id,
+      item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
+      has_serial_no: item.has_serial_no,
+      has_batch_no: item.has_batch_no,
+      allowDuplicate: allowDuplicateForItem,
+    })
   }
 
   const handleUpdateQuantity = (id: string, quantity: number) => {
@@ -277,9 +287,26 @@ export default function RetailPOSLayout() {
   const { scanBarcode } = useBarcodeScanner(addItemToCart)
 
   const handleBarcodeDetected = useCallback(async (barcode: string) => {
-    const success = await scanBarcode(barcode)
-    if (success) {
+    const result = await scanBarcode(barcode)
+    if (result) {
       setShowScanner(false)
+      if (typeof result === 'object' && result.success && result.item_code) {
+        const itemCode = result.item_code
+        const batchId = result.matched_type === 'batch' ? result.matched_value : undefined
+        const serialNo = result.matched_type === 'serial' ? result.matched_value : undefined
+        // Add already awaited in scanBarcode; short delay so store subscribers see the new line before we apply batch/serial
+        setTimeout(() => {
+          if (batchId) {
+            window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
+              detail: { itemCode, batchId, forLastAdded: true },
+            }))
+          } else if (serialNo) {
+            window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
+              detail: { itemCode, serialNo, forLastAdded: true },
+            }))
+          }
+        }, 50)
+      }
     }
   }, [scanBarcode])
 
@@ -391,8 +418,20 @@ export default function RetailPOSLayout() {
                 image: data.message.image,
                 sold: 0,
                 uom: data.message.stock_uom,
+                has_batch_no: data.message.has_batch_no,
+                has_serial_no: data.message.has_serial_no,
               }
-              await addOrIncreaseWithQuantity(fetched, qty)
+              const added = await addOrIncreaseWithQuantity(fetched, qty)
+              const mt = data.message.matched_type
+              const mv = data.message.matched_value
+              const lineKey = added?.cartLineId
+              setTimeout(() => {
+                if (mt === 'batch' && mv) {
+                  window.dispatchEvent(new CustomEvent('cart:setBatchForItem', { detail: { itemCode: fetched.id, batchId: mv, forLastAdded: true, ...(lineKey && { lineKey }) } }))
+                } else if (mt === 'serial' && mv) {
+                  window.dispatchEvent(new CustomEvent('cart:setSerialForItem', { detail: { itemCode: fetched.id, serialNo: mv, forLastAdded: true, ...(lineKey && { lineKey }) } }))
+                }
+              }, 0)
             }
           } catch {
             // ignore
@@ -431,16 +470,20 @@ export default function RetailPOSLayout() {
               available: data.message.available || 0,
               image: data.message.image,
               sold: 0,
+              has_batch_no: data.message.has_batch_no,
+              has_serial_no: data.message.has_serial_no,
             } as MenuItem
-            addOrIncreaseWithQuantity(item, 1)
-            // Pre-select batch or serial if matched
+            const added = await addOrIncreaseWithQuantity(item, 1)
             const matchedType = data.message.matched_type
             const matchedValue = data.message.matched_value
-            if (matchedType === 'batch') {
-              window.dispatchEvent(new CustomEvent('cart:setBatchForItem', { detail: { itemCode: item.id, batchId: matchedValue } }))
-            } else if (matchedType === 'serial') {
-              window.dispatchEvent(new CustomEvent('cart:setSerialForItem', { detail: { itemCode: item.id, serialNo: matchedValue } }))
-            }
+            const lineKey = added?.cartLineId
+            setTimeout(() => {
+              if (matchedType === 'batch' && matchedValue) {
+                window.dispatchEvent(new CustomEvent('cart:setBatchForItem', { detail: { itemCode: item.id, batchId: matchedValue, forLastAdded: true, ...(lineKey && { lineKey }) } }))
+              } else if (matchedType === 'serial' && matchedValue) {
+                window.dispatchEvent(new CustomEvent('cart:setSerialForItem', { detail: { itemCode: item.id, serialNo: matchedValue, forLastAdded: true, ...(lineKey && { lineKey }) } }))
+              }
+            }, 0)
             setLocalSearchQuery('')
             setPinnedItemId(null)
           }

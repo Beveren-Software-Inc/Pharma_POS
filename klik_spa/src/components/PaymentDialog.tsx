@@ -1112,26 +1112,25 @@ export default function PaymentDialog({
           return validPayments;
         })();
 
+    const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
     const paymentData = {
       items: cartItems.map(item => {
-        const medOrder = (itemDiscounts[item.id] as { medicationOrder?: string } | undefined)?.medicationOrder
+        const lineKey = getLineKey(item);
+        const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
+        const medOrder = (discount as { medicationOrder?: string } | undefined)?.medicationOrder
           ?? (item as { medicationOrder?: string }).medicationOrder;
         return {
           ...item,
           //eslint-disable-next-line @typescript-eslint/no-explicit-any
           price: (item as any).discountedPrice || item.price, // Use discounted price
-          batchNumber: itemDiscounts[item.id]?.batchNumber || null,
-          serialNumber: itemDiscounts[item.id]?.serialNumber || null,
+          batchNumber: (item as { batch_no?: string }).batch_no ?? discount?.batchNumber ?? null,
+          serialNumber: (item as { serial_no?: string }).serial_no ?? discount?.serialNumber ?? null,
           uom: item.uom || 'Nos', // Include selected UOM
-          // Include discount information for backend
-          discountPercentage: itemDiscounts[item.id]?.discountPercentage || 0,
-          discountAmount: itemDiscounts[item.id]?.discountAmount || 0,
-          // Pharmacy: dosage and prescription frequency for Sales Invoice Item
-          dosage: itemDiscounts[item.id]?.dosage ?? item.dosage ?? null,
-          prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
-          // Patient Medication Order - per item so backend can extract if top-level is missing
+          discountPercentage: discount?.discountPercentage || 0,
+          discountAmount: discount?.discountAmount || 0,
+          dosage: discount?.dosage ?? item.dosage ?? null,
+          prescriptionDosage: discount?.prescriptionDosage ?? item.prescriptionDosage ?? null,
           medicationOrder: medOrder || undefined,
-          // Item tax template (when POS profile allows item tax template mode)
           item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
           additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
         };
@@ -1161,7 +1160,9 @@ export default function PaymentDialog({
       medicationOrder: (() => {
         const orders = new Set<string>();
         cartItems.forEach((item) => {
-          const orderName = (itemDiscounts[item.id] as { medicationOrder?: string } | undefined)?.medicationOrder
+          const lineKey = getLineKey(item);
+          const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
+          const orderName = (discount as { medicationOrder?: string } | undefined)?.medicationOrder
             ?? (item as { medicationOrder?: string }).medicationOrder;
           if (orderName) orders.add(orderName);
         });
@@ -1347,19 +1348,28 @@ export default function PaymentDialog({
 
     setIsHoldingOrder(true);
 
+    const getLineKeyHold = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
     const orderData = {
-      items: cartItems.map(item => ({
-        ...item,
-        dosage: itemDiscounts[item.id]?.dosage ?? item.dosage ?? null,
-        prescriptionDosage: itemDiscounts[item.id]?.prescriptionDosage ?? item.prescriptionDosage ?? null,
-        item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
-        additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
-      })),
+      items: cartItems.map(item => {
+        const lineKey = getLineKeyHold(item);
+        const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
+        return {
+          ...item,
+          batchNumber: (item as { batch_no?: string }).batch_no ?? discount?.batchNumber ?? null,
+          serialNumber: (item as { serial_no?: string }).serial_no ?? discount?.serialNumber ?? null,
+          dosage: discount?.dosage ?? item.dosage ?? null,
+          prescriptionDosage: discount?.prescriptionDosage ?? item.prescriptionDosage ?? null,
+          item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
+          additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
+        };
+      }),
       customer: selectedCustomer,
       medicationOrder: (() => {
         const orders = new Set<string>();
         cartItems.forEach((item) => {
-          const orderName = (itemDiscounts[item.id] as { medicationOrder?: string } | undefined)?.medicationOrder;
+          const lineKey = getLineKeyHold(item);
+          const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
+          const orderName = (discount as { medicationOrder?: string } | undefined)?.medicationOrder;
           if (orderName) orders.add(orderName);
         });
         return Array.from(orders);

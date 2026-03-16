@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Minus,
   Plus,
@@ -785,9 +785,18 @@ export default function OrderSummary({
 
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
+  // Ref so batch/serial handlers always merge with latest discounts (avoids losing other lines when state is stale)
+  const itemDiscountsRef = useRef(itemDiscounts);
+  useEffect(() => {
+    itemDiscountsRef.current = itemDiscounts;
+  }, [itemDiscounts]);
+
+  // Per-line key for batch/serial/discount (same item can appear in multiple lines when allow duplicate)
+  const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
+
   // Helper function to calculate item price after discount
   const getDiscountedPrice = (item: CartItem) => {
-    const itemDiscount = itemDiscounts[item.id] || {
+    const itemDiscount = itemDiscounts[getLineKey(item)] || {
       discountPercentage: 0,
       discountAmount: 0,
     };
@@ -1618,53 +1627,71 @@ export default function OrderSummary({
 
     // Listen for preselection from search (batch/serial)
     const handleSetBatch = (event: CustomEvent) => {
-      const { itemCode, batchId } = event.detail as { itemCode: string; batchId: string };
-      const item = cartItems.find(ci => (ci.item_code || ci.id) === itemCode)
-      if (item) {
-        const selectedQty = itemBatches[item.item_code || item.id]?.find(b => b.batch_id === batchId)?.qty || 0
-        setItemDiscounts(prev => ({
-          ...prev,
-          [item.id]: {
-            ...(prev[item.id] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
+      const { itemCode, batchId, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; batchId: string; forLastAdded?: boolean; lineKey?: string };
+      let lineKey: string | undefined;
+      if (detailLineKey) {
+        lineKey = detailLineKey;
+      } else {
+        const currentCart = useCartStore.getState().cartItems;
+        const matches = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode);
+        const item = forLastAdded && matches.length > 0 ? matches[matches.length - 1] : matches[0];
+        lineKey = item ? getLineKey(item) : undefined;
+      }
+      if (lineKey) {
+        const selectedQty = itemBatches[itemCode]?.find(b => b.batch_id === batchId)?.qty || 0;
+        const base = itemDiscountsRef.current;
+        setItemDiscounts({
+          ...base,
+          [lineKey]: {
+            ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
             batchNumber: batchId || '',
             availableQuantity: selectedQty,
           }
-        }))
+        });
+        updateItemMetadata(lineKey, { batch_no: batchId || undefined });
       } else {
         // Save pending, to be applied when item appears in cart
         setPendingPreselect(prev => ({
           ...prev,
-          [itemCode]: { ...(prev[itemCode] || {}), batchId }
-        }))
+          [itemCode]: { ...(prev[itemCode] || {}), batchId, forLastAdded }
+        }));
       }
     }
 
     const handleSetSerial = (event: CustomEvent) => {
-      const { itemCode, serialNo } = event.detail as { itemCode: string; serialNo: string };
-      const item = cartItems.find(ci => (ci.item_code || ci.id) === itemCode)
-      if (item) {
-        setItemDiscounts(prev => ({
-          ...prev,
-          [item.id]: {
-            ...(prev[item.id] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
+      const { itemCode, serialNo, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; serialNo: string; forLastAdded?: boolean; lineKey?: string };
+      let lineKey: string | undefined;
+      if (detailLineKey) {
+        lineKey = detailLineKey;
+      } else {
+        const currentCart = useCartStore.getState().cartItems;
+        const matches = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode);
+        const item = forLastAdded && matches.length > 0 ? matches[matches.length - 1] : matches[0];
+        lineKey = item ? getLineKey(item) : undefined;
+      }
+      if (lineKey) {
+        const base = itemDiscountsRef.current;
+        setItemDiscounts({
+          ...base,
+          [lineKey]: {
+            ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
             serialNumber: serialNo || '',
           }
-        }))
-        // Ensure the serial exists in options for visibility; if not, inject it
+        });
+        updateItemMetadata(lineKey, { serial_no: serialNo || undefined });
         setItemSerials(prev => {
-          const key = item.item_code || item.id
-          const existing = new Set(prev[key] || [])
+          const key = itemCode;
+          const existing = new Set(prev[key] || []);
           if (!existing.has(serialNo)) {
-            return { ...prev, [key]: [...existing, serialNo] as string[] }
+            return { ...prev, [key]: [...existing, serialNo] as string[] };
           }
-          return prev
-        })
+          return prev;
+        });
       } else {
-        // Save pending, to be applied when item appears in cart
         setPendingPreselect(prev => ({
           ...prev,
-          [itemCode]: { ...(prev[itemCode] || {}), serialNo }
-        }))
+          [itemCode]: { ...(prev[itemCode] || {}), serialNo, forLastAdded }
+        }));
       }
     }
 
@@ -1676,50 +1703,58 @@ export default function OrderSummary({
       window.removeEventListener('cart:setBatchForItem', handleSetBatch as EventListener)
       window.removeEventListener('cart:setSerialForItem', handleSetSerial as EventListener)
     };
-  }, [cartItems, itemBatches]);
+  }, [cartItems, itemBatches, getLineKey, updateItemMetadata]);
 
   // Apply any pending pre-selections when cart items change
   useEffect(() => {
     if (!cartItems.length) return
     const nextPending = { ...pendingPreselect }
-    cartItems.forEach(item => {
-      const key = item.item_code || item.id
-      const pending = nextPending[key]
-      if (pending) {
+    Object.keys(nextPending).forEach(itemCode => {
+      const pending = nextPending[itemCode]
+      if (!pending) return
+      const matches = cartItems.filter(ci => (ci.item_code || ci.id) === itemCode)
+      const target = (pending as { forLastAdded?: boolean }).forLastAdded && matches.length > 0
+        ? matches[matches.length - 1]
+        : matches[0]
+      if (target) {
+        const lineKey = getLineKey(target)
+        const base = itemDiscountsRef.current
         if (pending.batchId) {
-          const selectedQty = itemBatches[key]?.find(b => b.batch_id === pending.batchId)?.qty || 0
-          setItemDiscounts(prev => ({
-            ...prev,
-            [item.id]: {
-              ...(prev[item.id] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
+          const selectedQty = itemBatches[itemCode]?.find(b => b.batch_id === pending.batchId)?.qty || 0
+          setItemDiscounts({
+            ...base,
+            [lineKey]: {
+              ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
               batchNumber: pending.batchId || '',
               availableQuantity: selectedQty,
             }
-          }))
+          })
+          updateItemMetadata(lineKey, { batch_no: pending.batchId || undefined })
         }
         if (pending.serialNo) {
-          setItemDiscounts(prev => ({
-            ...prev,
-            [item.id]: {
-              ...(prev[item.id] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
+          setItemDiscounts({
+            ...base,
+            [lineKey]: {
+              ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
               serialNumber: pending.serialNo || '',
             }
-          }))
+          })
+          updateItemMetadata(lineKey, { serial_no: pending.serialNo || undefined })
           setItemSerials(prev => {
-            const existing = new Set(prev[key] || [])
+            const existing = new Set(prev[itemCode] || [])
             if (!existing.has(pending.serialNo!)) {
-              return { ...prev, [key]: [...existing, pending.serialNo!] as string[] }
+              return { ...prev, [itemCode]: [...existing, pending.serialNo!] as string[] }
             }
             return prev
           })
         }
-        delete nextPending[key]
+        delete nextPending[itemCode]
       }
     })
     if (Object.keys(nextPending).length !== Object.keys(pendingPreselect).length) {
       setPendingPreselect(nextPending)
     }
-  }, [cartItems, itemBatches, pendingPreselect])
+  }, [cartItems, itemBatches, pendingPreselect, getLineKey, updateItemMetadata])
 
   return (
     <div
@@ -2137,10 +2172,13 @@ export default function OrderSummary({
             </div>
           ) : (
             cartItems.map((item) => {
+              const lineKey = getLineKey(item);
               const discountedPrice = getDiscountedPrice(item);
               const originalTotal = item.price * item.quantity;
               const discountedTotal = discountedPrice * item.quantity;
-              const itemDiscount = itemDiscounts[item.id] || {
+              const cartItemBatch = (item as { batch_no?: string }).batch_no;
+              const cartItemSerial = (item as { serial_no?: string }).serial_no;
+              const itemDiscount = {
                 discountPercentage: 0,
                 discountAmount: 0,
                 batchNumber: "",
@@ -2148,11 +2186,15 @@ export default function OrderSummary({
                 availableQuantity: 150,
                 prescriptionDosage: "",
                 dosage: 0,
+                ...(itemDiscounts[lineKey] || {}),
+                // Persisted batch/serial on cart item survive refresh; override local state when present
+                ...(cartItemBatch !== undefined && cartItemBatch !== "" ? { batchNumber: cartItemBatch } : {}),
+                ...(cartItemSerial !== undefined && cartItemSerial !== "" ? { serialNumber: cartItemSerial } : {}),
               };
 
               return (
                 <div
-                  key={item.id}
+                  key={lineKey}
                   className={`${
                     isMobile
                       ? "bg-gray-50 dark:bg-gray-700 rounded-lg overflow-hidden"
@@ -2166,7 +2208,7 @@ export default function OrderSummary({
                     {/* Expand/Collapse Arrow */}
                     <div className="flex-shrink-0 mr-2">
                       <button
-                        onClick={() => toggleItemExpansion(item.id)}
+                        onClick={() => toggleItemExpansion(lineKey)}
                         className={`${
                           isMobile ? "w-5 h-5" : "w-5 h-5"
                         } rounded-full bg-gray-100 dark:bg-gray-600 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-500 transition-all duration-200`}
@@ -2176,7 +2218,7 @@ export default function OrderSummary({
                           className={`${
                             isMobile ? "w-3 h-3" : "w-4 h-4"
                           } text-beveren-500 dark:text-gray-400 transform transition-transform duration-200 ${
-                            expandedItems.has(item.id) ? "rotate-90" : ""
+                            expandedItems.has(lineKey) ? "rotate-90" : ""
                           }`}
                           fill="none"
                           stroke="currentColor"
@@ -2248,7 +2290,7 @@ export default function OrderSummary({
                     <div className="flex-shrink-0 flex items-center ml-10 space-x-1 min-w-[70px] justify-center">
                       <button
                         onClick={() =>
-                          onUpdateQuantity(item.id, item.quantity - 1)
+                          onUpdateQuantity(lineKey, item.quantity - 1)
                         }
                         className={`${
                           isMobile ? "w-8 h-8" : "w-5 h-5"
@@ -2268,7 +2310,7 @@ export default function OrderSummary({
                       </span>
                       <button
                         onClick={() =>
-                          onUpdateQuantity(item.id, item.quantity + 1)
+                          onUpdateQuantity(lineKey, item.quantity + 1)
                         }
                         className={`${
                           isMobile ? "w-8 h-8" : "w-7 h-7"
@@ -2312,8 +2354,8 @@ export default function OrderSummary({
                       <button
                         onClick={() =>
                           onRemoveItem
-                            ? onRemoveItem(item.id)
-                            : onUpdateQuantity(item.id, 0)
+                            ? onRemoveItem(lineKey)
+                            : onUpdateQuantity(lineKey, 0)
                         }
                         className={`${
                           isMobile ? "w-8 h-8" : "w-6 h-6"
@@ -2326,7 +2368,7 @@ export default function OrderSummary({
                   </div>
 
                   {/* Expanded Details Section */}
-                  {expandedItems.has(item.id) && (
+                  {expandedItems.has(lineKey) && (
                     <div
                       className={`border-t border-gray-200 dark:border-gray-600 ${
                         isMobile ? "px-3 pb-3" : "px-6 py-3 ml-7"
@@ -2341,7 +2383,7 @@ export default function OrderSummary({
                             </label>
                             <QuantityInput
                               item={item}
-                              onUpdateQuantity={onUpdateQuantity}
+                              onUpdateQuantity={(_id, qty) => onUpdateQuantity(lineKey, qty)}
                               isMobile={isMobile}
                             />
                           </div>
@@ -2349,7 +2391,7 @@ export default function OrderSummary({
                             <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
                               UOM
                             </label>
-                            <UOMSelectField item={item} onUOMChange={handleUOMChange} isMobile={isMobile} selectedCustomer={selectedCustomer} />
+                            <UOMSelectField item={item} onUOMChange={(_, uom, price) => handleUOMChange(lineKey, uom, price)} isMobile={isMobile} selectedCustomer={selectedCustomer} />
                           </div>
                         </div>
 
@@ -2366,7 +2408,7 @@ export default function OrderSummary({
                               value={itemDiscount.discountAmount || ""}
                               onChange={(e) =>
                                 updateItemDiscount(
-                                  item.id,
+                                  lineKey,
                                   "discountAmount",
                                   parseFloat(e.target.value) || 0
                                 )
@@ -2387,7 +2429,7 @@ export default function OrderSummary({
                               value={itemDiscount.discountPercentage || ""}
                               onChange={(e) =>
                                 updateItemDiscount(
-                                  item.id,
+                                  lineKey,
                                   "discountPercentage",
                                   parseFloat(e.target.value) || 0
                                 )
@@ -2405,13 +2447,14 @@ export default function OrderSummary({
                               Batch
                             </label>
                             <BatchSelectField
-                              itemId={item.id}
+                              itemId={lineKey}
                               itemCode={item.item_code || item.id}
                               options={itemBatches[item.item_code || item.id] || []}
                               value={itemDiscount.batchNumber || ""}
                               onChange={(selectedBatch, selectedQty) => {
-                                updateItemDiscount(item.id, "batchNumber", selectedBatch)
-                                updateItemDiscount(item.id, "availableQuantity", selectedQty)
+                                updateItemDiscount(lineKey, "batchNumber", selectedBatch)
+                                updateItemDiscount(lineKey, "availableQuantity", selectedQty)
+                                updateItemMetadata(lineKey, { batch_no: selectedBatch || undefined })
                               }}
                               isMobile={isMobile}
                             />
@@ -2421,11 +2464,14 @@ export default function OrderSummary({
                               Serial No
                             </label>
                             <SerialSelectField
-                              itemId={item.id}
+                              itemId={lineKey}
                               itemCode={item.item_code || item.id}
                               options={itemSerials[item.item_code || item.id] || []}
                               value={itemDiscount.serialNumber || ""}
-                              onChange={(sn) => updateItemDiscount(item.id, "serialNumber", sn)}
+                              onChange={(sn) => {
+                                updateItemDiscount(lineKey, "serialNumber", sn)
+                                updateItemMetadata(lineKey, { serial_no: sn || undefined })
+                              }}
                               isMobile={isMobile}
                             />
                           </div>
@@ -2439,9 +2485,9 @@ export default function OrderSummary({
                                 Dosage
                               </label>
                               <DosageInput
-                                itemId={item.id}
+                                itemId={lineKey}
                                 value={itemDiscount.dosage}
-                                onChange={(id, v) => updateItemDiscount(id, "dosage", v)}
+                                onChange={(_id, v) => updateItemDiscount(lineKey, "dosage", v)}
                                 isMobile={isMobile}
                               />
                             </div>
@@ -2450,10 +2496,10 @@ export default function OrderSummary({
                                 Prescription Frequency
                               </label>
                               <DosageSelectField
-                                itemId={item.id}
+                                itemId={lineKey}
                                 options={prescriptionFrequencies}
                                 value={itemDiscount.prescriptionDosage || ""}
-                                onChange={(dosageName) => updateItemDiscount(item.id, "prescriptionDosage", dosageName)}
+                                onChange={(dosageName) => updateItemDiscount(lineKey, "prescriptionDosage", dosageName)}
                                 isMobile={isMobile}
                               />
                             </div>
@@ -2471,7 +2517,7 @@ export default function OrderSummary({
                                 <select
                                   value={(item as { item_tax_template?: string }).item_tax_template || ""}
                                   onChange={(e) =>
-                                    updateItemMetadata(item.id, { item_tax_template: e.target.value || null })
+                                    updateItemMetadata(lineKey, { item_tax_template: e.target.value || null })
                                   }
                                   className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
                                 >
@@ -2495,7 +2541,7 @@ export default function OrderSummary({
                                   step="0.01"
                                   value={((item as { additional_amount?: number }).additional_amount ?? "")}
                                   onChange={(e) =>
-                                    updateItemMetadata(item.id, {
+                                    updateItemMetadata(lineKey, {
                                       additional_amount: parseFloat(e.target.value) || 0,
                                     })
                                   }

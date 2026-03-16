@@ -93,7 +93,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
       const resData = await response.json();
-      console.log('[Products] Raw response payload', resData);
 
       const message = resData?.message ?? resData;
 
@@ -107,13 +106,13 @@ export function ProductProvider({ children }: ProductProviderProps) {
 
         if (maybeItems !== undefined) {
           const itemsArray = Array.isArray(maybeItems) ? maybeItems : Object.values(maybeItems);
-          console.log('[Products] Parsed items array length', itemsArray.length, {
-            total_count: (message as any).total_count,
-            has_more: (message as any).has_more,
-            offset,
-            limit,
-            search,
-          });
+          // console.log('[Products] Parsed items array length', itemsArray.length, {
+          //   total_count: (message as any).total_count,
+          //   has_more: (message as any).has_more,
+          //   offset,
+          //   limit,
+          //   search,
+          // });
           return {
             items: itemsArray,
             total_count: (message as any).total_count ?? itemsArray.length ?? 0,
@@ -239,7 +238,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
       setCurrentOffset(result.items.length);
       setLastUpdated(new Date());
 
-      console.log(`Products loaded: ${result.items.length} of ${result.total_count} items`);
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       console.error("Error fetching products:", error);
@@ -357,7 +355,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
       setCurrentOffset(prev => prev + result.items.length);
       setHasMore(result.has_more);
 
-      console.log(`Loaded ${result.items.length} more products. Total: ${currentOffset + result.items.length}`);
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       console.error("Error loading more products:", error);
