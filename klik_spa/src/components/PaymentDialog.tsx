@@ -1403,7 +1403,8 @@ export default function PaymentDialog({
 
   const formatCurrency = (amount: number) => {
     return `${currencySymbol} ${amount.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
+      minimumFractionDigits: 3,
+      maximumFractionDigits: 3,
     })}`;
   };
 
@@ -1644,7 +1645,7 @@ export default function PaymentDialog({
                             </label>
                             <input
                               type="number"
-                              value={method.amount.toFixed(3) || ""}
+                              value={method.amount.toFixed(3) || "0.000"}
                               onChange={(e) =>
                                 handlePaymentAmountChange(
                                   method.id,
@@ -2424,7 +2425,7 @@ export default function PaymentDialog({
                           <input
                             type="number"
                             step="0.01"
-                            value={method.amount || ""}
+                              value={method.amount.toFixed(3)}
                             onChange={(e) => {
                               setActiveMethodId(method.id);
                               const inputValue = e.target.value;
