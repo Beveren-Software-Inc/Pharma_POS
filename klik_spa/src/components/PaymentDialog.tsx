@@ -2910,7 +2910,7 @@ export default function PaymentDialog({
                             : "text-orange-500 dark:text-orange-400"
                         }`}
                       >
-                        Tax is{" "}
+                        VAT is{" "}
                         {calculations.isInclusive ? "inclusive" : "exclusive"}{" "}
                         of item prices
                       </p>
