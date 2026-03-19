@@ -220,6 +220,6 @@ For support and questions, please contact the development team at [info@beverens
 
 <div align="center">
 	<a href="https://beverensoftware.com" target="_blank">
-		<img src="./docs/screenshots/beveren-logo.png"" alt="Beveren Software" height="28"/>
+		<img src="./docs/screenshots/beveren-logo.png" alt="Beveren Software" height="28"/>
 	</a>
 </div>

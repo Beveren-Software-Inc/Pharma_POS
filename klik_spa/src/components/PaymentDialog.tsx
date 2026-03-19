@@ -1174,6 +1174,7 @@ export default function PaymentDialog({
       insuranceAmount: selectedHealthInsurance
         ? roundCurrency((effectiveGrandTotal * (Number(selectedHealthInsurance.insurance_coverage_) || 0)) / 100)
         : 0,
+      insuranceIsCredit: selectedHealthInsurance?.isCredit !== false,
     };
 
     try {
@@ -1324,10 +1325,19 @@ export default function PaymentDialog({
     const cashMode = modes.find((m) => (m.type || "").toLowerCase() === "cash")?.mode_of_payment
       || modes[0]?.mode_of_payment;
     if (!cashMode) return;
-    setPaymentAmounts({
-      [insuranceMode]: insuranceAmount,
-      [cashMode]: patientAmount,
-    });
+    const isCredit = insurance.isCredit !== false;
+    if (isCredit) {
+      // Patient pays their portion now; insurance pays later (invoice partially paid)
+      setPaymentAmounts({
+        [insuranceMode]: 0,
+        [cashMode]: patientAmount,
+      });
+    } else {
+      setPaymentAmounts({
+        [insuranceMode]: insuranceAmount,
+        [cashMode]: patientAmount,
+      });
+    }
   };
 
   const clearInsuranceSelection = () => {

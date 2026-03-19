@@ -8,6 +8,8 @@ export interface HealthInsuranceOption {
   insurance_company?: string;
   insurance_coverage_?: number;
   mode_of_payment?: string | null;
+  /** When true, patient pays their portion now; insurance portion is credit (invoice partially paid). */
+  isCredit?: boolean;
 }
 
 interface InsuranceModalProps {
@@ -28,10 +30,12 @@ export default function InsuranceModal({
   const [error, setError] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [selected, setSelected] = useState<HealthInsuranceOption | null>(selectedInsurance);
+  const [isCredit, setIsCredit] = useState(true);
 
   useEffect(() => {
     if (isOpen) {
       setSelected(selectedInsurance);
+      setIsCredit(selectedInsurance?.isCredit !== false);
       setError(null);
       setLoading(true);
       fetch("/api/method/klik_pos.api.health_insurance.get_health_insurance_list", {
@@ -53,7 +57,7 @@ export default function InsuranceModal({
 
   const handleConfirm = () => {
     if (selected) {
-      onSelect(selected);
+      onSelect({ ...selected, isCredit });
       onClose();
     }
   };
@@ -136,7 +140,7 @@ export default function InsuranceModal({
             </div>
 
             {selected && (
-              <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-sm">
+              <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-sm space-y-2">
                 <p>
                   <span className="text-gray-600 dark:text-gray-400">Coverage: </span>
                   <span className="font-medium text-gray-900 dark:text-white">
@@ -151,6 +155,20 @@ export default function InsuranceModal({
                     </span>
                   </p>
                 )}
+                <label className="flex items-center gap-2 cursor-pointer mt-2">
+                  <input
+                    type="checkbox"
+                    checked={isCredit}
+                    onChange={(e) => setIsCredit(e.target.checked)}
+                    className="rounded border-gray-300 dark:border-gray-600 text-beveren-600 focus:ring-beveren-500"
+                  />
+                  <span className="text-gray-700 dark:text-gray-300">Is credit</span>
+                </label>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {isCredit
+                    ? "Patient pays their portion now; insurance pays later (invoice partially paid)."
+                    : "Patient and insurance amounts both paid now (invoice fully paid)."}
+                </p>
               </div>
             )}
 

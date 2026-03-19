@@ -90,7 +90,7 @@ export default function LoginPage() {
           {/* Logo Section */}
           <div className="text-center mb-6">
             <div className="flex justify-center mb-4">
-              <img src="https://beverensoftware.com/wp-content/uploads/2023/06/cropped-15-1-180x180.png" alt="KLiK PoS" className="w-16 h-16 rounded-full shadow-lg" />
+              <img src="/assets/klik_pos/images/ROSE_LOGO.png" alt="KLiK PoS" className="w-16 h-16 rounded-full shadow-lg" />
             </div>
             <h1 className="text-3xl font-bold text-beveren-800">KLiK PoS</h1>
           </div>
