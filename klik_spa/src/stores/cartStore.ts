@@ -6,6 +6,20 @@ import { toast } from 'react-toastify'
 import { clearDraftInvoiceCache } from '../utils/draftInvoiceCache'
 import { updateItemPricesForCustomer, getItemPriceForCustomer, applyPricingRulesToCart } from '../services/dynamicPricing'
 
+// Preserve batch_no/serial_no from current cart when replacing with merged items (avoids losing them when applyPricingRules runs after scan)
+function preserveBatchAndSerial(merged: CartItem[], currentCart: CartItem[]): CartItem[] {
+  return merged.map((item) => {
+    const lineId = (item as { cartLineId?: string }).cartLineId;
+    const current = lineId
+      ? currentCart.find((c) => (c as { cartLineId?: string }).cartLineId === lineId)
+      : currentCart.find((c) => c.id === item.id && !(c as { cartLineId?: string }).cartLineId);
+    if (current && ((current as { batch_no?: string }).batch_no != null || (current as { serial_no?: string }).serial_no != null)) {
+      return { ...item, batch_no: (current as { batch_no?: string }).batch_no, serial_no: (current as { serial_no?: string }).serial_no };
+    }
+    return item;
+  });
+}
+
 // Helper to merge ERPNext pricing rule results (including free items) back into the POS cart
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mergePricingResultsWithFreeItems(baseCartItems: CartItem[], pricingResults: any[]): CartItem[] {
@@ -82,7 +96,8 @@ interface CartState {
   additionalRemark: string | null
 
   // Actions
-  addToCart: (item: Omit<CartItem, 'quantity'>) => Promise<void>
+  /** Returns the newly added cart item when a new line is created (so caller can use cartLineId for quantity/batch). */
+  addToCart: (item: Omit<CartItem, 'quantity'>) => Promise<CartItem | void>
   addToCartWithQuantity: (item: Omit<CartItem, 'quantity'>, quantity: number) => Promise<void>
   updateQuantity: (id: string, quantity: number) => Promise<void>
   updateUOM: (id: string, uom: string, price: number) => Promise<void>
@@ -137,7 +152,9 @@ export const useCartStore = create<CartState>()(
                 : cartItem
             )
           }));
-        } else {
+          return;
+        }
+        {
           // New item - fetch correct price if customer is selected
           let finalPrice = item.price;
 
@@ -154,7 +171,13 @@ export const useCartStore = create<CartState>()(
             }
           }
 
-          const newCartItems = [...state.cartItems, { ...item, price: finalPrice, quantity: 1 }];
+          const newItem = {
+            ...item,
+            price: finalPrice,
+            quantity: 1,
+            cartLineId: item.allowDuplicate ? crypto.randomUUID() : undefined,
+          };
+          const newCartItems = [...state.cartItems, newItem];
 
           set((state) => ({
             cartItems: newCartItems
@@ -165,6 +188,7 @@ export const useCartStore = create<CartState>()(
           if (stateAfterAdd.cartItems.length > 0) {
             await stateAfterAdd.applyPricingRules();
           }
+          return newItem;
         }
       },
 
@@ -211,7 +235,13 @@ export const useCartStore = create<CartState>()(
             }
           }
 
-          const newCartItems = [...state.cartItems, { ...item, price: finalPrice, quantity }];
+          const newItem = {
+            ...item,
+            price: finalPrice,
+            quantity,
+            cartLineId: item.allowDuplicate ? crypto.randomUUID() : undefined,
+          };
+          const newCartItems = [...state.cartItems, newItem];
 
           set((state) => ({
             cartItems: newCartItems
@@ -227,9 +257,10 @@ export const useCartStore = create<CartState>()(
 
       updateQuantity: async (id, quantity) => {
         const state = get();
+        const matchLine = (ci: CartItem) => (ci as { cartLineId?: string }).cartLineId === id || ci.id === id;
         if (quantity <= 0) {
           set({
-            cartItems: state.cartItems.filter((item) => item.id !== id)
+            cartItems: state.cartItems.filter((item) => !matchLine(item))
           });
           // Apply pricing rules after removing item (quantities changed)
           const stateAfterUpdate = get();
@@ -239,7 +270,7 @@ export const useCartStore = create<CartState>()(
           return;
         }
 
-        const item = state.cartItems.find((cartItem) => cartItem.id === id);
+        const item = state.cartItems.find(matchLine);
         if (item && item.available !== undefined && quantity > item.available) {
           toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
           return;
@@ -247,7 +278,7 @@ export const useCartStore = create<CartState>()(
 
         set({
           cartItems: state.cartItems.map((item) =>
-            item.id === id ? { ...item, quantity } : item
+            matchLine(item) ? { ...item, quantity } : item
           )
         });
 
@@ -259,10 +290,10 @@ export const useCartStore = create<CartState>()(
       },
 
       updateUOM: async (id, uom, price) => {
-        console.log(`🏪 Cart Store: Updating UOM for item ${id} to ${uom} with price ${price}`);
+        const matchLine = (ci: CartItem) => (ci as { cartLineId?: string }).cartLineId === id || ci.id === id;
         set((state) => {
           const updatedItems = state.cartItems.map((item) => {
-            if (item.id === id) {
+            if (matchLine(item)) {
               console.log(`🏪 Cart Store: Item ${id} updated:`, {
                 before: { uom: item.uom, price: item.price },
                 after: { uom, price }
@@ -290,15 +321,21 @@ export const useCartStore = create<CartState>()(
         }
       },
 
-      removeItem: (id) => set((state) => ({
-        cartItems: state.cartItems.filter((item) => item.id !== id)
-      })),
+      removeItem: (id) => set((state) => {
+        const matchLine = (ci: CartItem) => (ci as { cartLineId?: string }).cartLineId === id || ci.id === id;
+        return {
+          cartItems: state.cartItems.filter((item) => !matchLine(item))
+        };
+      }),
 
-      updateItemMetadata: (id, updates) => set((state) => ({
-        cartItems: state.cartItems.map((item) =>
-          item.id === id ? { ...item, ...updates } : item
-        )
-      })),
+      updateItemMetadata: (id, updates) => set((state) => {
+        const matchLine = (ci: CartItem) => (ci as { cartLineId?: string }).cartLineId === id || ci.id === id;
+        return {
+          cartItems: state.cartItems.map((item) =>
+            matchLine(item) ? { ...item, ...updates } : item
+          )
+        };
+      }),
 
       clearCart: () => {
         // Clear draft invoice cache when clearing cart
@@ -392,9 +429,11 @@ export const useCartStore = create<CartState>()(
 
           // Merge discounted base items + free items from pricing rules back into the cart
           const mergedCartItems = mergePricingResultsWithFreeItems(updatedItems, itemsWithPricingRules);
+          const currentCart = get().cartItems;
+          const mergedWithBatch = preserveBatchAndSerial(mergedCartItems, currentCart);
 
           set(() => ({
-            cartItems: mergedCartItems
+            cartItems: mergedWithBatch
           }));
 
         } catch (error) {
@@ -416,9 +455,11 @@ export const useCartStore = create<CartState>()(
           const itemsWithPricingRules = await applyPricingRulesToCart(baseCartItems, customerId);
 
           const mergedCartItems = mergePricingResultsWithFreeItems(baseCartItems, itemsWithPricingRules);
+          const currentCart = get().cartItems;
+          const mergedWithBatch = preserveBatchAndSerial(mergedCartItems, currentCart);
 
           set(() => ({
-            cartItems: mergedCartItems
+            cartItems: mergedWithBatch
           }));
         } catch (error) {
           console.error('❌ Error applying pricing rules:', error);

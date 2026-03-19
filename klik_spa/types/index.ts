@@ -30,6 +30,14 @@ export interface CartItem {
    * instead of merging quantities (used for serial / batch managed items).
    */
   allowDuplicate?: boolean
+  /**
+   * Unique id for this cart line when allowDuplicate is used, so batch/serial
+   * and quantity updates apply to this line only.
+   */
+  cartLineId?: string
+  /** Persisted batch/serial so they survive page refresh (stored on cart item). */
+  batch_no?: string
+  serial_no?: string
 }
 
 export interface MenuItem {

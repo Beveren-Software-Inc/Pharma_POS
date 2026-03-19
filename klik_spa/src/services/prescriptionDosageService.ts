@@ -15,10 +15,8 @@ export async function getPrescriptionDosages(): Promise<PrescriptionDosage[]> {
       credentials: 'include',
     });
 
-    console.log('📡 API Response status:', response.status, response.statusText);
 
     const data = await response.json();
-    console.log('📡 API Response data:', data);
 
     if (!response.ok) {
       console.error('❌ API Error:', data.message || 'Failed to fetch Prescription Dosages');

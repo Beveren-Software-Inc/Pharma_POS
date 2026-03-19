@@ -8,7 +8,6 @@ export interface PrescriptionFrequency {
 
 export async function getPrescriptionFrequencies(): Promise<PrescriptionFrequency[]> {
   try {
-    console.log('📡 Fetching prescription frequencies from API...');
     const response = await fetch(`/api/method/klik_pos.api.prescription_frequency.get_prescription_frequencies`, {
       method: 'GET',
       headers: {
@@ -17,10 +16,8 @@ export async function getPrescriptionFrequencies(): Promise<PrescriptionFrequenc
       credentials: 'include',
     });
 
-    console.log('📡 API Response status:', response.status, response.statusText);
 
     const data = await response.json();
-    console.log('📡 API Response data:', data);
 
     if (!response.ok) {
       console.error('❌ API Error:', data.message || 'Failed to fetch Prescription Frequencies');
@@ -28,7 +25,6 @@ export async function getPrescriptionFrequencies(): Promise<PrescriptionFrequenc
     }
 
     if (data?.message) {
-      console.log('✅ Prescription frequencies received:', data.message);
       return data.message;
     }
 

@@ -634,6 +634,9 @@ def create_and_submit_invoice(data):
 			additional_remark,
 			delivery_distance_km,
 			delivery_charge_amount,
+			health_insurance,
+			insurance_amount,
+			insurance_is_credit,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -662,11 +665,16 @@ def create_and_submit_invoice(data):
 			additional_remark=additional_remark,
 			delivery_distance_km=delivery_distance_km,
 			delivery_charge_amount=delivery_charge_amount,
+			health_insurance=health_insurance,
+			insurance_amount=insurance_amount,
+			insurance_is_credit=insurance_is_credit,
 		)
 
 		doc.base_paid_amount = amount_paid
 		doc.paid_amount = amount_paid
-		doc.outstanding_amount = 0
+		# Do not override outstanding when insurance is credit (partially paid); ledger will set it
+		if not (health_insurance and insurance_is_credit):
+			doc.outstanding_amount = 0
 
 		# Save and submit in one transaction
 		doc.save(ignore_permissions=True)
@@ -744,6 +752,9 @@ def create_draft_invoice(data):
 			additional_remark,
 			delivery_distance_km,
 			delivery_charge_amount,
+			health_insurance,
+			insurance_amount,
+			insurance_is_credit,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -764,6 +775,9 @@ def create_draft_invoice(data):
 			additional_remark=additional_remark,
 			delivery_distance_km=delivery_distance_km,
 			delivery_charge_amount=delivery_charge_amount,
+			health_insurance=health_insurance,
+			insurance_amount=insurance_amount,
+			insurance_is_credit=insurance_is_credit,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -842,6 +856,11 @@ def parse_invoice_data(data):
 		data.get("deliveryChargeAmount") or data.get("delivery_charge_amount") or 0
 	)
 
+	# Insurance (Health Insurance): link and amount to be covered; is_credit = patient pays now, insurance pays later
+	health_insurance = data.get("healthInsurance") or data.get("health_insurance")
+	insurance_amount = flt(data.get("insuranceAmount") or data.get("insurance_amount") or 0)
+	insurance_is_credit = cint(data.get("insuranceIsCredit") or data.get("insurance_is_credit") or 0)
+
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
 
@@ -863,6 +882,9 @@ def parse_invoice_data(data):
 		additional_remark,
 		delivery_distance_km,
 		delivery_charge_amount,
+		health_insurance,
+		insurance_amount,
+		insurance_is_credit,
 	)
 
 
@@ -885,6 +907,9 @@ def build_sales_invoice_doc(
 	additional_remark=None,
 	delivery_distance_km=0.0,
 	delivery_charge_amount=0.0,
+	health_insurance=None,
+	insurance_amount=0.0,
+	insurance_is_credit=0,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -902,6 +927,11 @@ def build_sales_invoice_doc(
 	# Set reference no if provided and field exists
 	if reference_no and frappe.db.has_column("Sales Invoice", "custom_reference_no"):
 		doc.custom_reference_no = reference_no
+	# Insurance: link and amount to be covered (patient may pay their portion now; insurance pays later when is_credit)
+	if health_insurance and frappe.db.has_column("Sales Invoice", "custom_health_insurance"):
+		doc.custom_health_insurance = health_insurance
+	if flt(insurance_amount) and frappe.db.has_column("Sales Invoice", "custom_amount_to_be_covered"):
+		doc.custom_amount_to_be_covered = flt(insurance_amount)
 	# Set Patient Medication Orders (Table MultiSelect) if items came from orders and field exists
 	if medication_order and frappe.db.has_column("Sales Invoice", "custom_medication_order"):
 		orders = medication_order

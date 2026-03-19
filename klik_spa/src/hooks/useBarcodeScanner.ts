@@ -2,21 +2,24 @@ import { useState } from 'react'
 import { useProducts } from './useProducts'
 import type { MenuItem } from '../../types'
 
+export type ScanResult = boolean | { success: true; item_code: string; matched_type?: string; matched_value?: string }
+
 interface UseBarcodeScannerReturn {
-  scanBarcode: (barcode: string) => Promise<boolean>
+  scanBarcode: (barcode: string) => Promise<ScanResult>
   isScanning: boolean
   error: string | null
   clearError: () => void
 }
 
-export function useBarcodeScanner(onAddToCart: (item: MenuItem) => void): UseBarcodeScannerReturn {
+/** Callback can return a Promise so we wait for the add before applying batch/serial. */
+export function useBarcodeScanner(onAddToCart: (item: MenuItem) => void | Promise<unknown>): UseBarcodeScannerReturn {
   const [isScanning, setIsScanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { products } = useProducts()
 
   const clearError = () => setError(null)
 
-  const scanBarcode = async (barcode: string): Promise<boolean> => {
+  const scanBarcode = async (barcode: string): Promise<ScanResult> => {
     if (!barcode.trim()) {
       setError('Please enter a valid barcode')
       return false
@@ -26,40 +29,46 @@ export function useBarcodeScanner(onAddToCart: (item: MenuItem) => void): UseBar
     setError(null)
 
     try {
-      // First try to find by barcode in the products list
-      // Note: This assumes barcode is stored in the item data
-      // You may need to modify the API to include barcode information
       const foundItem = products.find(item => {
-        // For now, we'll search by item ID or name
-        // In a real implementation, you'd have a barcode field
         return item.id === barcode ||
                item.name.toLowerCase().includes(barcode.toLowerCase())
       })
 
       if (foundItem) {
-        onAddToCart(foundItem)
+        const addResult = onAddToCart(foundItem)
+        if (addResult && typeof (addResult as Promise<unknown>).then === 'function') {
+          await (addResult as Promise<unknown>)
+        }
         return true
       }
 
-      // If not found in local products, try API call
       try {
-        // First try combined identifier endpoint (barcode/batch/serial)
         const response = await fetch(`/api/method/klik_pos.api.item.get_item_by_identifier?code=${encodeURIComponent(barcode)}`)
         const data = await response.json()
 
         if (data.message && data.message.item_code) {
-          // Convert API response to MenuItem format
-          const item = {
+          const item: MenuItem = {
             id: data.message.item_code,
             name: data.message.item_name || data.message.item_code,
             category: data.message.item_group || 'General',
             price: data.message.price || 0,
             available: data.message.available || 0,
             image: data.message.image,
-            sold: 0
+            sold: 0,
+            has_batch_no: data.message.has_batch_no,
+            has_serial_no: data.message.has_serial_no,
           }
-          onAddToCart(item)
-          return true
+          // Wait for add to finish so the new line is in the cart before we dispatch batch/serial
+          const addResult = onAddToCart(item)
+          if (addResult && typeof (addResult as Promise<unknown>).then === 'function') {
+            await (addResult as Promise<unknown>)
+          }
+          return {
+            success: true,
+            item_code: data.message.item_code,
+            matched_type: data.message.matched_type,
+            matched_value: data.message.matched_value,
+          }
         } else {
           setError('Product not found for this barcode')
           return false

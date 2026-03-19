@@ -73,6 +73,10 @@ fixtures = [
 					"Item-custom_is_additional_charges",
 					"POS Profile-custom_allow_duplicate_items_in_pos",
      "POS Profile-custom_autofetch_batchserial_",
+     "Sales Invoice-custom_amount_to_be_covered",
+     "Sales Invoice-custom_column_break_tbrxu",
+     "Sales Invoice-custom_health_insurance",
+     "Sales Invoice-custom_insurance",
 				),
 			]
 		],

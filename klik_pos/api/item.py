@@ -302,6 +302,7 @@ def get_item_price_for_customer(item_code, customer=None, uom=None):
 @frappe.whitelist(allow_guest=True)
 def get_item_by_barcode(barcode: str):
 	"""Get item details by barcode."""
+	print("Uko hapa pia")
 	try:
 		pos_doc = get_current_pos_profile()
 		warehouse = pos_doc.warehouse
@@ -358,7 +359,10 @@ def get_item_by_barcode(barcode: str):
 @frappe.whitelist(allow_guest=True)
 def get_item_by_identifier(code: str):
 	"""Resolve an item by barcode, batch number or serial number.
+	- If barcode maps to an Item Barcode row that has custom_batch set, treat it as a batch match
+	  so the POS can auto-select the correct batch for this scan.
 	Returns same structure as get_item_by_barcode."""
+	
 	try:
 		if not code:
 			frappe.throw(_("Identifier required"))
@@ -370,10 +374,10 @@ def get_item_by_identifier(code: str):
 		matched_type = None
 		matched_value = None
 
-		# 1) Try Item Barcode
+		# 1) Try Item Barcode (and see if it is linked to a specific batch via custom_batch)
 		item_row = frappe.db.sql(
 			"""
-			SELECT parent as item_code
+			SELECT parent as item_code, custom_batch
 			FROM `tabItem Barcode`
 			WHERE barcode = %s
 			""",
@@ -381,8 +385,14 @@ def get_item_by_identifier(code: str):
 			as_dict=True,
 		)
 		if item_row:
-			matched_type = "barcode"
-			matched_value = code
+			custom_batch = item_row[0].get("custom_batch")
+			if custom_batch:
+				# Treat this as a batch match so frontend can pre-select batch
+				matched_type = "batch"
+				matched_value = custom_batch
+			else:
+				matched_type = "barcode"
+				matched_value = code
 
 		# 2) Try Batch by batch_id or name
 		if not item_row:
@@ -425,7 +435,7 @@ def get_item_by_identifier(code: str):
 		item_doc = frappe.get_doc("Item", item_code)
 		balance = fetch_item_balance(item_code, warehouse)
 		price_info = fetch_item_price(item_code, price_list)
-
+		
 		return {
 			"item_code": item_code,
 			"item_name": item_doc.item_name or item_code,
@@ -436,6 +446,8 @@ def get_item_by_identifier(code: str):
 			"currency_symbol": price_info["currency_symbol"],
 			"available": balance,
 			"image": item_doc.image,
+			"has_batch_no": getattr(item_doc, "has_batch_no", 0),
+			"has_serial_no": getattr(item_doc, "has_serial_no", 0),
 			"matched_type": matched_type,
 			"matched_value": matched_value,
 		}
@@ -1651,7 +1663,6 @@ def _process_pricing_results(pricing_results, erpnext_items, cart_items, context
 
 		if not item_code:
 			continue
-		print("Ruling the party", str(pricing_result))
 		# Find the matching cart item
 		cart_item = cart_item_map.get(item_code)
 		if not cart_item:
