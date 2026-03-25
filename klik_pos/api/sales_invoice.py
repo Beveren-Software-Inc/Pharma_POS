@@ -792,7 +792,7 @@ def parse_invoice_data(data):
 	"""Sanitize and extract customer and items from request payload including round-off."""
 	if isinstance(data, str):
 		data = json.loads(data)
-	print("Data is ", data)
+	# print("Data is ", data)
 	
 	customer = data.get("customer", {}).get("id")
 	items = data.get("items", [])
@@ -826,7 +826,8 @@ def parse_invoice_data(data):
 	reference_no = data.get("referenceNo") or data.get("reference_no")
 	# Extract Patient Medication Order (when items came from medication order)
 	medication_order = data.get("medicationOrder")
-	
+	# print("Medication orders", medication_order)
+	# frappe.throw("Huku")
 	
 	# Fallback: extract from items if top-level medicationOrder is empty (e.g. mobile payment flow)
 	if not medication_order and items:
@@ -935,7 +936,8 @@ def build_sales_invoice_doc(
 		doc.custom_health_insurance = health_insurance
 	if flt(insurance_amount) and frappe.db.has_column("Sales Invoice", "custom_amount_to_be_covered"):
 		doc.custom_amount_to_be_covered = flt(insurance_amount)
-	
+	# print("Patinet medictaion order", medication_order)
+	# frappe.throw("Uko")
 	# Set Patient Medication Orders (Table MultiSelect) if items came from orders and field exists
 	if medication_order and doc.meta.has_field("custom_medication_order"):
 		orders = medication_order
