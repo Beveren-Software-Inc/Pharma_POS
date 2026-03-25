@@ -1003,6 +1003,7 @@ export default function OrderSummary({
       }
       
       // Automatically add all medication orders to cart (quantity, uom, patient_frequency from order entry)
+      const selectedOrderNamesAll = Array.from(new Set(orders.map((o) => o.name).filter(Boolean)));
       const itemsToAdd: Array<{ item_code: string; quantity: number; uom?: string; dosage?: string; patient_frequency?: string; drug_name?: string; medication_order?: string }> = [];
       
       orders.forEach(order => {
@@ -1032,6 +1033,18 @@ export default function OrderSummary({
       try {
         let addedCount = 0;
         let notFoundCount = 0;
+
+        // IMPORTANT: cartItems updates are async; keep a local running quantity map so multiple
+        // medication orders for the same item_code accumulate correctly within this loop.
+        const qtyByItem = new Map<string, number>();
+        const medsByItem = new Map<string, Set<string>>();
+        cartItems.forEach((ci) => {
+          qtyByItem.set(ci.id, ci.quantity);
+          const existing = (ci as unknown as { medicationOrders?: string[] }).medicationOrders;
+          if (Array.isArray(existing) && existing.length) {
+            medsByItem.set(ci.id, new Set(existing));
+          }
+        });
         
         // Process each item
         for (const itemToAdd of itemsToAdd) {
@@ -1052,14 +1065,15 @@ export default function OrderSummary({
             uomToUse
           );
           
-          // Check if item is already in cart
-          const existingCartItem = cartItems.find(ci => ci.id === product.id || ci.item_code === product.id);
-          
           const prescriptionDosageValue = itemToAdd.patient_frequency || itemToAdd.dosage;
           
-          if (existingCartItem) {
-            const newQuantity = existingCartItem.quantity + cartQuantity;
+          const currentQty = qtyByItem.get(product.id) ?? 0;
+          const willExist = currentQty > 0;
+
+          if (willExist) {
+            const newQuantity = currentQty + cartQuantity;
             await onUpdateQuantity(product.id, newQuantity);
+            qtyByItem.set(product.id, newQuantity);
             
             if (prescriptionDosageValue) {
               updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
@@ -1069,7 +1083,13 @@ export default function OrderSummary({
               updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
             }
             if (itemToAdd.medication_order) {
-              updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order });
+              const s = medsByItem.get(product.id) ?? new Set<string>();
+              s.add(itemToAdd.medication_order);
+              selectedOrderNamesAll.forEach((o) => s.add(o));
+              medsByItem.set(product.id, s);
+              const arr = Array.from(s);
+              // Keep medicationOrder for backward compatibility, but also keep all selected orders.
+              updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order, medicationOrders: arr });
               updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order);
             }
             
@@ -1094,10 +1114,11 @@ export default function OrderSummary({
                 available: product.available,
                 uom: uomToUse,
                 item_code: product.id,
-                ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order }),
+                ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order, medicationOrders: [itemToAdd.medication_order] }),
               },
               cartQuantity
             );
+            qtyByItem.set(product.id, cartQuantity);
             
             if (prescriptionDosageValue) {
               setTimeout(() => {
@@ -1111,7 +1132,11 @@ export default function OrderSummary({
               }, 100);
             }
             if (itemToAdd.medication_order) {
-              updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order });
+              const s = medsByItem.get(product.id) ?? new Set<string>();
+              s.add(itemToAdd.medication_order);
+              selectedOrderNamesAll.forEach((o) => s.add(o));
+              medsByItem.set(product.id, s);
+              updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order, medicationOrders: Array.from(s) });
               setTimeout(() => {
                 updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order!);
               }, 100);
@@ -1151,6 +1176,7 @@ export default function OrderSummary({
     
     // Get selected orders
     const ordersToAdd = medicationOrders.filter(order => selectedOrders.has(order.name));
+    const selectedOrderNames = Array.from(new Set(ordersToAdd.map((o) => o.name).filter(Boolean)));
     
     // Collect all items from selected orders (quantity, uom, patient_frequency from order entry)
     const itemsToAdd: Array<{ item_code: string; quantity: number; uom?: string; dosage?: string; patient_frequency?: string; drug_name?: string; medication_order?: string }> = [];
@@ -1183,6 +1209,17 @@ export default function OrderSummary({
     try {
       let addedCount = 0;
       let notFoundCount = 0;
+
+      // Keep a running local view of quantities + medication orders during this async loop.
+      const qtyByItem = new Map<string, number>();
+      const medsByItem = new Map<string, Set<string>>();
+      cartItems.forEach((ci) => {
+        qtyByItem.set(ci.id, ci.quantity);
+        const existing = (ci as unknown as { medicationOrders?: string[] }).medicationOrders;
+        if (Array.isArray(existing) && existing.length) {
+          medsByItem.set(ci.id, new Set(existing));
+        }
+      });
       
       for (const itemToAdd of itemsToAdd) {
         const product = products.find(p => p.id === itemToAdd.item_code || p.item_code === itemToAdd.item_code);
@@ -1201,12 +1238,14 @@ export default function OrderSummary({
           uomToUse
         );
         const prescriptionDosageValue = itemToAdd.patient_frequency || itemToAdd.dosage;
-        
-        const existingCartItem = cartItems.find(ci => ci.id === product.id || ci.item_code === product.id);
-        
-        if (existingCartItem) {
-          const newQuantity = existingCartItem.quantity + cartQuantity;
+
+        const currentQty = qtyByItem.get(product.id) ?? 0;
+        const willExist = currentQty > 0;
+
+        if (willExist) {
+          const newQuantity = currentQty + cartQuantity;
           await onUpdateQuantity(product.id, newQuantity);
+          qtyByItem.set(product.id, newQuantity);
           
           if (prescriptionDosageValue) {
             updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
@@ -1216,7 +1255,12 @@ export default function OrderSummary({
             updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
           }
           if (itemToAdd.medication_order) {
-            updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order });
+            const s = medsByItem.get(product.id) ?? new Set<string>();
+            s.add(itemToAdd.medication_order);
+            selectedOrderNames.forEach((o) => s.add(o));
+            medsByItem.set(product.id, s);
+            const arr = Array.from(s);
+            updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order, medicationOrders: arr });
             updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order);
           }
           
@@ -1241,10 +1285,11 @@ export default function OrderSummary({
               available: product.available,
               uom: uomToUse,
               item_code: product.id,
-              ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order }),
+              ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order, medicationOrders: [itemToAdd.medication_order] }),
             },
             cartQuantity
           );
+          qtyByItem.set(product.id, cartQuantity);
           
           if (prescriptionDosageValue) {
             setTimeout(() => {
@@ -1258,7 +1303,11 @@ export default function OrderSummary({
             }, 100);
           }
           if (itemToAdd.medication_order) {
-            updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order });
+            const s = medsByItem.get(product.id) ?? new Set<string>();
+            s.add(itemToAdd.medication_order);
+            selectedOrderNames.forEach((o) => s.add(o));
+            medsByItem.set(product.id, s);
+            updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order, medicationOrders: Array.from(s) });
             setTimeout(() => {
               updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order!);
             }, 100);

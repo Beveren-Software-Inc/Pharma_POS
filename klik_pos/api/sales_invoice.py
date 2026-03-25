@@ -792,7 +792,8 @@ def parse_invoice_data(data):
 	"""Sanitize and extract customer and items from request payload including round-off."""
 	if isinstance(data, str):
 		data = json.loads(data)
-
+	# print("Data is ", data)
+	
 	customer = data.get("customer", {}).get("id")
 	items = data.get("items", [])
 
@@ -825,6 +826,9 @@ def parse_invoice_data(data):
 	reference_no = data.get("referenceNo") or data.get("reference_no")
 	# Extract Patient Medication Order (when items came from medication order)
 	medication_order = data.get("medicationOrder")
+	# print("Medication orders", medication_order)
+	# frappe.throw("Huku")
+	
 	# Fallback: extract from items if top-level medicationOrder is empty (e.g. mobile payment flow)
 	if not medication_order and items:
 		orders_from_items = set()
@@ -932,8 +936,10 @@ def build_sales_invoice_doc(
 		doc.custom_health_insurance = health_insurance
 	if flt(insurance_amount) and frappe.db.has_column("Sales Invoice", "custom_amount_to_be_covered"):
 		doc.custom_amount_to_be_covered = flt(insurance_amount)
+	# print("Patinet medictaion order", medication_order)
+	# frappe.throw("Uko")
 	# Set Patient Medication Orders (Table MultiSelect) if items came from orders and field exists
-	if medication_order and frappe.db.has_column("Sales Invoice", "custom_medication_order"):
+	if medication_order and doc.meta.has_field("custom_medication_order"):
 		orders = medication_order
 
 		if isinstance(orders, str):
@@ -942,16 +948,14 @@ def build_sales_invoice_doc(
 			orders = list(orders)
 		elif not isinstance(orders, list):
 			orders = [orders]
-
+		
 		for order_name in orders:
 			if not order_name:
 				continue
-			# custom_medication_order is a Table MultiSelect of child doctype "Medication Details"
-			# which has a Link field "medication_order" to "Patient Medication Order"
+			
 			doc.append("custom_medication_order", {"medication_order": order_name})
-
-		# Also set the Patient on Sales Invoice (healthcare) if the standard patient field exists.
-		# Use the patient from the first medication order.
+			
+		
 		if frappe.db.has_column("Sales Invoice", "patient"):
 			first_order = orders[0]
 			if first_order:
@@ -999,13 +1003,11 @@ def build_sales_invoice_doc(
 	if include_payments:
 		_add_payment_entries(doc, mode_of_payment)
 
-	# Loyalty points redemption (ERPNext standard); validate_loyalty_points will set loyalty_amount on validate
 	if redeem_loyalty_points and loyalty_points and cint(loyalty_points) > 0:
 		doc.redeem_loyalty_points = 1
 		doc.loyalty_points = cint(loyalty_points)
 
 	return doc
-
 
 
 def _validate_and_autofetch_batch_and_serial(items, pos_profile):

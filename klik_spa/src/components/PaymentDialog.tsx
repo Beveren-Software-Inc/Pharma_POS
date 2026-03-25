@@ -1165,6 +1165,10 @@ export default function PaymentDialog({
           const orderName = (discount as { medicationOrder?: string } | undefined)?.medicationOrder
             ?? (item as { medicationOrder?: string }).medicationOrder;
           if (orderName) orders.add(orderName);
+          const orderNames = (item as { medicationOrders?: string[] }).medicationOrders;
+          if (Array.isArray(orderNames)) {
+            orderNames.forEach((o) => o && orders.add(o));
+          }
         });
         return Array.from(orders);
       })(),
