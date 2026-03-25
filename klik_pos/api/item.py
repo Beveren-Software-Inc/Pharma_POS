@@ -39,6 +39,7 @@ def get_price_list_with_customer_priority(customer=None):
 def fetch_item_balance(item_code: str, warehouse: str) -> float:
 	"""Get stock balance of an item from a warehouse."""
 	try:
+		
 		return get_stock_balance(item_code, warehouse) or 0
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), f"Error fetching balance for {item_code}")
@@ -485,41 +486,74 @@ def _get_pos_context():
 
 	return pos_doc, warehouse, price_list, hide_unavailable
 
-
 def _fetch_batch_stock(item_codes: list, warehouse: str) -> dict:
-	"""Fetch stock balances for multiple items in optimized batch queries."""
-	if not item_codes or not warehouse:
-		return {}
+    """Fetch stock balances for multiple items using Stock Ledger Entry (source of truth)."""
+    if not item_codes or not warehouse:
+        return {}
 
-	stock_map = {}
+    stock_map = {}
 
-	# Use SQL to get stock from Bin table in batch
-	try:
-		placeholders = ", ".join(["%s"] * len(item_codes))
-		sql = f"""
-			SELECT item_code, actual_qty
-			FROM `tabBin`
-			WHERE item_code IN ({placeholders})
-			AND warehouse = %s
-		"""
-		params = [*item_codes, warehouse]
-		results = frappe.db.sql(sql, params, as_dict=True)
+    try:
+        placeholders = ", ".join(["%s"] * len(item_codes))
+        sql = f"""
+            SELECT item_code, SUM(actual_qty) as actual_qty
+            FROM `tabStock Ledger Entry`
+            WHERE item_code IN ({placeholders})
+            AND warehouse = %s
+            AND is_cancelled = 0
+            GROUP BY item_code
+        """
+        params = [*item_codes, warehouse]
+        results = frappe.db.sql(sql, params, as_dict=True)
 
-		for row in results:
-			stock_map[row["item_code"]] = row["actual_qty"] or 0
+        for row in results:
+            stock_map[row["item_code"]] = row["actual_qty"] or 0
 
-		# Items not in Bin have 0 stock
-		for item_code in item_codes:
-			if item_code not in stock_map:
-				stock_map[item_code] = 0
+        # Items not in SLE have 0 stock
+        for item_code in item_codes:
+            if item_code not in stock_map:
+                stock_map[item_code] = 0
 
-	except Exception:
-		frappe.log_error(frappe.get_traceback(), "Batch stock fetch error")
-		# Fallback to individual queries
-		for item_code in item_codes:
-			stock_map[item_code] = fetch_item_balance(item_code, warehouse)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Batch stock fetch error")
+        for item_code in item_codes:
+            stock_map[item_code] = fetch_item_balance(item_code, warehouse)
 
-	return stock_map
+    return stock_map
+# def _fetch_batch_stock(item_codes: list, warehouse: str) -> dict:
+# 	"""Fetch stock balances for multiple items in optimized batch queries."""
+# 	if not item_codes or not warehouse:
+# 		return {}
+
+# 	stock_map = {}
+
+# 	# Use SQL to get stock from Bin table in batch
+# 	# try:
+# 	# 	placeholders = ", ".join(["%s"] * len(item_codes))
+# 	# 	sql = f"""
+# 	# 		SELECT item_code, actual_qty
+# 	# 		FROM `tabBin`
+# 	# 		WHERE item_code IN ({placeholders})
+# 	# 		AND warehouse = %s
+# 	# 	"""
+# 	# 	params = [*item_codes, warehouse]
+# 	# 	results = frappe.db.sql(sql, params, as_dict=True)
+
+# 	# 	for row in results:
+# 	# 		stock_map[row["item_code"]] = row["actual_qty"] or 0
+
+# 	# 	# Items not in Bin have 0 stock
+# 	# 	for item_code in item_codes:
+# 	# 		if item_code not in stock_map:
+# 	# 			stock_map[item_code] = 0
+
+# 	# except Exception:
+# 	# 	frappe.log_error(frappe.get_traceback(), "Batch stock fetch error")
+# 	# 	# Fallback to individual queries
+# 	for item_code in item_codes:
+# 		stock_map[item_code] = fetch_item_balance(item_code, warehouse)
+
+# 	return stock_map
 
 
 def _fetch_batch_prices(item_codes: list, price_list: str | None, uom_map: dict) -> dict:
@@ -1005,7 +1039,7 @@ def get_items_with_balance_and_price(
 		dict with items, total_count, and has_more flag
 	"""
 	limit, offset = _coerce_limit_offset(limit, offset)
-
+	
 	pos_doc, warehouse, price_list, hide_unavailable = _get_pos_context()
 
 	try:
@@ -1062,6 +1096,7 @@ def get_items_with_balance_and_price(
 
 		# Fetch stock and prices in batch (optimized)
 		stock_map = _fetch_batch_stock(item_codes, warehouse)
+		
 		price_map = _fetch_batch_prices(item_codes, price_list, uom_map)
 
 		item_tax_template_map = {}
