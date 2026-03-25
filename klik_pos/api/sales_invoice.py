@@ -793,7 +793,7 @@ def parse_invoice_data(data):
 	if isinstance(data, str):
 		data = json.loads(data)
 	# print("Data is ", data)
-	
+	# frappe.throw("uko wpi")
 	customer = data.get("customer", {}).get("id")
 	items = data.get("items", [])
 
@@ -1718,7 +1718,8 @@ def validate_return_restrictions(invoice_doc):
 def finalize_paid_amount(doc, method=None):
 	"""
 	Hook called on Sales Invoice on_submit.
-	Can be used to sync or finalize paid_amount/outstanding for POS invoices.
+	POS paid/outstanding alignment is handled in validate (set_total_taxes_for_item_template +
+	_recalculate_pos_outstanding_after_totals_change + set_status); nothing required here.
 	"""
 	pass
 
@@ -1942,6 +1943,34 @@ def enforce_zero_rate_for_free_items(doc, method):
 		item.allow_zero_valuation_rate = 1
 
 
+def _recalculate_pos_outstanding_after_totals_change(doc):
+	"""
+	ERPNext's calculate_taxes_and_totals() runs during Sales Invoice.validate and sets
+	change_amount / outstanding_amount from paid_amount vs grand_total at that moment.
+
+	Our validate hook set_total_taxes_for_item_template may change grand_total afterward
+	(e.g. item tax template + free-item tax). Without this, change_amount stays stale and
+	outstanding_amount = total - paid + change becomes wrong (Partly Paid with full payment).
+
+	Mirrors erpnext.controllers.taxes_and_totals.calculate_outstanding_amount for POS.
+	"""
+	if doc.doctype != "Sales Invoice" or not getattr(doc, "is_pos", 0):
+		return
+	if getattr(doc, "is_return", 0):
+		return
+	try:
+		from erpnext.controllers.taxes_and_totals import calculate_taxes_and_totals
+
+		tot = object.__new__(calculate_taxes_and_totals)
+		tot.doc = doc
+		tot.calculate_outstanding_amount()
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(),
+			"POS outstanding recalculation after item-tax-template totals",
+		)
+
+
 def set_total_taxes_for_item_template(doc, method):
 	"""
 	When using item tax template mode (POS Profile.custom_allow_item_tax_template),
@@ -1954,6 +1983,14 @@ def set_total_taxes_for_item_template(doc, method):
 
 	# Only adjust Sales Invoices
 	if doc.doctype != "Sales Invoice":
+		return
+
+	# Desk / non-POS invoices must keep ERPNext's standard taxes + item-wise tax detail flow.
+	# This hook clears and rebuilds `taxes` after `calculate_taxes_and_totals()` has already
+	# populated `_item_wise_tax_details` from the previous tax rows. If we run that on a normal
+	# SI (e.g. user has a POS Profile but `is_pos` is unset), submit fails with mandatory
+	# "Tax Row" / "Item Row" on Item Wise Tax Details because stale tax references have no `name`.
+	if not cint(getattr(doc, "is_pos", 0)):
 		return
 
 	# If ERPNext has already populated taxes or a non-zero total_taxes_and_charges, do nothing
@@ -2299,6 +2336,13 @@ def set_total_taxes_for_item_template(doc, method):
 			doc.grand_total * (doc.conversion_rate or 1),
 			doc.precision("base_grand_total") or 2,
 		)
+
+	# Sync POS change / outstanding to the final grand total (see _recalculate_pos_outstanding_after_totals_change).
+	# ERPNext already ran set_status() inside SalesInvoice.validate before these hooks; refresh status from
+	# the corrected outstanding_amount so we do not save as Partly Paid with zero outstanding.
+	if getattr(doc, "is_pos", 0) and not getattr(doc, "is_return", 0):
+		_recalculate_pos_outstanding_after_totals_change(doc)
+		doc.set_status()
 
 def custom_calculate_totals(self):
 	"""Main function to calculate invoice totals with custom round-off logic"""
