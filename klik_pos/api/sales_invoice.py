@@ -826,8 +826,6 @@ def parse_invoice_data(data):
 	reference_no = data.get("referenceNo") or data.get("reference_no")
 	# Extract Patient Medication Order (when items came from medication order)
 	medication_order = data.get("medicationOrder")
-	# print("Medication orders", medication_order)
-	# frappe.throw("Huku")
 	
 	# Fallback: extract from items if top-level medicationOrder is empty (e.g. mobile payment flow)
 	if not medication_order and items:
@@ -936,8 +934,7 @@ def build_sales_invoice_doc(
 		doc.custom_health_insurance = health_insurance
 	if flt(insurance_amount) and frappe.db.has_column("Sales Invoice", "custom_amount_to_be_covered"):
 		doc.custom_amount_to_be_covered = flt(insurance_amount)
-	# print("Patinet medictaion order", medication_order)
-	# frappe.throw("Uko")
+	
 	# Set Patient Medication Orders (Table MultiSelect) if items came from orders and field exists
 	if medication_order and doc.meta.has_field("custom_medication_order"):
 		orders = medication_order
@@ -1975,7 +1972,7 @@ def set_total_taxes_for_item_template(doc, method):
 
 	if not pos_profile or not getattr(pos_profile, "custom_allow_item_tax_template", 0):
 		return
-
+	doc.set("taxes", [])
 	net_total = doc.net_total or 0
 	grand_total = doc.grand_total or 0
 
@@ -2474,6 +2471,8 @@ class CustomSalesInvoice(SalesInvoice):
 			self.taxes = []
 		# frappe.throw(str(self.taxes))
 		return pos
+
+	
 
 	def get_gl_entries(self, warehouse_account=None):
 		from erpnext.accounts.general_ledger import merge_similar_entries

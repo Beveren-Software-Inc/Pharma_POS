@@ -609,15 +609,39 @@ export default function PaymentDialog({
   }, [isOpen, defaultTax, selectedSalesTaxCharges]);
 
   useEffect(() => {
-    if (isOpen && modes.length > 0 && !isCompanyDelivery) {
-      const defaultMode = modes.find((mode) => mode.default === 1);
-      if (defaultMode && Object.keys(paymentAmounts).length === 0) {
-        const defaultAmount = parseFloat(effectiveGrandTotal.toFixed(3));
-        setLastModifiedMethodId(defaultMode.mode_of_payment); // Track the auto-filled method
-        setPaymentAmounts({ [defaultMode.mode_of_payment]: defaultAmount });
-      }
-    }
-  }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery]);
+  if (!isOpen || modes.length === 0 || isCompanyDelivery) return;
+ 
+  const defaultMode = modes.find((mode) => mode.default === 1);
+  if (!defaultMode) return;
+ 
+  // Check current payment state
+  const hasAnyPayment = Object.keys(paymentAmounts).length > 0;
+  const hasOnlyDefaultPayment = 
+    hasAnyPayment && 
+    Object.keys(paymentAmounts).length === 1 && 
+    paymentAmounts[defaultMode.mode_of_payment];
+ 
+  // Auto-fill ONLY if:
+  // 1. No payments yet (first load), OR
+  // 2. Only default method is populated (likely auto-filled, not manually edited)
+  if (!hasAnyPayment || hasOnlyDefaultPayment) {
+    const newAmount = parseFloat(effectiveGrandTotal.toFixed(3));
+    setPaymentAmounts({ [defaultMode.mode_of_payment]: newAmount });
+    setLastModifiedMethodId(defaultMode.mode_of_payment);
+  }
+}, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery]);
+
+
+  // useEffect(() => {
+  //   if (isOpen && modes.length > 0 && !isCompanyDelivery) {
+  //     const defaultMode = modes.find((mode) => mode.default === 1);
+  //     if (defaultMode && Object.keys(paymentAmounts).length === 0) {
+  //       const defaultAmount = parseFloat(effectiveGrandTotal.toFixed(3));
+  //       setLastModifiedMethodId(defaultMode.mode_of_payment); // Track the auto-filled method
+  //       setPaymentAmounts({ [defaultMode.mode_of_payment]: defaultAmount });
+  //     }
+  //   }
+  // }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery]);
 
   useEffect(() => {
 
