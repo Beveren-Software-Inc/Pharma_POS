@@ -600,12 +600,13 @@ export default function OrderSummary({
     return () => clearTimeout(timer);
   }, []);
 
-  // Update prices when customer changes (but not on initial load to preserve restored prices)
+  // Update prices only when customer changes (not on every cart length mutation),
+  // to avoid duplicate async pricing runs racing each other.
   useEffect(() => {
-    if (!isInitialLoad && selectedCustomer && cartItems.length > 0) {
+    if (!isInitialLoad && selectedCustomer) {
       updatePricesForCustomer(selectedCustomer.id);
     }
-  }, [selectedCustomer?.id, cartItems.length, isInitialLoad, updatePricesForCustomer]);
+  }, [selectedCustomer?.id, isInitialLoad, updatePricesForCustomer]);
   const [customerSearchQuery, setCustomerSearchQuery] = useState("");
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
@@ -1497,14 +1498,19 @@ export default function OrderSummary({
     // Use dedicated clear function if available
     if (onClearCart) {
       onClearCart();
+      // When store-level clear is used, skip per-item removals.
+      // Per-item removals can re-trigger pricing-rule async logic and momentarily repopulate items.
+      // Clear local UI state too.
+      setItemDiscounts({});
+      setSelectedCustomer(null);
+      setCustomerSearchQuery("");
+      return;
     }
 
-    // Defensive: also remove items individually to ensure the cart is empty
+    // Fallback (when no onClearCart is provided): remove items individually.
     const itemsToRemove = [...cartItems];
     itemsToRemove.forEach((item) => {
-      if (onRemoveItem) {
-        onRemoveItem(item.id);
-      }
+      if (onRemoveItem) onRemoveItem(item.id);
     });
 
     // Clear applied coupons

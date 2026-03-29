@@ -6,6 +6,9 @@ import { toast } from 'react-toastify'
 import { clearDraftInvoiceCache } from '../utils/draftInvoiceCache'
 import { updateItemPricesForCustomer, getItemPriceForCustomer, applyPricingRulesToCart } from '../services/dynamicPricing'
 
+// Monotonic token to prevent stale async pricing responses from overwriting newer cart state.
+let pricingRunToken = 0
+
 // Preserve batch_no/serial_no from current cart when replacing with merged items (avoids losing them when applyPricingRules runs after scan)
 function preserveBatchAndSerial(merged: CartItem[], currentCart: CartItem[]): CartItem[] {
   return merged.map((item) => {
@@ -321,12 +324,21 @@ export const useCartStore = create<CartState>()(
         }
       },
 
-      removeItem: (id) => set((state) => {
-        const matchLine = (ci: CartItem) => (ci as { cartLineId?: string }).cartLineId === id || ci.id === id;
-        return {
-          cartItems: state.cartItems.filter((item) => !matchLine(item))
-        };
-      }),
+      removeItem: (id) => {
+        set((state) => {
+          const matchLine = (ci: CartItem) => (ci as { cartLineId?: string }).cartLineId === id || ci.id === id;
+          return {
+            cartItems: state.cartItems.filter((item) => !matchLine(item))
+          };
+        });
+
+        // Re-apply pricing rules so dependent free items / discounts are recalculated.
+        // Use fire-and-forget to keep remove handler sync for UI callbacks.
+        const stateAfterRemove = get();
+        if (stateAfterRemove.cartItems.length > 0) {
+          void stateAfterRemove.applyPricingRules();
+        }
+      },
 
       updateItemMetadata: (id, updates) => set((state) => {
         const matchLine = (ci: CartItem) => (ci as { cartLineId?: string }).cartLineId === id || ci.id === id;
@@ -338,6 +350,10 @@ export const useCartStore = create<CartState>()(
       }),
 
       clearCart: () => {
+        // Invalidate any in-flight pricing recalculations started by add/remove/quantity changes.
+        // Without this, an async pricing response can finish after clearing and repopulate the cart.
+        pricingRunToken += 1
+
         // Clear draft invoice cache when clearing cart
         clearDraftInvoiceCache();
         set(() => ({
@@ -393,9 +409,13 @@ export const useCartStore = create<CartState>()(
 
         // Only apply pricing rules to non-free cart items; free items are re-generated from rules
         const baseCartItems = state.cartItems.filter((item: any) => !item.is_free_item);
-        if (baseCartItems.length === 0) return;
+        if (baseCartItems.length === 0) {
+          set(() => ({ cartItems: [] }));
+          return;
+        }
 
         try {
+          const runToken = ++pricingRunToken;
           // First get base prices for items
           const priceUpdates = await updateItemPricesForCustomer(baseCartItems, customerId);
 
@@ -427,6 +447,9 @@ export const useCartStore = create<CartState>()(
           // Then apply pricing rules to get discounted prices
           const itemsWithPricingRules = await applyPricingRulesToCart(updatedItems, customerId);
 
+          // Ignore stale async responses if a newer pricing run started.
+          if (runToken !== pricingRunToken) return;
+
           // Merge discounted base items + free items from pricing rules back into the cart
           const mergedCartItems = mergePricingResultsWithFreeItems(updatedItems, itemsWithPricingRules);
           const currentCart = get().cartItems;
@@ -448,11 +471,18 @@ export const useCartStore = create<CartState>()(
 
         // Only price non-free items; free items are derived from rules
         const baseCartItems = state.cartItems.filter((item: any) => !item.is_free_item);
-        if (baseCartItems.length === 0) return;
+        if (baseCartItems.length === 0) {
+          set(() => ({ cartItems: [] }));
+          return;
+        }
 
         try {
+          const runToken = ++pricingRunToken;
           const customerId = state.selectedCustomer?.id;
           const itemsWithPricingRules = await applyPricingRulesToCart(baseCartItems, customerId);
+
+          // Ignore stale async responses if a newer pricing run started.
+          if (runToken !== pricingRunToken) return;
 
           const mergedCartItems = mergePricingResultsWithFreeItems(baseCartItems, itemsWithPricingRules);
           const currentCart = get().cartItems;

@@ -1488,16 +1488,79 @@ def _add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_
 	return
 
 
-def _add_payment_entries(doc, mode_of_payment):
-	"""Add payment entries to the invoice."""
-	if not isinstance(mode_of_payment, list):
-		return
+# def _add_payment_entries(doc, mode_of_payment):
+# 	"""Add payment entries to the invoice."""
+# 	if not isinstance(mode_of_payment, list):
+# 		return
 
-	for payment in mode_of_payment:
-		doc.append(
-			"payments",
-			{"mode_of_payment": payment["method"], "amount": payment["amount"]},
-		)
+# 	for payment in mode_of_payment:
+# 		doc.append(
+# 			"payments",
+# 			{"mode_of_payment": payment["method"], "amount": payment["amount"]},
+# 		)
+def _add_payment_entries(doc, mode_of_payment):
+    """Add payment entries to the invoice. If none provided, use POS default with amount 0."""
+    if isinstance(mode_of_payment, list) and len(mode_of_payment) > 0:
+        # Frontend provided payment methods — use them as-is
+        for payment in mode_of_payment:
+            doc.append(
+                "payments",
+                {"mode_of_payment": payment["method"], "amount": payment["amount"]},
+            )
+        return
+
+    # No payment methods from frontend — fall back to POS profile default
+    try:
+        pos_profile = _get_active_pos_profile()
+
+        default_mop = None
+
+        # Try POS profile payments child table — prefer the one marked default
+        if getattr(pos_profile, "payments", None):
+            for payment in pos_profile.payments:
+                if getattr(payment, "default", 0):
+                    default_mop = payment.mode_of_payment
+                    break
+            # If none is marked default, take the first one
+            if not default_mop and pos_profile.payments:
+                default_mop = pos_profile.payments[0].mode_of_payment
+
+        if not default_mop:
+            frappe.log_error(
+                f"No default mode of payment found in POS Profile {pos_profile.name}",
+                "add_payment_entries_fallback"
+            )
+            return
+
+        # Get the account linked to this MOP for the company
+        mop_account = frappe.db.get_value(
+            "Mode of Payment Account",
+            {
+                "parent": default_mop,
+                "company": pos_profile.company,
+            },
+            "default_account",
+        )
+
+        mop_type = frappe.db.get_value("Mode of Payment", default_mop, "type") or "Cash"
+
+        doc.append(
+            "payments",
+            {
+                "mode_of_payment": default_mop,
+                "account": mop_account or "",
+                "amount": 0,
+                "base_amount": 0,
+                "default": 1,
+                "type": mop_type,
+            },
+        )
+
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            "Error attaching default MOP from POS profile"
+        )
 
 
 def get_tax_template(template_name):
