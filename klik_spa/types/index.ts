@@ -279,6 +279,7 @@ export interface POSProfile {
   write_off_account?: string;
   write_off_cost_center?: string;
   payment_methods?: PaymentMode[];
+  cost_center?: string;
   // Add other fields as needed
 }
 
