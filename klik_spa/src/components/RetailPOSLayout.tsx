@@ -286,29 +286,65 @@ export default function RetailPOSLayout() {
   // Barcode scanning functionality - moved after handleAddToCart is defined
   const { scanBarcode } = useBarcodeScanner(addItemToCart)
 
-  const handleBarcodeDetected = useCallback(async (barcode: string) => {
-    const result = await scanBarcode(barcode)
-    if (result) {
-      setShowScanner(false)
-      if (typeof result === 'object' && result.success && result.item_code) {
-        const itemCode = result.item_code
-        const batchId = result.matched_type === 'batch' ? result.matched_value : undefined
-        const serialNo = result.matched_type === 'serial' ? result.matched_value : undefined
-        // Add already awaited in scanBarcode; short delay so store subscribers see the new line before we apply batch/serial
-        setTimeout(() => {
-          if (batchId) {
-            window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
-              detail: { itemCode, batchId, forLastAdded: true },
-            }))
-          } else if (serialNo) {
-            window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
-              detail: { itemCode, serialNo, forLastAdded: true },
-            }))
-          }
-        }, 50)
-      }
+  // const handleBarcodeDetected = useCallback(async (barcode: string) => {
+  //   const result = await scanBarcode(barcode)
+  //   if (result) {
+  //     setShowScanner(false)
+  //     if (typeof result === 'object' && result.success && result.item_code) {
+  //       const itemCode = result.item_code
+  //       const batchId = result.matched_type === 'batch' ? result.matched_value : undefined
+  //       const serialNo = result.matched_type === 'serial' ? result.matched_value : undefined
+  //       // Add already awaited in scanBarcode; short delay so store subscribers see the new line before we apply batch/serial
+  //       setTimeout(() => {
+  //         if (batchId) {
+  //           window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
+  //             detail: { itemCode, batchId, forLastAdded: true },
+  //           }))
+  //         } else if (serialNo) {
+  //           window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
+  //             detail: { itemCode, serialNo, forLastAdded: true },
+  //           }))
+  //         }
+  //       }, 50)
+  //     }
+  //   }
+  // }, [scanBarcode])
+
+  // REPLACE this entire handleBarcodeDetected function:
+
+const handleBarcodeDetected = useCallback(async (barcode: string) => {
+  const result = await scanBarcode(barcode)
+  if (result) {
+    setShowScanner(false)
+    if (typeof result === 'object' && result.success && result.item_code) {
+      const itemCode = result.item_code
+
+      // Pull batch + serial from GS1 parsed data first (has both),
+      // then fall back to matched_type/matched_value for plain barcodes
+      const batchId =
+        result.gs1?.lotNumber ??
+        (result.matched_type === 'batch' ? result.matched_value : undefined)
+
+      const serialNo =
+        result.gs1?.serialNumber ??
+        (result.matched_type === 'serial' ? result.matched_value : undefined)
+
+      setTimeout(() => {
+        // Dispatch BOTH — batch first, then serial (no else if)
+        if (batchId) {
+          window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
+            detail: { itemCode, batchId, forLastAdded: true },
+          }))
+        }
+        if (serialNo) {
+          window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
+            detail: { itemCode, serialNo, forLastAdded: true },
+          }))
+        }
+      }, 50)
     }
-  }, [scanBarcode])
+  }
+}, [scanBarcode])
 
   // Handle search input for both product search and barcode scanning
   const handleSearchInput = (query: string) => {
