@@ -164,6 +164,7 @@ export default function PaymentDialog({
   const [invoiceData, setInvoiceData] = useState<any>(null);
   const [roundOffInput, setRoundOffInput] = useState(roundOffAmount.toFixed(3));
   const [isAutoPrinting, setIsAutoPrinting] = useState(false);
+  const [insuranceCoveragePercent, setInsuranceCoveragePercent] = useState<number>(0);
   const [sharingMode, setSharingMode] = useState<string | null>(
     initialSharingMode
   ); // 'email', 'sms', 'whatsapp'
@@ -879,41 +880,61 @@ export default function PaymentDialog({
   };
 
   // Auto-fill payment method with grand total and clear others
-  const handleAutoFillPayment = (methodId: string) => {
-    if (invoiceSubmitted || isProcessingPayment) return;
+const handleAutoFillPayment = (methodId: string) => {
+  if (invoiceSubmitted || isProcessingPayment) return;
 
-    const grandTotal = effectiveGrandTotal;
-    const newPaymentAmounts: PaymentAmount = {};
+  // If insurance is selected, the amount to fill should be the patient's portion only
+  // not the full grand total
+  const insuranceMode = selectedHealthInsurance?.mode_of_payment || null;
+  const isInsuranceMethod = methodId === insuranceMode;
 
-    // Set all payment methods to 0 first
-    paymentMethods.forEach(method => {
-      newPaymentAmounts[method.id] = 0;
-    });
+  let amountToFill: number;
 
-    // Set the selected method to grand total
-    newPaymentAmounts[methodId] = grandTotal;
+  if (selectedHealthInsurance) {
+    const coverage = Number(selectedHealthInsurance.userCoverage) || 0;
+    const insuranceAmount = roundCurrency((effectiveGrandTotal * coverage) / 100);
+    const patientAmount = roundCurrency(effectiveGrandTotal - insuranceAmount);
+
+    if (isInsuranceMethod) {
+      // Insurance method gets the insurance portion
+      amountToFill = insuranceAmount;
+    } else {
+      // Patient/cash method gets the patient portion
+      amountToFill = patientAmount;
+    }
+  } else {
+    // No insurance — fill with full grand total
+    amountToFill = effectiveGrandTotal;
+  }
+
+  const newPaymentAmounts: PaymentAmount = {};
+
+  // Zero out all methods first
+  paymentMethods.forEach(method => {
+    newPaymentAmounts[method.id] = 0;
+  });
+
+  // Keep insurance method amount if it exists and we're filling a non-insurance method
+  if (selectedHealthInsurance && insuranceMode && !isInsuranceMethod) {
+    const coverage = Number(selectedHealthInsurance.userCoverage) || 0;
+    const isCredit = selectedHealthInsurance.isCredit !== false;
+    if (!isCredit) {
+      // Insurance is paying now — keep its amount
+      const insuranceAmount = roundCurrency((effectiveGrandTotal * coverage) / 100);
+      newPaymentAmounts[insuranceMode] = insuranceAmount;
+    } else {
+      newPaymentAmounts[insuranceMode] = 0;
+    }
+  }
+
+  newPaymentAmounts[methodId] = amountToFill;
+
+  setLastModifiedMethodId(methodId);
+  setPaymentAmounts(newPaymentAmounts);
+  setActiveMethodId(methodId);
+};
 
 
-    setLastModifiedMethodId(methodId); // Track which method was just modified
-    setPaymentAmounts(newPaymentAmounts);
-    setActiveMethodId(methodId);
-  };
-
-  // Handle manual amount adjustment
-  const handleManualAmountChange = (methodId: string, amount: string) => {
-    if (invoiceSubmitted || isProcessingPayment) return;
-
-    const numericAmount = roundCurrency(parseFloat(amount) || 0);
-    // const grandTotal = effectiveGrandTotal;
-
-
-    // Update the payment amount and let the adjustment useEffect handle the logic
-    setLastModifiedMethodId(methodId);
-    setPaymentAmounts((prev) => ({
-      ...prev,
-      [methodId]: numericAmount,
-    }));
-  };
   const handleRoundOff = () => {
     if (invoiceSubmitted || isProcessingPayment) return;
 
@@ -1200,7 +1221,7 @@ export default function PaymentDialog({
       loyaltyPoints: redeemLoyaltyPoints ?? 0,
       healthInsurance: selectedHealthInsurance?.name || null,
       insuranceAmount: selectedHealthInsurance
-        ? roundCurrency((effectiveGrandTotal * (Number(selectedHealthInsurance.insurance_coverage_) || 0)) / 100)
+        ? roundCurrency((effectiveGrandTotal * (Number(selectedHealthInsurance.userCoverage) || 0)) / 100)
         : 0,
       insuranceIsCredit: selectedHealthInsurance?.isCredit !== false,
     };
@@ -1341,33 +1362,25 @@ export default function PaymentDialog({
   };
 
   const handleInsuranceSelect = (insurance: HealthInsuranceOption | null) => {
-    setSelectedHealthInsurance(insurance);
-    setShowInsuranceModal(false);
-    if (!insurance || invoiceSubmitted || isProcessingPayment) return;
-    const coverage = Number(insurance.insurance_coverage_) || 0;
-    const insuranceMode = insurance.mode_of_payment || null;
-    if (!insuranceMode || coverage <= 0) return;
-    const grandTotal = effectiveGrandTotal;
-    const insuranceAmount = roundCurrency((grandTotal * coverage) / 100);
-    const patientAmount = roundCurrency(grandTotal - insuranceAmount);
-    const cashMode = modes.find((m) => (m.type || "").toLowerCase() === "cash")?.mode_of_payment
-      || modes[0]?.mode_of_payment;
-    if (!cashMode) return;
-    const isCredit = insurance.isCredit !== false;
-    if (isCredit) {
-      // Patient pays their portion now; insurance pays later (invoice partially paid)
-      setPaymentAmounts({
-        [insuranceMode]: 0,
-        [cashMode]: patientAmount,
-      });
-    } else {
-      setPaymentAmounts({
-        [insuranceMode]: insuranceAmount,
-        [cashMode]: patientAmount,
-      });
-    }
-  };
-
+  setSelectedHealthInsurance(insurance);
+  setShowInsuranceModal(false);
+  if (!insurance || invoiceSubmitted || isProcessingPayment) return;
+  const coverage = Number(insurance.userCoverage) || 0;
+  const insuranceMode = insurance.mode_of_payment || null;
+  if (!insuranceMode || coverage <= 0) return;
+  const grandTotal = effectiveGrandTotal;
+  const insuranceAmount = roundCurrency((grandTotal * coverage) / 100); // ← use coverage directly
+  const patientAmount = roundCurrency(grandTotal - insuranceAmount);
+  const cashMode = modes.find((m) => (m.type || "").toLowerCase() === "cash")?.mode_of_payment
+    || modes[0]?.mode_of_payment;
+  if (!cashMode) return;
+  const isCredit = insurance.isCredit !== false;
+  if (isCredit) {
+    setPaymentAmounts({ [insuranceMode]: 0, [cashMode]: patientAmount });
+  } else {
+    setPaymentAmounts({ [insuranceMode]: insuranceAmount, [cashMode]: patientAmount });
+  }
+};
   const clearInsuranceSelection = () => {
     if (invoiceSubmitted || isProcessingPayment) return;
     setSelectedHealthInsurance(null);

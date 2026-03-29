@@ -10,6 +10,7 @@ export interface HealthInsuranceOption {
   mode_of_payment?: string | null;
   /** When true, patient pays their portion now; insurance portion is credit (invoice partially paid). */
   isCredit?: boolean;
+  userCoverage?: number; // New field for user-entered coverage percentage
 }
 
 interface InsuranceModalProps {
@@ -31,6 +32,7 @@ export default function InsuranceModal({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [selected, setSelected] = useState<HealthInsuranceOption | null>(selectedInsurance);
   const [isCredit, setIsCredit] = useState(true);
+  const [userCoverage, setUserCoverage] = useState<string>("0");
 
   useEffect(() => {
     if (isOpen) {
@@ -55,12 +57,12 @@ export default function InsuranceModal({
     }
   }, [isOpen, selectedInsurance]);
 
-  const handleConfirm = () => {
-    if (selected) {
-      onSelect({ ...selected, isCredit });
-      onClose();
-    }
-  };
+ const handleConfirm = () => {
+  if (selected) {
+    onSelect({ ...selected, isCredit, userCoverage }); // add userCoverage
+    onClose();
+  }
+};
 
   const handleClear = () => {
     setSelected(null);
@@ -141,12 +143,32 @@ export default function InsuranceModal({
 
             {selected && (
               <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-sm space-y-2">
-                <p>
-                  <span className="text-gray-600 dark:text-gray-400">Coverage: </span>
-                  <span className="font-medium text-gray-900 dark:text-white">
-                    {selected.insurance_coverage_ ?? 0}%
-                  </span>
-                </p>
+               <div>
+  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+    Coverage (%)
+  </label>
+  <div className="relative flex items-center">
+    <input
+  type="number"
+  min={0}
+  max={100}
+  value={userCoverage}
+  onChange={(e) => {
+    const val = e.target.value;
+    if (val === "" || val === "-") {
+      setUserCoverage("");
+      return;
+    }
+    const num = Math.min(100, Math.max(0, Number(val)));
+    setUserCoverage(String(num));
+  }}
+  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white pr-8"
+/>
+    <span className="absolute right-3 text-gray-500 dark:text-gray-400 pointer-events-none">
+      %
+    </span>
+  </div>
+</div>
                 {selected.mode_of_payment && (
                   <p>
                     <span className="text-gray-600 dark:text-gray-400">Mode of payment: </span>

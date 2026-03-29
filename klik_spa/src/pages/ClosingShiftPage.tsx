@@ -7,7 +7,8 @@ import {
   MonitorX,
   X,
   RotateCcw,
-  AlertCircle
+  AlertCircle,
+  Download,
 } from "lucide-react";
 
 import InvoiceViewModal from "../components/InvoiceViewModal";
@@ -27,6 +28,7 @@ import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { formatCurrency } from "../utils/currency";
 import { isToday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
 import { clearAllCache } from "../utils/clearCache";
+import { exportToCSV, exportToPDF } from "../utils/exportInvoice";
 
 export default function ClosingShiftPage() {
   const navigate = useNavigate();
@@ -39,6 +41,7 @@ export default function ClosingShiftPage() {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [closingAmounts, setClosingAmounts] = useState({});
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   // Draft Invoice Edit states
   // const [showEditOptions, setShowEditOptions] = useState(false);
@@ -547,11 +550,36 @@ export default function ClosingShiftPage() {
 
           {/* Invoices Table */}
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <div className="px-4 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                All Invoices ({filteredInvoices.length})
-              </h3>
-            </div>
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+    All Invoices ({filteredInvoices.length})
+  </h3>
+  <div className="relative">
+    <button
+      onClick={() => setShowExportMenu(prev => !prev)}
+      className="flex items-center space-x-2 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-sm"
+    >
+      <Download className="w-4 h-4" />
+      <span>Download</span>
+    </button>
+    {showExportMenu && (
+      <div className="absolute right-0 mt-1 w-36 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-10">
+        <button
+          onClick={() => { exportToCSV(filteredInvoices); setShowExportMenu(false); }}
+          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-t-lg"
+        >
+          Export Excel (CSV)
+        </button>
+        <button
+          onClick={() => { exportToPDF(filteredInvoices, posDetails?.currency, posDetails?.cost_center); setShowExportMenu(false); }}
+          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-b-lg"
+        >
+          Export PDF
+        </button>
+      </div>
+    )}
+  </div>
+</div>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50 dark:bg-gray-700">
@@ -891,11 +919,36 @@ export default function ClosingShiftPage() {
 
           {/* Invoices Table */}
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                All Invoices ({filteredInvoices.length})
-              </h3>
-            </div>
+               <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+    All Invoices ({filteredInvoices.length})
+  </h3>
+  <div className="relative">
+    <button
+      onClick={() => setShowExportMenu(prev => !prev)}
+      className="flex items-center space-x-2 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-sm"
+    >
+      <Download className="w-4 h-4" />
+      <span>Download</span>
+    </button>
+    {showExportMenu && (
+      <div className="absolute right-0 mt-1 w-36 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-10">
+        <button
+          onClick={() => { exportToCSV(filteredInvoices); setShowExportMenu(false); }}
+          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-t-lg"
+        >
+          Export Excel (CSV)
+        </button>
+        <button
+          onClick={() => { exportToPDF(filteredInvoices, posDetails?.currency, posDetails?.cost_center); setShowExportMenu(false); }}
+          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-b-lg"
+        >
+          Export PDF
+        </button>
+      </div>
+    )}
+  </div>
+</div>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50 dark:bg-gray-700">
