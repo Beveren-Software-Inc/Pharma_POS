@@ -286,66 +286,105 @@ export default function RetailPOSLayout() {
   // Barcode scanning functionality - moved after handleAddToCart is defined
   const { scanBarcode } = useBarcodeScanner(addItemToCart)
 
-  // const handleBarcodeDetected = useCallback(async (barcode: string) => {
-  //   const result = await scanBarcode(barcode)
-  //   if (result) {
-  //     setShowScanner(false)
-  //     if (typeof result === 'object' && result.success && result.item_code) {
-  //       const itemCode = result.item_code
-  //       const batchId = result.matched_type === 'batch' ? result.matched_value : undefined
-  //       const serialNo = result.matched_type === 'serial' ? result.matched_value : undefined
-  //       // Add already awaited in scanBarcode; short delay so store subscribers see the new line before we apply batch/serial
-  //       setTimeout(() => {
-  //         if (batchId) {
-  //           window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
-  //             detail: { itemCode, batchId, forLastAdded: true },
-  //           }))
-  //         } else if (serialNo) {
-  //           window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
-  //             detail: { itemCode, serialNo, forLastAdded: true },
-  //           }))
-  //         }
-  //       }, 50)
-  //     }
-  //   }
-  // }, [scanBarcode])
+ 
 
-  // REPLACE this entire handleBarcodeDetected function:
+// const handleBarcodeDetected = useCallback(async (barcode: string) => {
+//   const result = await scanBarcode(barcode)
+//   if (result) {
+//     setShowScanner(false)
+//     if (typeof result === 'object' && result.success && result.item_code) {
+//       const itemCode = result.item_code
+
+//       // Pull batch + serial from GS1 parsed data first (has both),
+//       // then fall back to matched_type/matched_value for plain barcodes
+//       const batchId =
+//         result.gs1?.lotNumber ??
+//         (result.matched_type === 'batch' ? result.matched_value : undefined)
+
+//       const serialNo =
+//         result.gs1?.serialNumber ??
+//         (result.matched_type === 'serial' ? result.matched_value : undefined)
+
+//       setTimeout(() => {
+//         // Dispatch BOTH — batch first, then serial (no else if)
+//         if (batchId) {
+//           window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
+//             detail: { itemCode, batchId, forLastAdded: true },
+//           }))
+//         }
+//         if (serialNo) {
+//           window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
+//             detail: { itemCode, serialNo, forLastAdded: true },
+//           }))
+//         }
+//       }, 50)
+//     }
+//   }
+// }, [scanBarcode])
 
 const handleBarcodeDetected = useCallback(async (barcode: string) => {
   const result = await scanBarcode(barcode)
-  if (result) {
-    setShowScanner(false)
-    if (typeof result === 'object' && result.success && result.item_code) {
-      const itemCode = result.item_code
+  if (!result) return
 
-      // Pull batch + serial from GS1 parsed data first (has both),
-      // then fall back to matched_type/matched_value for plain barcodes
-      const batchId =
-        result.gs1?.lotNumber ??
-        (result.matched_type === 'batch' ? result.matched_value : undefined)
+  setShowScanner(false)
 
-      const serialNo =
-        result.gs1?.serialNumber ??
-        (result.matched_type === 'serial' ? result.matched_value : undefined)
+  if (typeof result === 'object' && result.success && result.item_code) {
+    const itemCode   = result.item_code
+    const batchId    = result.gs1?.lotNumber    ?? (result.matched_type === 'batch'  ? result.matched_value : undefined)
+    const serialNo   = result.gs1?.serialNumber ?? (result.matched_type === 'serial' ? result.matched_value : undefined)
 
-      setTimeout(() => {
-        // Dispatch BOTH — batch first, then serial (no else if)
-        if (batchId) {
-          window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
-            detail: { itemCode, batchId, forLastAdded: true },
-          }))
-        }
-        if (serialNo) {
-          window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
-            detail: { itemCode, serialNo, forLastAdded: true },
-          }))
-        }
-      }, 50)
+    // ── Batch-aware line routing ──────────────────────────────────────────
+    // If we have a serial + batch, check whether an existing cart line for
+    // this item already carries the same batch. If yes, reuse that line
+    // (append serial only — no new line). If no match, let a new line be
+    // created (already done by scanBarcode → addItemToCart above).
+    //
+    // We read the cart state directly so we always see the just-added line.
+    const currentCart = useCartStore.getState().cartItems
+
+    // Find all lines for this item
+    const linesForItem = currentCart.filter(
+      ci => (ci.item_code || ci.id) === itemCode
+    )
+
+    // Determine which line to target for batch/serial dispatch
+    let targetLineKey: string | undefined
+
+    if (batchId && linesForItem.length > 0) {
+      // Look for an existing line that already has this batch
+      const lineWithSameBatch = linesForItem.find(ci => {
+        const lineBatch = (ci as { batch_no?: string }).batch_no
+        return lineBatch === batchId
+      })
+
+      if (lineWithSameBatch) {
+        // Reuse this line — get its key
+        targetLineKey = (lineWithSameBatch as { cartLineId?: string }).cartLineId || lineWithSameBatch.id
+      } else {
+        // Different batch → use the LAST added line (just created by scanBarcode)
+        const last = linesForItem[linesForItem.length - 1]
+        targetLineKey = last ? ((last as { cartLineId?: string }).cartLineId || last.id) : undefined
+      }
+    } else {
+      // No batch info — use last added line as before
+      const last = linesForItem[linesForItem.length - 1]
+      targetLineKey = last ? ((last as { cartLineId?: string }).cartLineId || last.id) : undefined
     }
+
+    setTimeout(() => {
+      if (batchId) {
+        window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
+          detail: { itemCode, batchId, forLastAdded: true, lineKey: targetLineKey },
+        }))
+      }
+      if (serialNo) {
+        window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
+          detail: { itemCode, serialNo, forLastAdded: true, lineKey: targetLineKey },
+        }))
+      }
+    }, 50)
   }
 }, [scanBarcode])
-
   // Handle search input for both product search and barcode scanning
   const handleSearchInput = (query: string) => {
     setLocalSearchQuery(query)
