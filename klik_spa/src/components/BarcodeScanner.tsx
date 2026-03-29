@@ -109,13 +109,16 @@ export default function BarcodeScannerModal({ onBarcodeDetected, onClose, isOpen
 
           try {
         type SupportedBarcodeFormat =
-          | 'code_128'
-          | 'code_39'
-          | 'ean_13'
-          | 'ean_8'
-          | 'upc_a'
-          | 'upc_e'
-          | 'qr_code'
+            | 'aztec'
+            | 'code_128'
+            | 'code_39'
+            | 'data_matrix'   // ← THIS is what your medicine box uses
+            | 'ean_13'
+            | 'ean_8'
+            | 'pdf417'
+            | 'qr_code'
+            | 'upc_a'
+            | 'upc_e'
 
         type BarcodeDetectorType = new (options?: { formats?: SupportedBarcodeFormat[] }) => {
           detect(image: HTMLCanvasElement): Promise<Array<{ rawValue: string }>>
@@ -126,10 +129,12 @@ export default function BarcodeScannerModal({ onBarcodeDetected, onClose, isOpen
           setError('BarcodeDetector not available in this browser.')
           return
         }
-        const barcodeDetector = new Detector({
-          formats: ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code']
-        })
-
+        // const barcodeDetector = new Detector({
+        //   formats: ['code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code']
+        // })
+          const barcodeDetector = new Detector({
+  formats: ['aztec', 'code_128', 'code_39', 'data_matrix', 'ean_13', 'ean_8', 'pdf417', 'qr_code', 'upc_a', 'upc_e']
+})
       // Start detection loop
       detectionIntervalRef.current = setInterval(async () => {
         if (videoRef.current && canvasRef.current && videoRef.current.videoWidth > 0) {
@@ -208,7 +213,8 @@ export default function BarcodeScannerModal({ onBarcodeDetected, onClose, isOpen
             <div className="flex items-center">
               <CheckCircle className="text-green-600 dark:text-green-400 mr-2" size={20} />
               <span className="text-green-800 dark:text-green-200 font-medium">
-                Barcode detected: {scannedBarcode}
+                Barcode detected: {scannedBarcode.length > 30 ? '(GS1 DataMatrix)' : scannedBarcode}
+
               </span>
             </div>
             <p className="text-green-600 dark:text-green-400 text-sm mt-1">
