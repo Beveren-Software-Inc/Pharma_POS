@@ -81,6 +81,7 @@ export function useBarcodeScanner(
       sold:          0,
       has_batch_no:  msg.has_batch_no as number | undefined,
       has_serial_no: msg.has_serial_no as number | undefined,
+      item_tax_template: msg.item_tax_template as string | undefined,
     }
   }
 
