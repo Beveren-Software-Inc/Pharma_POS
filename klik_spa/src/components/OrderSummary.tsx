@@ -1838,82 +1838,168 @@ export default function OrderSummary({
     window.addEventListener('batchQuantitiesUpdated', handleBatchUpdate as EventListener);
 
     // Listen for preselection from search (batch/serial)
-    const handleSetBatch = (event: CustomEvent) => {
-      const { itemCode, batchId, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; batchId: string; forLastAdded?: boolean; lineKey?: string };
-      let lineKey: string | undefined;
-      if (detailLineKey) {
-        lineKey = detailLineKey;
-      } else {
-        const currentCart = useCartStore.getState().cartItems;
-        const matches = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode);
-        const item = forLastAdded && matches.length > 0 ? matches[matches.length - 1] : matches[0];
-        lineKey = item ? getLineKey(item) : undefined;
-      }
-      if (lineKey) {
-        const selectedQty = itemBatches[itemCode]?.find(b => b.batch_id === batchId)?.qty || 0;
-        const base = itemDiscountsRef.current;
-        setItemDiscounts({
-          ...base,
-          [lineKey]: {
-            ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
-            batchNumber: batchId || '',
-            availableQuantity: selectedQty,
-          }
-        });
-        updateItemMetadata(lineKey, { batch_no: batchId || undefined });
-      } else {
-        // Save pending, to be applied when item appears in cart
-        setPendingPreselect(prev => ({
-          ...prev,
-          [itemCode]: { ...(prev[itemCode] || {}), batchId, forLastAdded }
-        }));
-      }
-    }
+//     const handleSetBatch = (event: CustomEvent) => {
+//       const { itemCode, batchId, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; batchId: string; forLastAdded?: boolean; lineKey?: string };
+//       let lineKey: string | undefined;
+//       if (detailLineKey) {
+//         lineKey = detailLineKey;
+//       } else {
+//         const currentCart = useCartStore.getState().cartItems;
+//         const matches = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode);
+//         const item = forLastAdded && matches.length > 0 ? matches[matches.length - 1] : matches[0];
+//         lineKey = item ? getLineKey(item) : undefined;
+//       }
+//       if (lineKey) {
+//         const selectedQty = itemBatches[itemCode]?.find(b => b.batch_id === batchId)?.qty || 0;
+//         const base = itemDiscountsRef.current;
+//         setItemDiscounts({
+//           ...base,
+//           [lineKey]: {
+//             ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
+//             batchNumber: batchId || '',
+//             availableQuantity: selectedQty,
+//           }
+//         });
+//         // Build the full accumulated serial string first, then persist it
+//       const existingSerials = new Set(
+//         (itemDiscountsRef.current[lineKey]?.serialNumber || '').split(',').map(s => s.trim()).filter(Boolean)
+//       );
+//       if (serialNo) existingSerials.add(serialNo);
+//       const fullSerialString = Array.from(existingSerials).join(',');
+//       updateItemMetadata(lineKey, { serial_no: fullSerialString || undefined });
+//             } else {
+//               // Save pending, to be applied when item appears in cart
+//               setPendingPreselect(prev => ({
+//                 ...prev,
+//                 [itemCode]: { ...(prev[itemCode] || {}), batchId, forLastAdded }
+//               }));
+//             }
+//     }
 
-    const handleSetSerial = (event: CustomEvent) => {
-      const { itemCode, serialNo, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; serialNo: string; forLastAdded?: boolean; lineKey?: string };
-      let lineKey: string | undefined;
-      if (detailLineKey) {
-        lineKey = detailLineKey;
-      } else {
-        const currentCart = useCartStore.getState().cartItems;
-        const matches = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode);
-        const item = forLastAdded && matches.length > 0 ? matches[matches.length - 1] : matches[0];
-        lineKey = item ? getLineKey(item) : undefined;
-      }
-      if (lineKey) {
-        const base = itemDiscountsRef.current;
-        setItemDiscounts({
-          ...base,
-          [lineKey]: {
-            ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
-            // serialNumber: serialNo || '',
-            serialNumber: (() => {
-              const existing = new Set(
-                (base[lineKey]?.serialNumber || '').split(',').map(s => s.trim()).filter(Boolean)
-              );
-              if (serialNo) existing.add(serialNo);
-              return Array.from(existing).join(',');
-            })(),
-          }
-        });
-        updateItemMetadata(lineKey, { serial_no: serialNo || undefined });
-        setItemSerials(prev => {
-          const key = itemCode;
-          const existing = new Set(prev[key] || []);
-          if (!existing.has(serialNo)) {
-            return { ...prev, [key]: [...existing, serialNo] as string[] };
-          }
-          return prev;
-        });
-      } else {
-        setPendingPreselect(prev => ({
-          ...prev,
-          [itemCode]: { ...(prev[itemCode] || {}), serialNo, forLastAdded }
-        }));
-      }
-    }
+//     const handleSetSerial = (event: CustomEvent) => {
+//       const { itemCode, serialNo, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; serialNo: string; forLastAdded?: boolean; lineKey?: string };
+//       let lineKey: string | undefined;
+//       if (detailLineKey) {
+//         lineKey = detailLineKey;
+//       } else {
+//         const currentCart = useCartStore.getState().cartItems;
+//         const matches = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode);
+//         const item = forLastAdded && matches.length > 0 ? matches[matches.length - 1] : matches[0];
+//         lineKey = item ? getLineKey(item) : undefined;
+//       }
+//       if (lineKey) {
+//         const base = itemDiscountsRef.current;
+//         setItemDiscounts({
+//           ...base,
+//           [lineKey]: {
+//             ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
+//             // serialNumber: serialNo || '',
+//             serialNumber: (() => {
+//               const existing = new Set(
+//                 (base[lineKey]?.serialNumber || '').split(',').map(s => s.trim()).filter(Boolean)
+//               );
+//               if (serialNo) existing.add(serialNo);
+//               return Array.from(existing).join(',');
+//             })(),
+//           }
+//         });
+//         const existingPending = new Set(
+//   (base[lineKey]?.serialNumber || '').split(',').map(s => s.trim()).filter(Boolean)
+// );
+// if (pending.serialNo) existingPending.add(pending.serialNo);
+// updateItemMetadata(lineKey, { serial_no: Array.from(existingPending).join(',') || undefined })
+//         setItemSerials(prev => {
+//           const key = itemCode;
+//           const existing = new Set(prev[key] || []);
+//           if (!existing.has(serialNo)) {
+//             return { ...prev, [key]: [...existing, serialNo] as string[] };
+//           }
+//           return prev;
+//         });
+//       } else {
+//         setPendingPreselect(prev => ({
+//           ...prev,
+//           [itemCode]: { ...(prev[itemCode] || {}), serialNo, forLastAdded }
+//         }));
+//       }
+//     }
 
+const handleSetBatch = (event: CustomEvent) => {
+  const { itemCode, batchId, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; batchId: string; forLastAdded?: boolean; lineKey?: string };
+  let lineKey: string | undefined;
+  if (detailLineKey) {
+    lineKey = detailLineKey;
+  } else {
+    const currentCart = useCartStore.getState().cartItems;
+    const matches = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode);
+    const item = forLastAdded && matches.length > 0 ? matches[matches.length - 1] : matches[0];
+    lineKey = item ? getLineKey(item) : undefined;
+  }
+  if (lineKey) {
+    const selectedQty = itemBatches[itemCode]?.find(b => b.batch_id === batchId)?.qty || 0;
+    const base = itemDiscountsRef.current;
+    setItemDiscounts({
+      ...base,
+      [lineKey]: {
+        ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
+        batchNumber: batchId || '',
+        availableQuantity: selectedQty,
+      }
+    });
+    // ✅ Only update batch metadata here — no serial logic
+    updateItemMetadata(lineKey, { batch_no: batchId || undefined });
+  } else {
+    setPendingPreselect(prev => ({
+      ...prev,
+      [itemCode]: { ...(prev[itemCode] || {}), batchId, forLastAdded }
+    }));
+  }
+}
+
+const handleSetSerial = (event: CustomEvent) => {
+  const { itemCode, serialNo, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; serialNo: string; forLastAdded?: boolean; lineKey?: string };
+  let lineKey: string | undefined;
+  if (detailLineKey) {
+    lineKey = detailLineKey;
+  } else {
+    const currentCart = useCartStore.getState().cartItems;
+    const matches = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode);
+    const item = forLastAdded && matches.length > 0 ? matches[matches.length - 1] : matches[0];
+    lineKey = item ? getLineKey(item) : undefined;
+  }
+  if (lineKey) {
+    const base = itemDiscountsRef.current;
+    // Accumulate serials (comma-separated)
+    const accumulated = (() => {
+      const existing = new Set(
+        (base[lineKey]?.serialNumber || '').split(',').map(s => s.trim()).filter(Boolean)
+      );
+      if (serialNo) existing.add(serialNo);
+      return Array.from(existing).join(',');
+    })();
+    setItemDiscounts({
+      ...base,
+      [lineKey]: {
+        ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
+        serialNumber: accumulated,
+      }
+    });
+    // ✅ Persist full accumulated serial string
+    updateItemMetadata(lineKey, { serial_no: accumulated || undefined });
+    setItemSerials(prev => {
+      const existing = new Set(prev[itemCode] || []);
+      if (!existing.has(serialNo)) {
+        return { ...prev, [itemCode]: [...existing, serialNo] as string[] };
+      }
+      return prev;
+    });
+  } else {
+    setPendingPreselect(prev => ({
+      ...prev,
+      [itemCode]: { ...(prev[itemCode] || {}), serialNo, forLastAdded }
+    }));
+  }
+}
     window.addEventListener('cart:setBatchForItem', handleSetBatch as EventListener)
     window.addEventListener('cart:setSerialForItem', handleSetSerial as EventListener)
 
@@ -2402,21 +2488,6 @@ export default function OrderSummary({
               const discountedPrice = getDiscountedPrice(item);
               const originalTotal = item.price * item.quantity;
               const discountedTotal = discountedPrice * item.quantity;
-              // const cartItemBatch = (item as { batch_no?: string }).batch_no;
-              // const cartItemSerial = (item as { serial_no?: string }).serial_no;
-              // const itemDiscount = {
-              //   discountPercentage: 0,
-              //   discountAmount: 0,
-              //   batchNumber: "",
-              //   serialNumber: "",
-              //   availableQuantity: 150,
-              //   prescriptionDosage: "",
-              //   dosage: 0,
-              //   ...(itemDiscounts[lineKey] || {}),
-              //   // Persisted batch/serial on cart item survive refresh; override local state when present
-              //   ...(cartItemBatch !== undefined && cartItemBatch !== "" ? { batchNumber: cartItemBatch } : {}),
-              //   ...(cartItemSerial !== undefined && cartItemSerial !== "" ? { serialNumber: cartItemSerial } : {}),
-              // };
               
                 const cartItemBatch = (item as { batch_no?: string }).batch_no;
                 const cartItemSerial = (item as { serial_no?: string }).serial_no;
@@ -2983,16 +3054,49 @@ export default function OrderSummary({
           isOpen={showPaymentDialog}
           onClose={handleClosePaymentDialog}
           redeemLoyaltyPoints={redeemLoyaltyPoints}
+          // cartItems={cartItems.map((item) => {
+          //   const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
+          //   return {
+          //     ...item,
+          //     discountedPrice: getDiscountedPrice(item),
+          //     itemDiscount: itemDiscounts[item.id] || {},
+          //     originalPrice: item.price,
+          //     finalAmount: getDiscountedPrice(item) * item.quantity + itemAdditional,
+          //   };
+          // })}
           cartItems={cartItems.map((item) => {
-            const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
-            return {
-              ...item,
-              discountedPrice: getDiscountedPrice(item),
-              itemDiscount: itemDiscounts[item.id] || {},
-              originalPrice: item.price,
-              finalAmount: getDiscountedPrice(item) * item.quantity + itemAdditional,
-            };
-          })}
+  const lineKey = getLineKey(item);
+  const itemAdditional = (item as { additional_amount?: number }).additional_amount || 0;
+
+  // Merge persisted serial_no (cart store) with accumulated serialNumber (itemDiscounts)
+  const cartItemSerial = (item as { serial_no?: string }).serial_no || "";
+  const localSerial = itemDiscounts[lineKey]?.serialNumber || "";
+  const mergedSerial = Array.from(new Set([
+    ...cartItemSerial.split(",").map(s => s.trim()).filter(Boolean),
+    ...localSerial.split(",").map(s => s.trim()).filter(Boolean),
+  ])).join(",");
+
+  const lineDiscount = itemDiscounts[lineKey] || {};
+
+  return {
+    ...item,
+    discountedPrice: getDiscountedPrice(item),
+    // ✅ use lineKey, not item.id
+    itemDiscount: {
+      ...lineDiscount,
+      // ✅ override serialNumber with merged value
+      serialNumber: mergedSerial,
+    },
+    originalPrice: item.price,
+    finalAmount: getDiscountedPrice(item) * item.quantity + itemAdditional,
+    // ✅ also override serial_no on the item itself so backend gets full list
+    serial_no: mergedSerial || undefined,
+    // ✅ quantity must match number of serials for ERPNext validation
+    quantity: mergedSerial
+      ? Math.max(item.quantity, mergedSerial.split(",").filter(Boolean).length)
+      : item.quantity,
+  };
+})}
           appliedCoupons={appliedCoupons}
           selectedCustomer={selectedCustomer}
           onCompletePayment={handleCompletePayment}

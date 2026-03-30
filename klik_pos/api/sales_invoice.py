@@ -605,130 +605,267 @@ def _get_address_and_customer_info(invoice):
 	}
 
 
+# @frappe.whitelist()
+# def create_and_submit_invoice(data):
+# 	try:
+# 		import time
+
+# 		start_time = time.time()
+
+# 		# Validate input data
+# 		if not data:
+# 			frappe.throw("No data provided for invoice creation")
+		
+# 		(
+# 			customer,
+# 			items,
+# 			amount_paid,
+# 			sales_and_tax_charges,
+# 			mode_of_payment,
+# 			business_type,
+# 			roundoff_amount,
+# 			delivery_personnel,
+# 			delivery_via,
+# 			reference_no,
+# 			medication_order,
+# 			redeem_loyalty_points,
+# 			loyalty_points,
+# 			general_additional_amount,
+# 			additional_remark,
+# 			delivery_distance_km,
+# 			delivery_charge_amount,
+# 			health_insurance,
+# 			insurance_amount,
+# 			insurance_is_credit,
+# 		) = parse_invoice_data(data)
+
+# 		# Validate required fields
+# 		if not customer:
+# 			frappe.throw("Customer is required")
+# 		if not items or len(items) == 0:
+# 			frappe.throw("At least one item is required")
+
+# 		# Build invoice document
+# 		doc = build_sales_invoice_doc(
+# 			customer,
+# 			items,
+# 			amount_paid,
+# 			sales_and_tax_charges,
+# 			mode_of_payment,
+# 			business_type,
+# 			roundoff_amount,
+# 			include_payments=True,
+# 			delivery_personnel=delivery_personnel,
+# 			delivery_via=delivery_via,
+# 			reference_no=reference_no,
+# 			medication_order=medication_order,
+# 			redeem_loyalty_points=redeem_loyalty_points,
+# 			loyalty_points=loyalty_points,
+# 			general_additional_amount=general_additional_amount,
+# 			additional_remark=additional_remark,
+# 			delivery_distance_km=delivery_distance_km,
+# 			delivery_charge_amount=delivery_charge_amount,
+# 			health_insurance=health_insurance,
+# 			insurance_amount=insurance_amount,
+# 			insurance_is_credit=insurance_is_credit,
+# 		)
+
+# 		doc.base_paid_amount = amount_paid
+# 		doc.paid_amount = amount_paid
+# 		# Do not override outstanding when insurance is credit (partially paid); ledger will set it
+# 		if not (health_insurance and insurance_is_credit):
+# 			doc.outstanding_amount = 0
+
+# 		# Save and submit in one transaction
+# 		doc.save(ignore_permissions=True)
+# 		doc.submit()
+
+# 		payment_entry = None
+# 		should_create_payment_entry = False
+
+# 		if business_type == "B2B":
+# 			should_create_payment_entry = True
+# 		elif business_type == "B2B & B2C":
+# 			# For B2B & B2C, only create payment entry for company customers
+# 			global _cached_customer_data
+# 			if customer not in _cached_customer_data:
+# 				_cached_customer_data[customer] = frappe.get_doc("Customer", customer)
+
+# 			customer_doc = _cached_customer_data[customer]
+# 			if customer_doc.customer_type == "Company":
+# 				should_create_payment_entry = True
+
+# 		if should_create_payment_entry and mode_of_payment and amount_paid > 0:
+# 			try:
+# 				payment_entry = create_payment_entry(doc, mode_of_payment, amount_paid)
+# 			except Exception:
+# 				frappe.log_error(frappe.get_traceback(), f"Payment Entry Error for {doc.name}")
+# 				payment_entry = None
+
+# 		processing_time = time.time() - start_time
+# 		frappe.logger().info(f"Invoice {doc.name} processed in {processing_time:.2f} seconds")
+
+# 		# Return minimal invoice data for frontend performance
+# 		return {
+# 			"success": True,
+# 			"invoice_name": doc.name,
+# 			"invoice_id": doc.name,
+# 			"invoice": {
+# 				"name": doc.name,
+# 				"doctype": doc.doctype,
+# 				"customer": doc.customer,
+# 				"customer_name": doc.customer_name,
+# 				"posting_date": doc.posting_date,
+# 				"base_grand_total": doc.base_grand_total,
+# 				"currency": doc.currency,
+# 				"status": doc.status,
+# 				"is_pos": doc.is_pos,
+# 				"company": doc.company,
+# 			},
+# 			"payment_entry": payment_entry.name if payment_entry else None,
+# 			"processing_time": round(processing_time, 2),
+# 		}
+
+# 	except Exception as e:
+# 		frappe.log_error(frappe.get_traceback(), "Submit Invoice Error")
+# 		return {"success": False, "message": str(e)}
+
 @frappe.whitelist()
 def create_and_submit_invoice(data):
-	try:
-		import time
+    try:
+        import time
+        start_time = time.time()
 
-		start_time = time.time()
+        if not data:
+            frappe.throw("No data provided for invoice creation")
 
-		# Validate input data
-		if not data:
-			frappe.throw("No data provided for invoice creation")
+        (
+            customer,
+            items,
+            amount_paid,
+            sales_and_tax_charges,
+            mode_of_payment,
+            business_type,
+            roundoff_amount,
+            delivery_personnel,
+            delivery_via,
+            reference_no,
+            medication_order,
+            redeem_loyalty_points,
+            loyalty_points,
+            general_additional_amount,
+            additional_remark,
+            delivery_distance_km,
+            delivery_charge_amount,
+            health_insurance,
+            insurance_amount,
+            insurance_is_credit,
+        ) = parse_invoice_data(data)
 
-		(
-			customer,
-			items,
-			amount_paid,
-			sales_and_tax_charges,
-			mode_of_payment,
-			business_type,
-			roundoff_amount,
-			delivery_personnel,
-			delivery_via,
-			reference_no,
-			medication_order,
-			redeem_loyalty_points,
-			loyalty_points,
-			general_additional_amount,
-			additional_remark,
-			delivery_distance_km,
-			delivery_charge_amount,
-			health_insurance,
-			insurance_amount,
-			insurance_is_credit,
-		) = parse_invoice_data(data)
+        if not customer:
+            frappe.throw("Customer is required")
+        if not items or len(items) == 0:
+            frappe.throw("At least one item is required")
 
-		# Validate required fields
-		if not customer:
-			frappe.throw("Customer is required")
-		if not items or len(items) == 0:
-			frappe.throw("At least one item is required")
+        # ── Wrap everything in a savepoint so ANY failure rolls back fully ──
+        # frappe.db.savepoint() creates a SQL SAVEPOINT; rolling back to it
+        # undoes the save AND the submit atomically — no orphaned drafts.
+        savepoint = "create_and_submit_invoice"
+        frappe.db.savepoint(savepoint)
 
-		# Build invoice document
-		doc = build_sales_invoice_doc(
-			customer,
-			items,
-			amount_paid,
-			sales_and_tax_charges,
-			mode_of_payment,
-			business_type,
-			roundoff_amount,
-			include_payments=True,
-			delivery_personnel=delivery_personnel,
-			delivery_via=delivery_via,
-			reference_no=reference_no,
-			medication_order=medication_order,
-			redeem_loyalty_points=redeem_loyalty_points,
-			loyalty_points=loyalty_points,
-			general_additional_amount=general_additional_amount,
-			additional_remark=additional_remark,
-			delivery_distance_km=delivery_distance_km,
-			delivery_charge_amount=delivery_charge_amount,
-			health_insurance=health_insurance,
-			insurance_amount=insurance_amount,
-			insurance_is_credit=insurance_is_credit,
-		)
+        try:
+            doc = build_sales_invoice_doc(
+                customer,
+                items,
+                amount_paid,
+                sales_and_tax_charges,
+                mode_of_payment,
+                business_type,
+                roundoff_amount,
+                include_payments=True,
+                delivery_personnel=delivery_personnel,
+                delivery_via=delivery_via,
+                reference_no=reference_no,
+                medication_order=medication_order,
+                redeem_loyalty_points=redeem_loyalty_points,
+                loyalty_points=loyalty_points,
+                general_additional_amount=general_additional_amount,
+                additional_remark=additional_remark,
+                delivery_distance_km=delivery_distance_km,
+                delivery_charge_amount=delivery_charge_amount,
+                health_insurance=health_insurance,
+                insurance_amount=insurance_amount,
+                insurance_is_credit=insurance_is_credit,
+            )
 
-		doc.base_paid_amount = amount_paid
-		doc.paid_amount = amount_paid
-		# Do not override outstanding when insurance is credit (partially paid); ledger will set it
-		if not (health_insurance and insurance_is_credit):
-			doc.outstanding_amount = 0
+            doc.base_paid_amount = amount_paid
+            doc.paid_amount = amount_paid
+            if not (health_insurance and insurance_is_credit):
+                doc.outstanding_amount = 0
 
-		# Save and submit in one transaction
-		doc.save(ignore_permissions=True)
-		doc.submit()
+            doc.save(ignore_permissions=True)
+            doc.submit()  # ← stock validation happens here; if it throws, we rollback
 
-		payment_entry = None
-		should_create_payment_entry = False
+            payment_entry = None
+            should_create_payment_entry = False
 
-		if business_type == "B2B":
-			should_create_payment_entry = True
-		elif business_type == "B2B & B2C":
-			# For B2B & B2C, only create payment entry for company customers
-			global _cached_customer_data
-			if customer not in _cached_customer_data:
-				_cached_customer_data[customer] = frappe.get_doc("Customer", customer)
+            if business_type == "B2B":
+                should_create_payment_entry = True
+            elif business_type == "B2B & B2C":
+                global _cached_customer_data
+                if customer not in _cached_customer_data:
+                    _cached_customer_data[customer] = frappe.get_doc("Customer", customer)
+                customer_doc = _cached_customer_data[customer]
+                if customer_doc.customer_type == "Company":
+                    should_create_payment_entry = True
 
-			customer_doc = _cached_customer_data[customer]
-			if customer_doc.customer_type == "Company":
-				should_create_payment_entry = True
+            if should_create_payment_entry and mode_of_payment and amount_paid > 0:
+                try:
+                    payment_entry = create_payment_entry(doc, mode_of_payment, amount_paid)
+                except Exception:
+                    frappe.log_error(frappe.get_traceback(), f"Payment Entry Error for {doc.name}")
+                    payment_entry = None
 
-		if should_create_payment_entry and mode_of_payment and amount_paid > 0:
-			try:
-				payment_entry = create_payment_entry(doc, mode_of_payment, amount_paid)
-			except Exception:
-				frappe.log_error(frappe.get_traceback(), f"Payment Entry Error for {doc.name}")
-				payment_entry = None
+            processing_time = time.time() - start_time
+            frappe.logger().info(f"Invoice {doc.name} processed in {processing_time:.2f} seconds")
 
-		processing_time = time.time() - start_time
-		frappe.logger().info(f"Invoice {doc.name} processed in {processing_time:.2f} seconds")
+            return {
+                "success": True,
+                "invoice_name": doc.name,
+                "invoice_id": doc.name,
+                "invoice": {
+                    "name": doc.name,
+                    "doctype": doc.doctype,
+                    "customer": doc.customer,
+                    "customer_name": doc.customer_name,
+                    "posting_date": doc.posting_date,
+                    "base_grand_total": doc.base_grand_total,
+                    "currency": doc.currency,
+                    "status": doc.status,
+                    "is_pos": doc.is_pos,
+                    "company": doc.company,
+                },
+                "payment_entry": payment_entry.name if payment_entry else None,
+                "processing_time": round(processing_time, 2),
+            }
 
-		# Return minimal invoice data for frontend performance
-		return {
-			"success": True,
-			"invoice_name": doc.name,
-			"invoice_id": doc.name,
-			"invoice": {
-				"name": doc.name,
-				"doctype": doc.doctype,
-				"customer": doc.customer,
-				"customer_name": doc.customer_name,
-				"posting_date": doc.posting_date,
-				"base_grand_total": doc.base_grand_total,
-				"currency": doc.currency,
-				"status": doc.status,
-				"is_pos": doc.is_pos,
-				"company": doc.company,
-			},
-			"payment_entry": payment_entry.name if payment_entry else None,
-			"processing_time": round(processing_time, 2),
-		}
+        except Exception as inner_e:
+            # Roll back the savepoint — undoes save + submit, no draft left behind
+            frappe.db.rollback(save_point=savepoint)
+            frappe.log_error(frappe.get_traceback(), "Submit Invoice Error - Rolled Back")
+            
+            # Extract a clean error message for the frontend
+            error_msg = str(inner_e)
+            # frappe.throw() wraps messages in ValidationError; unwrap it
+            if hasattr(inner_e, "message"):
+                error_msg = inner_e.message
+            
+            return {"success": False, "message": error_msg}
 
-	except Exception as e:
-		frappe.log_error(frappe.get_traceback(), "Submit Invoice Error")
-		return {"success": False, "message": str(e)}
+    except Exception as outer_e:
+        # Catches parse/validation errors before the savepoint
+        frappe.log_error(frappe.get_traceback(), "Submit Invoice Parse Error")
+        return {"success": False, "message": str(outer_e)}
 
 
 @frappe.whitelist()

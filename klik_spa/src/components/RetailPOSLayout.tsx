@@ -322,6 +322,70 @@ export default function RetailPOSLayout() {
 //   }
 // }, [scanBarcode])
 
+// const handleBarcodeDetected = useCallback(async (barcode: string) => {
+//   const result = await scanBarcode(barcode)
+//   if (!result) return
+
+//   setShowScanner(false)
+
+//   if (typeof result === 'object' && result.success && result.item_code) {
+//     const itemCode   = result.item_code
+//     const batchId    = result.gs1?.lotNumber    ?? (result.matched_type === 'batch'  ? result.matched_value : undefined)
+//     const serialNo   = result.gs1?.serialNumber ?? (result.matched_type === 'serial' ? result.matched_value : undefined)
+
+//     // ── Batch-aware line routing ──────────────────────────────────────────
+//     // If we have a serial + batch, check whether an existing cart line for
+//     // this item already carries the same batch. If yes, reuse that line
+//     // (append serial only — no new line). If no match, let a new line be
+//     // created (already done by scanBarcode → addItemToCart above).
+//     //
+//     // We read the cart state directly so we always see the just-added line.
+//     const currentCart = useCartStore.getState().cartItems
+
+//     // Find all lines for this item
+//     const linesForItem = currentCart.filter(
+//       ci => (ci.item_code || ci.id) === itemCode
+//     )
+
+//     // Determine which line to target for batch/serial dispatch
+//     let targetLineKey: string | undefined
+
+//     if (batchId && linesForItem.length > 0) {
+//       // Look for an existing line that already has this batch
+//       const lineWithSameBatch = linesForItem.find(ci => {
+//         const lineBatch = (ci as { batch_no?: string }).batch_no
+//         return lineBatch === batchId
+//       })
+
+//       if (lineWithSameBatch) {
+//         // Reuse this line — get its key
+//         targetLineKey = (lineWithSameBatch as { cartLineId?: string }).cartLineId || lineWithSameBatch.id
+//       } else {
+//         // Different batch → use the LAST added line (just created by scanBarcode)
+//         const last = linesForItem[linesForItem.length - 1]
+//         targetLineKey = last ? ((last as { cartLineId?: string }).cartLineId || last.id) : undefined
+//       }
+//     } else {
+//       // No batch info — use last added line as before
+//       const last = linesForItem[linesForItem.length - 1]
+//       targetLineKey = last ? ((last as { cartLineId?: string }).cartLineId || last.id) : undefined
+//     }
+
+//     setTimeout(() => {
+//       if (batchId) {
+//         window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
+//           detail: { itemCode, batchId, forLastAdded: true, lineKey: targetLineKey },
+//         }))
+//       }
+//       if (serialNo) {
+//         window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
+//           detail: { itemCode, serialNo, forLastAdded: true, lineKey: targetLineKey },
+//         }))
+//       }
+//     }, 50)
+//   }
+// }, [scanBarcode])
+
 const handleBarcodeDetected = useCallback(async (barcode: string) => {
   const result = await scanBarcode(barcode)
   if (!result) return
@@ -329,62 +393,66 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
   setShowScanner(false)
 
   if (typeof result === 'object' && result.success && result.item_code) {
-    const itemCode   = result.item_code
-    const batchId    = result.gs1?.lotNumber    ?? (result.matched_type === 'batch'  ? result.matched_value : undefined)
-    const serialNo   = result.gs1?.serialNumber ?? (result.matched_type === 'serial' ? result.matched_value : undefined)
+    const itemCode = result.item_code
+    const batchId  = result.gs1?.lotNumber    ?? (result.matched_type === 'batch'  ? result.matched_value : undefined)
+    const serialNo = result.gs1?.serialNumber ?? (result.matched_type === 'serial' ? result.matched_value : undefined)
 
-    // ── Batch-aware line routing ──────────────────────────────────────────
-    // If we have a serial + batch, check whether an existing cart line for
-    // this item already carries the same batch. If yes, reuse that line
-    // (append serial only — no new line). If no match, let a new line be
-    // created (already done by scanBarcode → addItemToCart above).
-    //
-    // We read the cart state directly so we always see the just-added line.
     const currentCart = useCartStore.getState().cartItems
+    const linesForItem = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode)
 
-    // Find all lines for this item
-    const linesForItem = currentCart.filter(
-      ci => (ci.item_code || ci.id) === itemCode
-    )
-
-    // Determine which line to target for batch/serial dispatch
     let targetLineKey: string | undefined
+    let reusingExistingLine = false
 
     if (batchId && linesForItem.length > 0) {
-      // Look for an existing line that already has this batch
       const lineWithSameBatch = linesForItem.find(ci => {
         const lineBatch = (ci as { batch_no?: string }).batch_no
         return lineBatch === batchId
       })
 
       if (lineWithSameBatch) {
-        // Reuse this line — get its key
-        targetLineKey = (lineWithSameBatch as { cartLineId?: string }).cartLineId || lineWithSameBatch.id
+        // ── Reusing existing line: increment quantity manually ──
+        // scanBarcode added a NEW line above, so we need to:
+        // 1. Remove the extra line that was just added (the last one)
+        // 2. Increment the existing same-batch line instead
+        const lastAdded = linesForItem[linesForItem.length - 1]
+        const lastKey = lastAdded ? ((lastAdded as { cartLineId?: string }).cartLineId || lastAdded.id) : undefined
+        const existingKey = (lineWithSameBatch as { cartLineId?: string }).cartLineId || lineWithSameBatch.id
+
+        if (lastKey && lastKey !== existingKey) {
+          // Remove the duplicate line that scanBarcode just created
+          removeItem(lastKey)
+        }
+
+        // Increment the existing line
+        updateQuantity(existingKey, lineWithSameBatch.quantity + 1)
+
+        targetLineKey = existingKey
+        reusingExistingLine = true
       } else {
-        // Different batch → use the LAST added line (just created by scanBarcode)
+        // Different batch → new line was correctly created
         const last = linesForItem[linesForItem.length - 1]
         targetLineKey = last ? ((last as { cartLineId?: string }).cartLineId || last.id) : undefined
       }
     } else {
-      // No batch info — use last added line as before
       const last = linesForItem[linesForItem.length - 1]
       targetLineKey = last ? ((last as { cartLineId?: string }).cartLineId || last.id) : undefined
     }
 
+    // Small delay to let removeItem/updateQuantity settle before dispatching batch/serial
     setTimeout(() => {
       if (batchId) {
         window.dispatchEvent(new CustomEvent('cart:setBatchForItem', {
-          detail: { itemCode, batchId, forLastAdded: true, lineKey: targetLineKey },
+          detail: { itemCode, batchId, forLastAdded: !reusingExistingLine, lineKey: targetLineKey },
         }))
       }
       if (serialNo) {
         window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
-          detail: { itemCode, serialNo, forLastAdded: true, lineKey: targetLineKey },
+          detail: { itemCode, serialNo, forLastAdded: !reusingExistingLine, lineKey: targetLineKey },
         }))
       }
-    }, 50)
+    }, 100) // slightly longer delay to let store settle after removeItem
   }
-}, [scanBarcode])
+}, [scanBarcode, removeItem, updateQuantity])
   // Handle search input for both product search and barcode scanning
   const handleSearchInput = (query: string) => {
     setLocalSearchQuery(query)

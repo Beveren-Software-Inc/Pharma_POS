@@ -363,7 +363,7 @@ def get_item_by_identifier(code: str):
 	- If barcode maps to an Item Barcode row that has custom_batch set, treat it as a batch match
 	  so the POS can auto-select the correct batch for this scan.
 	Returns same structure as get_item_by_barcode."""
-	
+	item_tax_template = None
 	try:
 		if not code:
 			frappe.throw(_("Identifier required"))
@@ -436,7 +436,7 @@ def get_item_by_identifier(code: str):
 		item_doc = frappe.get_doc("Item", item_code)
 		balance = fetch_item_balance(item_code, warehouse)
 		price_info = fetch_item_price(item_code, price_list)
-		
+		item_tax_template = _fetch_item_tax_templates([item_code], frappe.defaults.get_user_default("Company")).get(item_code)
 		return {
 			"item_code": item_code,
 			"item_name": item_doc.item_name or item_code,
@@ -451,6 +451,7 @@ def get_item_by_identifier(code: str):
 			"has_serial_no": getattr(item_doc, "has_serial_no", 0),
 			"matched_type": matched_type,
 			"matched_value": matched_value,
+			"item_tax_template": item_tax_template,
 		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), f"Error fetching item by identifier: {code}")
