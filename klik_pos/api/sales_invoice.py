@@ -1576,6 +1576,19 @@ def _append_delivery_charge_item(doc, delivery_charge_amount, pos_profile, deliv
 	if delivery_distance_km:
 		description = f"Delivery Charge ({flt(delivery_distance_km)} km)"
 
+	item_tax_template = None
+	if getattr(pos_profile, "custom_allow_item_tax_template", 0):
+		try:
+			from klik_pos.api import tax as tax_api
+			res = tax_api.get_item_tax_template_for_item(item_code, doc.company)
+			if res and res.get("item_tax_template"):
+				item_tax_template = res["item_tax_template"]
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				"Failed to resolve item tax template for Delivery Charge item",
+			)
+
 	doc.append(
 		"items",
 		{
@@ -1585,6 +1598,7 @@ def _append_delivery_charge_item(doc, delivery_charge_amount, pos_profile, deliv
 			"description": description,
 			"warehouse": warehouse,
 			"cost_center": cost_center,
+			"item_tax_template": item_tax_template,
 		},
 	)
 
