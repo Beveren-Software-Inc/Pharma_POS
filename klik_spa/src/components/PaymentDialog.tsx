@@ -165,6 +165,8 @@ export default function PaymentDialog({
   const [roundOffInput, setRoundOffInput] = useState(roundOffAmount.toFixed(3));
   const [isAutoPrinting, setIsAutoPrinting] = useState(false);
   const [insuranceCoveragePercent, setInsuranceCoveragePercent] = useState<number>(0);
+  const [deliveryChargeWithVAT, setDeliveryChargeWithVAT] = useState<number | null>(null);
+
   const [sharingMode, setSharingMode] = useState<string | null>(
     initialSharingMode
   ); // 'email', 'sms', 'whatsapp'
@@ -478,6 +480,11 @@ export default function PaymentDialog({
     );
     const totalAdditionalAmount = (generalAdditionalAmount || 0) + itemAdditionalTotal;
 
+    const deliveryChargeExclusive = deliveryChargeAmount || 0;
+    const deliveryTaxEstimated = deliveryChargeTaxAmount || 0;
+    const deliveryChargeInclusive =
+      deliveryChargeWithVAT ?? (deliveryChargeExclusive + deliveryTaxEstimated);
+
     if (isItemTaxTemplateMode) {
       // Tax from item tax template per item (exclusive); free items contribute 0 to this (rate is 0)
       let taxAmount = 0;
@@ -489,9 +496,10 @@ export default function PaymentDialog({
         taxAmount += (itemTotal * rate) / 100;
       });
       taxAmount = parseFloat(taxAmount.toFixed(3));
-      // Include tax on free items (backend adds same as Actual rows; user pays this)
-      const totalTaxAmount = taxAmount + (freeItemTaxAmount || 0) + (deliveryChargeTaxAmount || 0);
-      const deliveryCharge = deliveryChargeAmount || 0;
+      // Include tax on free items and delivery charge tax (derived from inclusive-excl difference)
+      const deliveryTaxPortion = Math.max(0, deliveryChargeInclusive - deliveryChargeExclusive);
+      const totalTaxAmount = taxAmount + (freeItemTaxAmount || 0) + deliveryTaxPortion;
+      const deliveryCharge = deliveryChargeExclusive;
       const grandTotal =
         taxableAmount + totalTaxAmount + totalAdditionalAmount + roundOffAmount + deliveryCharge;
       return {
@@ -528,15 +536,17 @@ export default function PaymentDialog({
       grandTotal = taxableAmount + taxAmount;
     }
 
-    const deliveryCharge = deliveryChargeAmount || 0;
-    const deliveryChargeTax = deliveryChargeTaxAmount || 0;
+    // const deliveryCharge = deliveryChargeAmount || 0;
+    // const deliveryChargeTax = deliveryChargeTaxAmount || 0;
+
+    const deliveryCharge = deliveryChargeInclusive;
 
     return {
       subtotal,
       couponDiscount,
       taxableAmount,
       taxAmount,
-      grandTotal: grandTotal + totalAdditionalAmount + roundOffAmount + deliveryCharge + deliveryChargeTax,
+      grandTotal: grandTotal + totalAdditionalAmount + roundOffAmount + deliveryCharge,
       generalAdditionalAmount: generalAdditionalAmount || 0,
       totalAdditionalAmount,
       selectedTax,
@@ -554,6 +564,7 @@ export default function PaymentDialog({
     freeItemTaxAmount,
     deliveryChargeTaxAmount,
     deliveryChargeAmount,
+    deliveryChargeWithVAT,
   ]);
 
   // Fetch loyalty redemption preview so amount_to_pay = grandTotal - loyalty_amount
@@ -1201,6 +1212,7 @@ const handleAutoFillPayment = (methodId: string) => {
       referenceNo: referenceNo || null,
       deliveryDistanceKm: deliveryDistanceKm ?? null,
       deliveryChargeAmount: deliveryChargeAmount ?? 0,
+      deliveryChargeWithVAT: deliveryChargeWithVAT ?? null,
       // Patient Medication Orders - from itemDiscounts or cart item; backend also extracts from items
       medicationOrder: (() => {
         const orders = new Set<string>();
@@ -1279,71 +1291,145 @@ const handleAutoFillPayment = (methodId: string) => {
     await processPayment(selectedDeliveryPersonnel, selectedDeliveryVia, selectedReferenceNo);
   };
 
+  // const handleDeliveryPersonnelSelect = (selection: {
+  //   personnelName: string | null;
+  //   deliveryVia: string | null;
+  //   referenceNo?: string | null;
+  //   distanceKm?: number | null;
+  //   deliveryFee?: number | null;
+  //   amountWithVAT?: number | null;
+  // }) => {
+  //   // Called from the footer-triggered modal only; just store selection
+  //   setSelectedDeliveryPersonnel(selection.personnelName || null);
+  //   setSelectedDeliveryVia(selection.deliveryVia);
+  //   setSelectedReferenceNo(selection.referenceNo ?? null);
+  //   setDeliveryDistanceKm(
+  //     typeof selection.distanceKm === "number" && !Number.isNaN(selection.distanceKm)
+  //       ? selection.distanceKm
+  //       : null
+  //   );
+  //   setDeliveryChargeAmount(
+  //     typeof selection.deliveryFee === "number" && !Number.isNaN(selection.deliveryFee)
+  //       ? selection.deliveryFee
+  //       : null
+  //   );
+  //   const hasPersonnel = !!selection.personnelName;
+  //   const hasChannel = !!selection.deliveryVia;
+
+  //   // Company delivery: channel selected, no personnel -> pay later, clear all payments
+  //   if (hasChannel && !hasPersonnel) {
+  //     setIsCompanyDelivery(true);
+  //     // Try to use Delivery Channel's mode_of_payment; fall back to default POS mode if missing.
+  //     const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
+  //     let mop = channel?.mode_of_payment || null;
+  //     if (!mop && modes.length > 0) {
+  //       const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+  //       mop = defaultMode?.mode_of_payment || null;
+  //     }
+
+  //     if (mop) {
+  //       // Create one payment row with amount 0.0 to satisfy ERPNext POS validation
+  //       setPaymentAmounts({ [mop]: 0 });
+  //     } else {
+  //       // As a safety net, keep payments empty if we truly have no Mode of Payment to use
+  //       setPaymentAmounts({});
+  //     }
+  //     setRoundOffAmount(0);
+  //     setRoundOffInput("0.000");
+  //   } else {
+  //     // Normal (immediate) delivery: allow payments
+  //     setIsCompanyDelivery(false);
+
+  //     // If we now have a delivery personnel (paid now) and no existing payments,
+  //     // auto-fill default payment method with the full effective grand total (incl. delivery).
+  //     if (hasPersonnel && isOpen && modes.length > 0) {
+  //       const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
+  //       if (!hasAnyPayment) {
+  //         const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+  //         if (defaultMode) {
+  //           const amount = parseFloat(effectiveGrandTotal.toFixed(3));
+  //           setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
+  //         }
+  //       }
+  //     }
+  //   }
+
+  //   setShowDeliveryPersonnelModal(false);
+  // };
+
   const handleDeliveryPersonnelSelect = (selection: {
-    personnelName: string | null;
-    deliveryVia: string | null;
-    referenceNo?: string | null;
-    distanceKm?: number | null;
-    deliveryFee?: number | null;
-  }) => {
-    // Called from the footer-triggered modal only; just store selection
-    setSelectedDeliveryPersonnel(selection.personnelName || null);
-    setSelectedDeliveryVia(selection.deliveryVia);
-    setSelectedReferenceNo(selection.referenceNo ?? null);
-    setDeliveryDistanceKm(
-      typeof selection.distanceKm === "number" && !Number.isNaN(selection.distanceKm)
-        ? selection.distanceKm
-        : null
-    );
-    setDeliveryChargeAmount(
-      typeof selection.deliveryFee === "number" && !Number.isNaN(selection.deliveryFee)
-        ? selection.deliveryFee
-        : null
-    );
-    const hasPersonnel = !!selection.personnelName;
-    const hasChannel = !!selection.deliveryVia;
+  personnelName: string | null;
+  deliveryVia: string | null;
+  referenceNo?: string | null;
+  distanceKm?: number | null;
+  deliveryFee?: number | null;
+  amountWithVAT?: number | null;
+}) => {
+  // Called from the footer-triggered modal only; just store selection
+  setSelectedDeliveryPersonnel(selection.personnelName || null);
+  setSelectedDeliveryVia(selection.deliveryVia);
+  setSelectedReferenceNo(selection.referenceNo ?? null);
+  setDeliveryDistanceKm(
+    typeof selection.distanceKm === "number" && !Number.isNaN(selection.distanceKm)
+      ? selection.distanceKm
+      : null
+  );
+  setDeliveryChargeAmount(
+    typeof selection.deliveryFee === "number" && !Number.isNaN(selection.deliveryFee)
+      ? selection.deliveryFee
+      : null
+  );
+  // NEW: Store the amount with VAT
+  setDeliveryChargeWithVAT(
+    typeof selection.amountWithVAT === "number" && !Number.isNaN(selection.amountWithVAT)
+      ? selection.amountWithVAT
+      : null
+  );
+  
+  const hasPersonnel = !!selection.personnelName;
+  const hasChannel = !!selection.deliveryVia;
 
-    // Company delivery: channel selected, no personnel -> pay later, clear all payments
-    if (hasChannel && !hasPersonnel) {
-      setIsCompanyDelivery(true);
-      // Try to use Delivery Channel's mode_of_payment; fall back to default POS mode if missing.
-      const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
-      let mop = channel?.mode_of_payment || null;
-      if (!mop && modes.length > 0) {
-        const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
-        mop = defaultMode?.mode_of_payment || null;
-      }
+  // Company delivery: channel selected, no personnel -> pay later, clear all payments
+  if (hasChannel && !hasPersonnel) {
+    setIsCompanyDelivery(true);
+    // Try to use Delivery Channel's mode_of_payment; fall back to default POS mode if missing.
+    const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
+    let mop = channel?.mode_of_payment || null;
+    if (!mop && modes.length > 0) {
+      const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+      mop = defaultMode?.mode_of_payment || null;
+    }
 
-      if (mop) {
-        // Create one payment row with amount 0.0 to satisfy ERPNext POS validation
-        setPaymentAmounts({ [mop]: 0 });
-      } else {
-        // As a safety net, keep payments empty if we truly have no Mode of Payment to use
-        setPaymentAmounts({});
-      }
-      setRoundOffAmount(0);
-      setRoundOffInput("0.000");
+    if (mop) {
+      // Create one payment row with amount 0.0 to satisfy ERPNext POS validation
+      setPaymentAmounts({ [mop]: 0 });
     } else {
-      // Normal (immediate) delivery: allow payments
-      setIsCompanyDelivery(false);
+      // As a safety net, keep payments empty if we truly have no Mode of Payment to use
+      setPaymentAmounts({});
+    }
+    setRoundOffAmount(0);
+    setRoundOffInput("0.000");
+  } else {
+    // Normal (immediate) delivery: allow payments
+    setIsCompanyDelivery(false);
 
-      // If we now have a delivery personnel (paid now) and no existing payments,
-      // auto-fill default payment method with the full effective grand total (incl. delivery).
-      if (hasPersonnel && isOpen && modes.length > 0) {
-        const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
-        if (!hasAnyPayment) {
-          const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
-          if (defaultMode) {
-            const amount = parseFloat(effectiveGrandTotal.toFixed(3));
-            setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
-          }
+    // If we now have a delivery personnel (paid now) and no existing payments,
+    // auto-fill default payment method with the full effective grand total (incl. delivery with VAT)
+    if (hasPersonnel && isOpen && modes.length > 0) {
+      const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
+      if (!hasAnyPayment) {
+        const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+        if (defaultMode) {
+          // effectiveGrandTotal already includes delivery charge from calculations.
+          const amount = parseFloat(effectiveGrandTotal.toFixed(3));
+          setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
         }
       }
     }
+  }
 
-    setShowDeliveryPersonnelModal(false);
-  };
-
+  setShowDeliveryPersonnelModal(false);
+};
   // Get display name for selected delivery personnel
   const getSelectedDeliveryPersonnelName = () => {
     if (!selectedDeliveryPersonnel) return null;
@@ -1359,6 +1445,7 @@ const handleAutoFillPayment = (methodId: string) => {
     setDeliveryDistanceKm(null);
     setDeliveryChargeAmount(null);
     setDeliveryChargeTaxAmount(null);
+    setDeliveryChargeWithVAT(null);
   };
 
   const handleInsuranceSelect = (insurance: HealthInsuranceOption | null) => {

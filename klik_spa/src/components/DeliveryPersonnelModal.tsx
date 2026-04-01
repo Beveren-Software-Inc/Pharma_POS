@@ -14,6 +14,7 @@ interface DeliveryPersonnelModalProps {
     referenceNo?: string | null;
     distanceKm?: number | null;
     deliveryFee?: number | null;
+    amountWithVAT?: number | null;
   }) => void;
   /** Current order grand total (before delivery). Used for amount-threshold check: if total >= threshold, delivery is free. */
   grandTotal?: number | null;
@@ -41,6 +42,7 @@ export default function DeliveryPersonnelModal({
   const [deliveryFeeError, setDeliveryFeeError] = useState<string | null>(null);
   const [requiresManualFee, setRequiresManualFee] = useState<boolean>(false);
 
+  const VAT_RATE = 0.10; // 10%
   useEffect(() => {
     if (isOpen) {
       setSelectedChannel("");
@@ -141,6 +143,12 @@ export default function DeliveryPersonnelModal({
     );
   }, [visiblePersonnel, personnelSearchQuery]);
 
+  const amountWithVAT = useMemo(() => {
+  const fee = parseFloat(deliveryFee);
+  if (Number.isNaN(fee)) return "";
+  return (fee * (1 + VAT_RATE)).toFixed(3);
+}, [deliveryFee]);
+
   if (!isOpen) return null;
 
   const handleSelectChannel = (channelName: string, channelDisplayName: string) => {
@@ -167,6 +175,9 @@ export default function DeliveryPersonnelModal({
         referenceNo: referenceNo.trim() || null,
         distanceKm: distanceKm && !Number.isNaN(parseFloat(distanceKm)) ? parseFloat(distanceKm) : null,
         deliveryFee: deliveryFee && !Number.isNaN(parseFloat(deliveryFee)) ? parseFloat(deliveryFee) : null,
+        amountWithVAT:amountWithVAT && !Number.isNaN(parseFloat(amountWithVAT))
+    ? parseFloat(amountWithVAT)
+    : null,
       });
       onClose();
     }
@@ -213,6 +224,8 @@ export default function DeliveryPersonnelModal({
       }
     }, 200);
   };
+
+  
 
   return (
     <div
@@ -439,6 +452,17 @@ export default function DeliveryPersonnelModal({
                       onChange={(e) => setDeliveryFee(e.target.value)}
                       className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                     />
+                    <div>
+                          <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Amount + VAT (10%)
+                          </div>
+                          <input
+                            type="number"
+                            value={amountWithVAT}
+                            readOnly
+                            className="w-full px-4 py-3 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
+                          />
+                  </div>
                     {deliveryFeeError && (
                       <div className="mt-1 text-xs text-orange-500 dark:text-orange-400">
                         {deliveryFeeError}
