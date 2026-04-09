@@ -41,17 +41,21 @@ export function handlePrintInvoice(invoiceData: Invoice | null) {
     position: fixed;
     top: 0;
     left: 0;
-    width: 100%;
-    height: 100%;
+    width: auto;
+    min-width: 80mm;
+    max-width: 80mm;
     background: white;
     z-index: 9999;
-    padding: 20px;
-    overflow: auto;
+    padding: 0;
+    overflow: visible;
   `;
 
   // Hide the original page content
   document.body.style.cssText = `
     overflow: hidden;
+    width: auto;
+    margin: 0;
+    padding: 0;
   `;
 
   // Hide all direct children of body except our overlay
@@ -65,10 +69,16 @@ export function handlePrintInvoice(invoiceData: Invoice | null) {
   // Add the print overlay
   document.body.appendChild(printOverlay);
 
-  // Add print-specific styles
+  // Add print-specific styles for receipt printing
   const printStyles = document.createElement('style');
   printStyles.textContent = `
     @media print {
+      html, body {
+        width: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: visible !important;
+      }
       body * {
         visibility: hidden;
       }
@@ -79,13 +89,18 @@ export function handlePrintInvoice(invoiceData: Invoice | null) {
         position: absolute !important;
         left: 0 !important;
         top: 0 !important;
-        width: 100% !important;
-        height: 100% !important;
+        width: 80mm !important;
+        min-width: 80mm !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      .print-overlay * {
+        box-sizing: border-box !important;
       }
     }
     @page {
-      size: A4;
-      margin: 1cm;
+      size: 80mm auto;
+      margin: 0;
     }
   `;
   printOverlay.className = 'print-overlay';
