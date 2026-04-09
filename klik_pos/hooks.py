@@ -39,6 +39,7 @@ fixtures = [
 					"Sales Invoice-custom_roundoff_account",
 					"Sales Invoice-custom_base_roundoff_amount",
 					"Sales Invoice-custom_column_break_vtq6c",
+					"Sales Invoice-custom_write_off_details",
 					"Sales Invoice-custom_roundoff_amount",
 					"Sales Invoice-custom_roundoff",
 					"POS Profile-custom_allow_credit_sales",
