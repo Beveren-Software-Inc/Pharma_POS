@@ -894,7 +894,7 @@ export default function OrderSummary({
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
   const { customers, isLoading, refetch: refetchCustomers } = useCustomers(customerSearchQuery);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { products, refetch: _refetchProducts, refreshStockOnly, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems } = useProducts();
+  const { products, refetch: _refetchProducts, refreshStockOnly, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems, updateSerialsForItems } = useProducts();
   // const navigate = useNavigate();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { posDetails, loading: _posLoading } = usePOSDetails();
@@ -1728,6 +1728,11 @@ export default function OrderSummary({
         } catch (error) {
           console.error("OrderSummary: Failed to update batch quantities:", error);
         }
+        try {
+          await updateSerialsForItems(cartItemCodes);
+        } catch (error) {
+          console.error("OrderSummary: Failed to update serials:", error);
+        }
       }
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
@@ -1952,7 +1957,36 @@ export default function OrderSummary({
 
     window.addEventListener('batchQuantitiesUpdated', handleBatchUpdate as EventListener);
 
-    // Listen for preselection from search (batch/serial)
+    // Listen for serial updates from ProductProvider
+    const handleSerialUpdate = (event: CustomEvent) => {
+      const { updatedItems } = event.detail;
+
+      setItemSerials(prevSerials => {
+        const newSerials = { ...prevSerials };
+
+        //eslint-disable-next-line @typescript-eslint/no-explicit-any
+        updatedItems.forEach(({ itemCode, serials }: { itemCode: string; serials: string[] }) => {
+          if (itemCode && itemCode !== 'undefined') {
+            newSerials[itemCode] = serials;
+          } else {
+            console.log(`OrderSummary: Skipping invalid itemCode: "${itemCode}"`);
+          }
+        });
+
+        // Remove any undefined keys
+        if (newSerials['undefined'] !== undefined) {
+          delete newSerials['undefined'];
+        }
+        const undefinedKey = undefined as unknown as string;
+        if (newSerials[undefinedKey] !== undefined) {
+          delete newSerials[undefinedKey];
+        }
+
+        return newSerials;
+      });
+    };
+
+    window.addEventListener('serialsUpdated', handleSerialUpdate as EventListener);
 //     const handleSetBatch = (event: CustomEvent) => {
 //       const { itemCode, batchId, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; batchId: string; forLastAdded?: boolean; lineKey?: string };
 //       let lineKey: string | undefined;
@@ -2120,6 +2154,7 @@ const handleSetSerial = (event: CustomEvent) => {
 
     return () => {
       window.removeEventListener('batchQuantitiesUpdated', handleBatchUpdate as EventListener);
+      window.removeEventListener('serialsUpdated', handleSerialUpdate as EventListener);
       window.removeEventListener('cart:setBatchForItem', handleSetBatch as EventListener)
       window.removeEventListener('cart:setSerialForItem', handleSetSerial as EventListener)
     };

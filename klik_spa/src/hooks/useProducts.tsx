@@ -16,6 +16,7 @@ interface UseProductsReturn {
   updateStockOnly: (itemCode: string, newStock: number) => void;
   updateStockForItems: (itemCodes: string[]) => Promise<void>;
   updateBatchQuantitiesForItems: (itemCodes: string[]) => Promise<void>;
+  updateSerialsForItems: (itemCodes: string[]) => Promise<void>;
   loadMoreProducts: () => Promise<void>;
   searchProducts: (query: string) => Promise<void>;
   clearSearch: () => void;
@@ -55,6 +56,7 @@ export function useProducts(): UseProductsReturn {
     updateStockOnly: context.updateStockOnly,
     updateStockForItems: context.updateStockForItems,
     updateBatchQuantitiesForItems: context.updateBatchQuantitiesForItems,
+    updateSerialsForItems: context.updateSerialsForItems,
     loadMoreProducts: context.loadMoreProducts,
     searchProducts: context.searchProducts,
     clearSearch: context.clearSearch,
