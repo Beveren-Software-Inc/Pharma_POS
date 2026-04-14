@@ -184,6 +184,8 @@ def get_pos_details():
 			getattr(pos, "custom_allow_duplicate_items_in_pos", 0) or 0
 		),
 		"cost_center": pos.cost_center or "",
+		"department": pos.department or "",
+		"project": pos.project or "",
 	}
 	return details
 
