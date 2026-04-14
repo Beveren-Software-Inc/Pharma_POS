@@ -1058,6 +1058,7 @@ def build_sales_invoice_doc(
 
 	doc.ignore_pricing_rule = 1
 
+	_set_accounting_dimensions(doc)
 	if delivery_personnel:
 		doc.custom_delivery_personnel = delivery_personnel
 
@@ -1639,16 +1640,7 @@ def _add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_
 	return
 
 
-# def _add_payment_entries(doc, mode_of_payment):
-# 	"""Add payment entries to the invoice."""
-# 	if not isinstance(mode_of_payment, list):
-# 		return
 
-# 	for payment in mode_of_payment:
-# 		doc.append(
-# 			"payments",
-# 			{"mode_of_payment": payment["method"], "amount": payment["amount"]},
-# 		)
 def _add_payment_entries(doc, mode_of_payment):
     """Add payment entries to the invoice. If none provided, use POS default with amount 0."""
     if isinstance(mode_of_payment, list) and len(mode_of_payment) > 0:
@@ -3516,3 +3508,24 @@ def submit_draft_invoice(invoice_id):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), f"Error submitting draft invoice {invoice_id}")
 		return {"success": False, "error": str(e)}
+
+from klik_pos.api.pos_profile import get_pos_details
+def _set_accounting_dimensions(doc):
+    """
+    Set accounting dimensions (Department, Cost Center, Project) from POS Profile.
+    """
+    # Get POS details which includes cost_center, department, project
+    pos_details = get_pos_details()
+    
+    # Set Cost Center
+    if pos_details.get("cost_center") and frappe.db.has_column("Sales Invoice", "cost_center"):
+        doc.cost_center = pos_details.get("cost_center")
+    
+    # Set Department
+    if pos_details.get("department") and frappe.db.has_column("Sales Invoice", "department"):
+        doc.department = pos_details.get("department")
+    
+    # Set Project
+    if pos_details.get("project") and frappe.db.has_column("Sales Invoice", "project"):
+        doc.project = pos_details.get("project")
+        
