@@ -15,6 +15,7 @@ interface ProductContextType {
   updateStockOnly: (itemCode: string, newStock: number) => void;
   updateStockForItems: (itemCodes: string[]) => Promise<void>;
   updateBatchQuantitiesForItems: (itemCodes: string[]) => Promise<void>;
+  updateSerialsForItems: (itemCodes: string[]) => Promise<void>;
   loadMoreProducts: () => Promise<void>;
   searchProducts: (query: string) => Promise<void>;
   clearSearch: () => void;
@@ -524,9 +525,57 @@ export function ProductProvider({ children }: ProductProviderProps) {
     }
   }, []);
 
+  // Update serials for specific items (for real-time serial updates)
+  const updateSerialsForItems = useCallback(async (itemCodes: string[]) => {
+    if (itemCodes.length === 0) return;
+
+    try {
+      // console.log(`Updating serials for ${itemCodes.length} items:`, itemCodes);
+
+      // Update serials for each item individually
+      const serialUpdatePromises = itemCodes.map(async (itemCode) => {
+        try {
+          const response = await fetch(
+            `/api/method/klik_pos.api.item.get_serial_nos_for_item?item_code=${encodeURIComponent(itemCode)}`
+          );
+          const resData = await response.json();
+          // console.log(`Serial API response for ${itemCode}:`, resData);
+
+          if (resData?.message && Array.isArray(resData.message)) {
+            // Extract serial numbers from the response
+            const serials = resData.message
+              .map((s: { serial_no: string }) => typeof s.serial_no === 'string' ? s.serial_no : '')
+              .filter(Boolean) as string[];
+            // console.log(`Valid serial data for ${itemCode}:`, serials);
+            return { itemCode, serials };
+          }
+          console.log(`No valid serial data for ${itemCode}`);
+          return null;
+        } catch (error) {
+          console.error(`Failed to update serials for ${itemCode}:`, error);
+          return null;
+        }
+      });
+
+      const serialResults = await Promise.all(serialUpdatePromises);
+      const validResults = serialResults.filter(result => result !== null);
+
+      if (validResults.length > 0) {
+        // console.log(`Updated serials for ${validResults.length} items`);
+        // console.log('Dispatching serialsUpdated event with data:', validResults);
+        // Trigger a custom event to notify components about serial updates
+        window.dispatchEvent(new CustomEvent('serialsUpdated', {
+          detail: { updatedItems: validResults }
+        }));
+      } else {
+        console.log('No valid serial results to dispatch');
+      }
+    } catch (error) {
+      console.error('Failed to update serials for items:', error);
+    }
+  }, []);
+
   const refetchProducts = async () => {
-    // console.log("Force refreshing products...");
-    await fetchProducts(true);
   };
 
   // Lightweight stock-only refresh - much faster than full reload
@@ -594,6 +643,7 @@ export function ProductProvider({ children }: ProductProviderProps) {
     updateStockOnly,
     updateStockForItems,
     updateBatchQuantitiesForItems,
+    updateSerialsForItems,
     loadMoreProducts,
     searchProducts,
     clearSearch,
