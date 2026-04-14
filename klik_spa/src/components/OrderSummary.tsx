@@ -417,62 +417,154 @@ const BatchSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value
   );
 };
 
-// Compact searchable dropdown for Serial selection
+
+// Compact multi-select searchable dropdown for Serial selection
 // interface SerialSelectFieldProps {
 //   itemId: string;
 //   itemCode: string;
 //   options: string[];
-//   value: string;
+//   value: string; // comma-separated: "SN001,SN002,SN003"
 //   onChange: (value: string) => void;
 //   isMobile?: boolean;
 // }
 
-// // eslint-disable-next-line @typescript-eslint/no-unused-vars
 // const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value, onChange, isMobile }: SerialSelectFieldProps) => {
 //   const [isOpen, setIsOpen] = useState(false);
 //   const [query, setQuery] = useState("");
-//   const filtered = options.filter(sn => sn.toLowerCase().includes(query.toLowerCase()));
 
-//   const handleSelect = (sn: string) => {
-//     onChange(sn);
-//     setIsOpen(false);
-//     setQuery("");
+//   // Parse current value into a Set of selected serials
+//   const selected = new Set(
+//     value ? value.split(",").map(s => s.trim()).filter(Boolean) : []
+//   );
+
+//   const filtered = options.filter(sn =>
+//     sn.toLowerCase().includes(query.toLowerCase())
+//   );
+
+//   const toggleSerial = (sn: string) => {
+//     const next = new Set(selected);
+//     if (next.has(sn)) {
+//       next.delete(sn);
+//     } else {
+//       next.add(sn);
+//     }
+//     onChange(Array.from(next).join(","));
 //   };
+
+//   const removeSerial = (sn: string, e: React.MouseEvent) => {
+//     e.stopPropagation();
+//     const next = new Set(selected);
+//     next.delete(sn);
+//     onChange(Array.from(next).join(","));
+//   };
+
+//   const selectedArray = Array.from(selected);
+//   const count = selectedArray.length;
 
 //   return (
 //     <div className="relative">
+//       {/* Trigger button — shows tags when serials selected */}
 //       <button
 //         type="button"
 //         onClick={() => setIsOpen(!isOpen)}
-//         className={`w-full ${isMobile ? "text-xs" : "text-xs"} px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-left flex items-center justify-between`}
+//         className={`w-full ${isMobile ? "text-xs" : "text-xs"} px-2 py-1 min-h-[30px] border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-left flex flex-wrap items-center gap-1`}
 //       >
-//         <span className="truncate">{value || "Select Serial"}</span>
-//         <svg className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+//         {count === 0 ? (
+//           <span className="text-gray-400 dark:text-gray-500">Select Serial(s)</span>
+//         ) : (
+//           <>
+//             {selectedArray.map(sn => (
+//               <span
+//                 key={sn}
+//                 className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-beveren-100 dark:bg-beveren-900/30 text-beveren-700 dark:text-beveren-300 rounded text-xs font-medium"
+//               >
+//                 {sn}
+//                 <span
+//                   role="button"
+//                   tabIndex={0}
+//                   onClick={(e) => removeSerial(sn, e)}
+//                   onKeyDown={(e) => e.key === 'Enter' && removeSerial(sn, e as unknown as React.MouseEvent)}
+//                   className="hover:text-red-500 cursor-pointer leading-none"
+//                 >
+//                   ×
+//                 </span>
+//               </span>
+//             ))}
+//           </>
+//         )}
+//         <svg
+//           className={`w-3 h-3 ml-auto flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+//           fill="none" stroke="currentColor" viewBox="0 0 24 24"
+//         >
+//           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+//         </svg>
 //       </button>
+
+//       {/* Dropdown */}
 //       {isOpen && (
-//         <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg max-h-44 overflow-hidden">
+//         <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg max-h-52 overflow-hidden">
+//           {/* Search */}
 //           <div className="p-1 border-b border-gray-200 dark:border-gray-600">
 //             <input
 //               type="text"
 //               placeholder="Filter serial..."
 //               value={query}
 //               onChange={(e) => setQuery(e.target.value)}
-//               className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+//               className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
 //               autoFocus
 //             />
 //           </div>
-//           <div className="max-h-36 overflow-y-auto">
-//             {filtered.length > 0 ? filtered.map((sn) => (
+
+//           {/* Count indicator */}
+//           {count > 0 && (
+//             <div className="px-2 py-1 text-xs text-beveren-600 dark:text-beveren-400 bg-beveren-50 dark:bg-beveren-900/20 border-b border-beveren-100 dark:border-beveren-800 flex items-center justify-between">
+//               <span>{count} selected</span>
 //               <button
-//                 key={sn}
 //                 type="button"
-//                 onClick={() => handleSelect(sn)}
-//                 className={`w-full px-2 py-1 text-left text-xs hover:bg-gray-100 dark:hover:bg-gray-700 ${value === sn ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400' : 'text-gray-900 dark:text-white'}`}
+//                 onClick={() => onChange("")}
+//                 className="text-red-500 hover:text-red-700 text-xs"
 //               >
-//                 {sn}
+//                 Clear all
 //               </button>
-//             )) : (
-//               <div className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400">No matches</div>
+//             </div>
+//           )}
+
+//           {/* Serial list with checkboxes */}
+//           <div className="max-h-36 overflow-y-auto">
+//             {filtered.length > 0 ? (
+//               filtered.map((sn) => {
+//                 const isSelected = selected.has(sn);
+//                 return (
+//                   <button
+//                     key={sn}
+//                     type="button"
+//                     onClick={() => toggleSerial(sn)}
+//                     className={`w-full px-2 py-1.5 text-left text-xs flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-gray-700 ${
+//                       isSelected
+//                         ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-700 dark:text-beveren-300'
+//                         : 'text-gray-900 dark:text-white'
+//                     }`}
+//                   >
+//                     {/* Checkbox */}
+//                     <span className={`flex-shrink-0 w-4 h-4 rounded border-2 flex items-center justify-center ${
+//                       isSelected
+//                         ? 'bg-beveren-600 border-beveren-600'
+//                         : 'border-gray-300 dark:border-gray-500'
+//                     }`}>
+//                       {isSelected && (
+//                         <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+//                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+//                         </svg>
+//                       )}
+//                     </span>
+//                     {sn}
+//                   </button>
+//                 );
+//               })
+//             ) : (
+//               <div className="px-2 py-2 text-xs text-gray-500 dark:text-gray-400 text-center">
+//                 No serials found
+//               </div>
 //             )}
 //           </div>
 //         </div>
@@ -494,6 +586,25 @@ interface SerialSelectFieldProps {
 const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value, onChange, isMobile }: SerialSelectFieldProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+        setQuery(""); // Reset query when closing
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isOpen]);
 
   // Parse current value into a Set of selected serials
   const selected = new Set(
@@ -525,7 +636,7 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
   const count = selectedArray.length;
 
   return (
-    <div className="relative">
+    <div className="relative" ref={dropdownRef}>
       {/* Trigger button — shows tags when serials selected */}
       <button
         type="button"
@@ -536,12 +647,12 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
           <span className="text-gray-400 dark:text-gray-500">Select Serial(s)</span>
         ) : (
           <>
-            {selectedArray.map(sn => (
+            {selectedArray.slice(0, 3).map(sn => (
               <span
                 key={sn}
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-beveren-100 dark:bg-beveren-900/30 text-beveren-700 dark:text-beveren-300 rounded text-xs font-medium"
               >
-                {sn}
+                {sn.length > 8 ? `${sn.slice(0, 6)}...` : sn}
                 <span
                   role="button"
                   tabIndex={0}
@@ -553,6 +664,11 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
                 </span>
               </span>
             ))}
+            {count > 3 && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                +{count - 3} more
+              </span>
+            )}
           </>
         )}
         <svg
@@ -575,6 +691,7 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
               onChange={(e) => setQuery(e.target.value)}
               className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               autoFocus
+              onClick={(e) => e.stopPropagation()}
             />
           </div>
 
@@ -635,8 +752,6 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
     </div>
   );
 };
-
-
 
 // Compact searchable dropdown for Prescription Frequency selection
 interface DosageSelectFieldProps {
