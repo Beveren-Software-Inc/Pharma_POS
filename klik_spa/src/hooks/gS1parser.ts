@@ -1,8 +1,9 @@
 /**
  * GS1 DataMatrix / GS1-128 Parser
  *
- * Handles structured barcodes like:
- *   010084014965237717280131 10MP4022 211WNVHXXC68
+ * Handles structured barcodes in multiple formats:
+ *   1. Parentheses format:     (01)08002660032249(21)100285731569(17)270731(10)729323
+ *   2. FNC1/GS format:         010084014965237717280131 10MP4022 211WNVHXXC68
  *   (with or without FNC1 / GS separators)
  */
 
@@ -79,11 +80,70 @@ function formatExpiryDate(yymmdd: string): string {
 }
 
 /**
+ * Detects if the code is in parentheses format: (01)value(10)batch(17)expiry(21)serial
+ */
+function isParenthesesFormat(code: string): boolean {
+  return /^\(\d{2}\)/.test(code.trim())
+}
+
+/**
+ * Parses GS1 code in parentheses format.
+ * Example: (01)08002660032249(21)100285731569(17)270731(10)729323
+ *
+ * Returns parsed data with gtin, lotNumber (batch), serialNumber, and expiryDate.
+ */
+function parseParenthesesGS1(raw: string): GS1ParsedData {
+  const result: GS1ParsedData = { raw, isGS1: false }
+  
+  try {
+    // Pattern to find all (AI)value pairs where AI is 2 digits
+    const pattern = /\((\d{2})\)([^\(]*)/g
+    let match
+    
+    while ((match = pattern.exec(raw)) !== null) {
+      const ai = match[1]
+      const value = match[2].trim()
+      
+      if (!value) continue
+      
+      switch (ai) {
+        case '01':
+          result.gtin = value
+          break
+        case '10':
+          result.lotNumber = value
+          break
+        case '17':
+          result.expiryDate = formatExpiryDate(value)
+          break
+        case '21':
+          result.serialNumber = value
+          break
+        // Add other AIs as needed
+      }
+    }
+    
+    if (result.gtin || result.lotNumber || result.serialNumber || result.expiryDate) {
+      result.isGS1 = true
+    }
+  } catch (e) {
+    // If parsing fails, return the default result
+  }
+  
+  return result
+}
+
+/**
  * Returns true when the string looks like it could be a GS1 compound code.
  * Heuristic: starts with a known 2-digit AI ("01", "10", "17", "21") optionally
  * preceded by "]d2" / "]C1" symbology identifiers.
  */
 export function looksLikeGS1(code: string): boolean {
+  // Check for parentheses format first
+  if (isParenthesesFormat(code)) {
+    return true
+  }
+  
   // Strip common symbology identifier prefixes
   const stripped = code.replace(/^\]([dCeQ][0-9A-Za-z]|d[0-9])/, '')
   return /^(01|10|17|21|00|02|11|13|15|30|37|240|241|250|251|253|254|400|401|402|403|410|411|412|413|414|415|420|421|422|710|711|712|713|714)/.test(stripped)
@@ -93,6 +153,11 @@ export function parseGS1(raw: string): GS1ParsedData {
   const result: GS1ParsedData = { raw, isGS1: false }
 
   if (!raw || raw.length < 4) return result
+
+  // Try parentheses format first: (01)value(10)batch(17)expiry(21)serial
+  if (isParenthesesFormat(raw)) {
+    return parseParenthesesGS1(raw)
+  }
 
   // Strip symbology identifiers like ]d2, ]C1, ]e0, ]Q3
   let data = raw.replace(/^\]([dCeQ][0-9A-Za-z]|d[0-9])/, '')
