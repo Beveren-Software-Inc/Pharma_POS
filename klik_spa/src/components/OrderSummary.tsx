@@ -167,7 +167,7 @@ const DosageInput = ({ itemId, value, onChange, isMobile }: DosageInputProps) =>
 // Simple UOM Select Field Component
 interface UOMSelectFieldProps {
   item: CartItem;
-  onUOMChange: (itemId: string, selectedUOM: string, newPrice: number) => void;
+  onUOMChange: (itemId: string, selectedUOM: string, newPrice: number, conversionFactor: number) => void;
   isMobile?: boolean;
   selectedCustomer?: { id: string } | null;
 }
@@ -256,7 +256,7 @@ const UOMSelectField = ({ item, onUOMChange, isMobile, selectedCustomer }: UOMSe
             //eslint-disable-next-line @typescript-eslint/no-explicit-any
             const selectedUOMData = data.message.uoms.find((uom: any) => uom.uom === newUOM);
             if (selectedUOMData && selectedUOMData.price !== undefined) {
-              onUOMChange(item.id, newUOM, selectedUOMData.price);
+              onUOMChange(item.id, newUOM, selectedUOMData.price, selectedUOMData.conversion_factor || 1);
             } else {
               console.warn(`⚠️ UOM data not found for ${newUOM}. Available UOMs:`, data.message.uoms.map((u: any) => u.uom));
               // Fallback: try to calculate price using fetch_item_price API
@@ -271,7 +271,7 @@ const UOMSelectField = ({ item, onUOMChange, isMobile, selectedCustomer }: UOMSe
                 if (priceResponse.ok) {
                   const priceData = await priceResponse.json();
                   if (priceData?.message?.success && priceData.message.price > 0) {
-                    onUOMChange(item.id, newUOM, priceData.message.price);
+                    onUOMChange(item.id, newUOM, priceData.message.price, selectedUOMData?.conversion_factor || 1);
                   } else {
                     console.error(`❌ Fallback API returned invalid price for ${newUOM}`);
                   }
@@ -1000,7 +1000,7 @@ export default function OrderSummary({
   const currency_symbol = posDetails?.currency_symbol;
 
   // UOM change handler
-  const handleUOMChange = useCallback((itemId: string, selectedUOM: string, newPrice: number) => {
+  const handleUOMChange = useCallback((itemId: string, selectedUOM: string, newPrice: number, conversionFactor: number) => {
     // console.log(`🛒 Cart Update Started:`);
     // console.log(`  Item ID: ${itemId}`);
     // console.log(`  New UOM: ${selectedUOM}`);
@@ -1018,7 +1018,7 @@ export default function OrderSummary({
     }
 
     // Update the cart item with new UOM and price using the cart store
-    updateUOM(itemId, selectedUOM, newPrice);
+    updateUOM(itemId, selectedUOM, newPrice, conversionFactor);
 
     // Debug: Check if the cart item was updated
     setTimeout(() => {
@@ -2866,7 +2866,14 @@ const handleSetSerial = (event: CustomEvent) => {
                             <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
                               UOM
                             </label>
-                            <UOMSelectField item={item} onUOMChange={(_, uom, price) => handleUOMChange(lineKey, uom, price)} isMobile={isMobile} selectedCustomer={selectedCustomer} />
+                            <UOMSelectField
+                              item={item}
+                              onUOMChange={(_, uom, price, conversionFactor) =>
+                                handleUOMChange(lineKey, uom, price, conversionFactor)
+                              }
+                              isMobile={isMobile}
+                              selectedCustomer={selectedCustomer}
+                            />
                           </div>
                         </div>
 

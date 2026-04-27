@@ -9,6 +9,20 @@ import { updateItemPricesForCustomer, getItemPriceForCustomer, applyPricingRules
 // Monotonic token to prevent stale async pricing responses from overwriting newer cart state.
 let pricingRunToken = 0
 
+function getConversionFactor(item: CartItem): number {
+  const cf = Number(item.conversion_factor);
+  return Number.isFinite(cf) && cf > 0 ? cf : 1;
+}
+
+function getMaxQtyInItemUOM(item: CartItem): number | null {
+  const available = item.available;
+  if (available === undefined || available === null) return null;
+  const cf = getConversionFactor(item);
+  console.log(`Calculating max quantity for ${item.name} (available: ${available}, conversion factor: ${cf})`);
+  // available is in stock/base UOM; convert to selected item UOM quantity.
+  return available / cf;
+}
+
 // Preserve batch_no/serial_no from current cart when replacing with merged items (avoids losing them when applyPricingRules runs after scan)
 function preserveBatchAndSerial(merged: CartItem[], currentCart: CartItem[]): CartItem[] {
   return merged.map((item) => {
@@ -103,7 +117,7 @@ interface CartState {
   addToCart: (item: Omit<CartItem, 'quantity'>) => Promise<CartItem | void>
   addToCartWithQuantity: (item: Omit<CartItem, 'quantity'>, quantity: number) => Promise<void>
   updateQuantity: (id: string, quantity: number) => Promise<void>
-  updateUOM: (id: string, uom: string, price: number) => Promise<void>
+  updateUOM: (id: string, uom: string, price: number, conversionFactor?: number) => Promise<void>
   removeItem: (id: string) => void
   updateItemMetadata: (id: string, updates: Record<string, unknown>) => void
   clearCart: () => void
@@ -143,8 +157,9 @@ export const useCartStore = create<CartState>()(
 
         if (existingItem) {
           // Check if adding one more would exceed available stock
-          if (item.available !== undefined && existingItem.quantity >= item.available) {
-            toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
+          const maxQty = getMaxQtyInItemUOM(existingItem);
+          if (maxQty !== null && existingItem.quantity >= maxQty) {
+            toast.error(`Only ${maxQty} ${existingItem.uom || item.uom || 'units'} of ${item.name} available`);
             return;
           }
 
@@ -202,15 +217,17 @@ export const useCartStore = create<CartState>()(
           : undefined;
 
         // Check if item has available quantity
-        if (item.available !== undefined && item.available < quantity) {
-          toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
+        const maxQty = getMaxQtyInItemUOM(item as CartItem);
+        if (maxQty !== null && maxQty < quantity) {
+          toast.error(`Only ${maxQty} ${item.uom || 'units'} of ${item.name} available`);
           return;
         }
 
         if (existingItem) {
           // Check if adding the quantity would exceed available stock
-          if (item.available !== undefined && (existingItem.quantity + quantity) > item.available) {
-            toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
+          const maxQty = getMaxQtyInItemUOM(existingItem);
+          if (maxQty !== null && (existingItem.quantity + quantity) > maxQty) {
+            toast.error(`Only ${maxQty} ${existingItem.uom || item.uom || 'units'} of ${item.name} available`);
             return;
           }
 
@@ -274,8 +291,9 @@ export const useCartStore = create<CartState>()(
         }
 
         const item = state.cartItems.find(matchLine);
-        if (item && item.available !== undefined && quantity > item.available) {
-          toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
+        const maxQty = item ? getMaxQtyInItemUOM(item) : null;
+        if (item && maxQty !== null && quantity > maxQty) {
+          toast.error(`Only ${maxQty} ${item.uom || 'units'} of ${item.name} available`);
           return;
         }
 
@@ -292,7 +310,7 @@ export const useCartStore = create<CartState>()(
         }
       },
 
-      updateUOM: async (id, uom, price) => {
+      updateUOM: async (id, uom, price, conversionFactor = 1) => {
         const matchLine = (ci: CartItem) => (ci as { cartLineId?: string }).cartLineId === id || ci.id === id;
         set((state) => {
           const updatedItems = state.cartItems.map((item) => {
@@ -301,7 +319,7 @@ export const useCartStore = create<CartState>()(
                 before: { uom: item.uom, price: item.price },
                 after: { uom, price }
               });
-              return { ...item, uom, price };
+              return { ...item, uom, price, conversion_factor: conversionFactor };
             }
             return item;
           });
