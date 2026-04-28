@@ -10,6 +10,7 @@ import MobilePOSLayout from "./MobilePOSLayout"
 import LoadingSpinner from "./LoadingSpinner"
 import BarcodeScannerModal from "./BarcodeScanner"
 import { useBarcodeScanner } from "../hooks/useBarcodeScanner"
+import { looksLikeGS1 } from "../hooks/gS1parser"
 import type { MenuItem, GiftCoupon } from "../../types"
 import { useMediaQuery } from "../hooks/useMediaQuery"
 import { useCartStore } from "../stores/cartStore"
@@ -505,10 +506,11 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
   const handleSearchKeyPress = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && localSearchQuery.trim()) {
       e.preventDefault()
+      const trimmed = localSearchQuery.trim()
 
       // First: handle scale barcodes regardless of scanner-only setting
-      if (/^[0-9]+$/.test(localSearchQuery) && scalePrefix && localSearchQuery.startsWith(scalePrefix)) {
-        const raw = localSearchQuery.trim()
+      if (/^[0-9]+$/.test(trimmed) && scalePrefix && trimmed.startsWith(scalePrefix)) {
+        const raw = trimmed
 
         // Enforce presence of single check digit (total 13 digits) for scale barcodes
         if (raw.length !== 13) {
@@ -586,22 +588,30 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
       }
 
       // Non-scale numeric barcode: only process automatically in scanner-only mode
-      if (useScannerOnly && /^[0-9]+$/.test(localSearchQuery)) {
-        console.log('Processing as barcode:', localSearchQuery)
-        handleBarcodeDetected(localSearchQuery.trim())
+      if (looksLikeGS1(trimmed)) {
+        console.log('Processing as GS1 barcode:', trimmed)
+        handleBarcodeDetected(trimmed)
+        setLocalSearchQuery('')
+        setPinnedItemId(null)
+        return
+      }
+
+      if (useScannerOnly && /^[0-9]+$/.test(trimmed)) {
+        console.log('Processing as barcode:', trimmed)
+        handleBarcodeDetected(trimmed)
         setLocalSearchQuery('')
         setPinnedItemId(null)
         return
       }
 
       // Regular search - trigger server-side search on Enter
-      console.log('Processing as product search:', localSearchQuery)
-      searchProducts(localSearchQuery.trim())
+      console.log('Processing as product search:', trimmed)
+      searchProducts(trimmed)
 
       // Additionally try resolving batch/serial on Enter for user convenience
       ;(async () => {
         try {
-          const res = await fetch(`/api/method/klik_pos.api.item.get_item_by_identifier?code=${encodeURIComponent(localSearchQuery.trim())}`)
+          const res = await fetch(`/api/method/klik_pos.api.item.get_item_by_identifier?code=${encodeURIComponent(trimmed)}`)
           const data = await res.json()
           console.log('Batch/Serial lookup result:', data)
           if (data?.message?.item_code) {
@@ -642,8 +652,18 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
     if (!useScannerOnly) return
 
     const timer = setTimeout(() => {
-      if (localSearchQuery.length >= 8 && /^[0-9]+$/.test(localSearchQuery)) {
-        const parsed = parseScaleBarcode(localSearchQuery.trim())
+      const trimmed = localSearchQuery.trim()
+      if (!trimmed) return
+
+      if (looksLikeGS1(trimmed)) {
+        handleBarcodeDetected(trimmed)
+        setLocalSearchQuery('')
+        setPinnedItemId(null)
+        return
+      }
+
+      if (trimmed.length >= 8 && /^[0-9]+$/.test(trimmed)) {
+        const parsed = parseScaleBarcode(trimmed)
         if (parsed.isScale) {
           const base = parsed.baseBarcode
           const qty = parsed.quantity
@@ -655,8 +675,8 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
             return
           }
         }
-        console.log('Auto-processing potential barcode:', localSearchQuery)
-        handleBarcodeDetected(localSearchQuery.trim())
+        console.log('Auto-processing potential barcode:', trimmed)
+        handleBarcodeDetected(trimmed)
         setLocalSearchQuery('')
         setPinnedItemId(null)
       }
