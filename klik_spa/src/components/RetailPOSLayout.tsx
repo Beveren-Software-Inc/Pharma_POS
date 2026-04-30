@@ -287,7 +287,7 @@ export default function RetailPOSLayout() {
   // Barcode scanning functionality - moved after handleAddToCart is defined
   const { scanBarcode } = useBarcodeScanner(addItemToCart)
 
- 
+
 
 // const handleBarcodeDetected = useCallback(async (barcode: string) => {
 //   const result = await scanBarcode(barcode)
@@ -554,7 +554,7 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
             const res = await fetch(`/api/method/klik_pos.api.item.get_item_by_identifier?code=${encodeURIComponent(base)}`)
             const data = await res.json()
             if (data?.message?.item_code) {
-              const fetched: MenuItem = {
+              const fetched = {
                 id: data.message.item_code,
                 name: data.message.item_name || data.message.item_code,
                 category: data.message.item_group || 'General',
@@ -565,7 +565,8 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
                 uom: data.message.stock_uom,
                 has_batch_no: data.message.has_batch_no,
                 has_serial_no: data.message.has_serial_no,
-              }
+                item_tax_template: data.message.item_tax_template,
+              } as MenuItem & { item_tax_template?: string }
               const added = await addOrIncreaseWithQuantity(fetched, qty)
               const mt = data.message.matched_type
               const mv = data.message.matched_value
@@ -625,7 +626,8 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
               sold: 0,
               has_batch_no: data.message.has_batch_no,
               has_serial_no: data.message.has_serial_no,
-            } as MenuItem
+              item_tax_template: data.message.item_tax_template,
+            } as MenuItem & { item_tax_template?: string }
             const added = await addOrIncreaseWithQuantity(item, 1)
             const matchedType = data.message.matched_type
             const matchedValue = data.message.matched_value

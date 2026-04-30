@@ -51,15 +51,10 @@ function mergePricingResultsWithFreeItems(baseCartItems: CartItem[], pricingResu
       ...item,
       price: pricingRuleItem.price ?? item.price,
       // Optional metadata from pricing rules (safe to leave undefined when not present)
-      // @ts-expect-error: runtime fields from backend
       original_price: pricingRuleItem.original_price ?? (item as any).original_price ?? item.price,
-      // @ts-expect-error: runtime fields from backend
       discount_percentage: pricingRuleItem.discount_percentage,
-      // @ts-expect-error: runtime fields from backend
       discount_amount: pricingRuleItem.discount_amount,
-      // @ts-expect-error: runtime fields from backend
       pricing_rules: pricingRuleItem.pricing_rules,
-      // @ts-expect-error: runtime fields from backend
       has_pricing_rule: pricingRuleItem.has_pricing_rule,
     } as CartItem
   })
@@ -92,7 +87,6 @@ function mergePricingResultsWithFreeItems(baseCartItems: CartItem[], pricingResu
         uom: fd.uom,
         // @ts-expect-error: runtime flag, optional on CartItem
         is_free_item: true,
-        // @ts-expect-error: runtime metadata from backend
         pricing_rules: fd.pricing_rules,
       })
     })
