@@ -27,6 +27,8 @@ import { getBatches } from "../utils/batch";
 import { getSerials } from "../utils/serial";
 import { usePOSDetails } from "../hooks/usePOSProfile";
 import { useItemTaxTemplates } from "../hooks/useItemTaxTemplates";
+import { useItemTaxTemplateRates } from "../hooks/useItemTaxTemplateRates";
+import { useFreeItemTaxAmount } from "../hooks/useFreeItemTaxAmount";
 import { useCustomerStatistics } from "../hooks/useCustomerStatistics";
 import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
@@ -919,6 +921,11 @@ export default function OrderSummary({
     posDetails?.custom_allow_additional_amounts === "1";
 
   const { templates: itemTaxTemplates } = useItemTaxTemplates();
+  const itemTaxTemplateNames = cartItems
+    .map((item) => (item as { item_tax_template?: string }).item_tax_template)
+    .filter(Boolean) as string[];
+  const { rates: itemTaxTemplateRates } = useItemTaxTemplateRates(itemTaxTemplateNames);
+  const freeItemTaxAmount = useFreeItemTaxAmount(cartItems, isItemTaxTemplateMode);
 
   /** Convert quantity from order UOM to cart UOM using Item UOM conversion factors. If no conversion, assume 1:1. */
   const convertOrderQuantityToCartUOM = useCallback(
@@ -1112,7 +1119,20 @@ export default function OrderSummary({
   );
 
   // Calculate final total (items - coupons). Additional amounts are handled in PaymentDialog.
-  const total = Math.max(0, subtotal - couponDiscount);
+  const taxableAmount = Math.max(0, subtotal - couponDiscount);
+  let itemTemplateTaxAmount = 0;
+  if (isItemTaxTemplateMode) {
+    cartItems.forEach((item) => {
+      const itemTotal = getDiscountedPrice(item) * item.quantity;
+      const template = (item as { item_tax_template?: string }).item_tax_template;
+      const rate = template ? (itemTaxTemplateRates[template] ?? 0) : 0;
+      itemTemplateTaxAmount += (itemTotal * rate) / 100;
+    });
+    itemTemplateTaxAmount += freeItemTaxAmount || 0;
+  }
+  const total = isItemTaxTemplateMode
+    ? Math.max(0, taxableAmount + itemTemplateTaxAmount)
+    : taxableAmount;
   const handleCustomerSearchKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>
   ) => {
