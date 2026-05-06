@@ -62,6 +62,37 @@ def _mark_medication_orders_completed(order_names):
 				frappe.log_error(frappe.get_traceback(), f"Failed to set Completed on Medication Order {order_name}")
 
 
+def _derive_reference_from_medication_orders(reference_type, reference_name, medication_orders):
+	"""
+	If reference_name wasn't provided by frontend, derive it from Patient Medication Order:
+	- patient_encounter -> Patient Visit
+	- inpatient_record -> Inpatient Admission
+	"""
+	if reference_name:
+		return reference_type, reference_name
+
+	if not medication_orders:
+		return reference_type, reference_name
+
+	first_order = medication_orders[0]
+	if not frappe.db.exists("Patient Medication Order", first_order):
+		return reference_type, reference_name
+
+	try:
+		order_doc = frappe.get_doc("Patient Medication Order", first_order)
+		patient_visit = getattr(order_doc, "patient_encounter", None)
+		inpatient_admission = getattr(order_doc, "inpatient_record", None)
+
+		if patient_visit:
+			return "Patient Visit", patient_visit
+		if inpatient_admission:
+			return "Inpatient Admission", inpatient_admission
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"Failed deriving reference from Medication Order {first_order}")
+
+	return reference_type, reference_name
+
+
 @frappe.whitelist()
 def create_and_submit_hospital_sales_order(data):
 	try:
@@ -100,6 +131,9 @@ def create_and_submit_hospital_sales_order(data):
 		medication_orders = _normalize_medication_orders(data)
 		reference_type = data.get("reference_type")
 		reference_name = data.get("reference_name")
+		reference_type, reference_name = _derive_reference_from_medication_orders(
+			reference_type, reference_name, medication_orders
+		)
 
 		if frappe.db.has_column("Sales Order", "custom_base_reference"):
 			doc.custom_base_reference = base_reference

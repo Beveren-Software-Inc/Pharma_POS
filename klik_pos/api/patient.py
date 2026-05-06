@@ -111,6 +111,13 @@ def get_pending_inpatient_medication_orders(patient: str):
 			)
 			order["custom_reference_type"] = getattr(order_doc, "custom_reference_type", None)
 			order["custom_reference_name"] = getattr(order_doc, "custom_reference_name", None)
+			if not order["custom_reference_type"] or not order["custom_reference_name"]:
+				if getattr(order_doc, "patient_encounter", None):
+					order["custom_reference_type"] = "Patient Visit"
+					order["custom_reference_name"] = order_doc.patient_encounter
+				elif getattr(order_doc, "inpatient_record", None):
+					order["custom_reference_type"] = "Inpatient Admission"
+					order["custom_reference_name"] = order_doc.inpatient_record
 			order["items"] = []
 			
 			# Get the doctype meta to find child tables
@@ -252,6 +259,13 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 			)
 			order["custom_reference_type"] = getattr(order_doc, "custom_reference_type", None)
 			order["custom_reference_name"] = getattr(order_doc, "custom_reference_name", None)
+			if not order["custom_reference_type"] or not order["custom_reference_name"]:
+				if getattr(order_doc, "patient_encounter", None):
+					order["custom_reference_type"] = "Patient Visit"
+					order["custom_reference_name"] = order_doc.patient_encounter
+				elif getattr(order_doc, "inpatient_record", None):
+					order["custom_reference_type"] = "Inpatient Admission"
+					order["custom_reference_name"] = order_doc.inpatient_record
 			order["items"] = []
 
 			child_table_fields = [f.fieldname for f in order_meta.fields if f.fieldtype == "Table"]

@@ -3364,7 +3364,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 className="px-3 py-2 border border-beveren-600 text-beveren-600 rounded-lg font-medium hover:bg-beveren-50 transition-colors text-sm flex items-center justify-center gap-2"
               >
                 <Printer size={15} />
-                Print Sales Order
+                Print Report
               </button>
               <button
                 type="button"
