@@ -36,33 +36,15 @@ def get_price_list_with_customer_priority(customer=None):
 		return None
 
 
-# def fetch_item_balance(item_code: str, warehouse: str) -> float:
-# 	"""Get stock balance of an item from a warehouse."""
-# 	try:
-		
-# 		return get_stock_balance(item_code, warehouse) or 0
-# 	except Exception:
-# 		frappe.log_error(frappe.get_traceback(), f"Error fetching balance for {item_code}")
-# 		return 0
-
 def fetch_item_balance(item_code: str, warehouse: str) -> float:
-    """Get AVAILABLE stock (actual - reserved) for POS."""
-    try:
-        bin_data = frappe.db.get_value(
-            "Bin",
-            {"item_code": item_code, "warehouse": warehouse},
-            ["actual_qty", "reserved_qty"],
-            as_dict=True,
-        )
+	"""Get stock balance of an item from a warehouse."""
+	try:
+		
+		return get_stock_balance(item_code, warehouse) or 0
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"Error fetching balance for {item_code}")
+		return 0
 
-        if not bin_data:
-            return 0
-
-        return (bin_data.actual_qty or 0) - (bin_data.reserved_qty or 0)
-
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), f"Error fetching balance for {item_code}")
-        return 0
 
 def _get_uom_conversion_factor(item_code: str, uom: str) -> float | None:
 	"""Get conversion factor for a specific UOM from Item UOM child table (UOM Conversion Detail)."""
