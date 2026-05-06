@@ -1,157 +1,540 @@
 "use client";
 
-import { useState } from "react";
-import { X, Check } from "lucide-react";
+import { createPortal } from "react-dom";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus } from "lucide-react";
 import type { InpatientMedicationOrder } from "../services/patientService";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
   onClose: () => void;
-  orders: InpatientMedicationOrder[];
+  pendingOrders: InpatientMedicationOrder[];
+  historyOrders: InpatientMedicationOrder[];
   selectedOrders: Set<string>;
   onToggleOrder: (orderName: string) => void;
   onAddToCart: () => void;
+  selectedHistoryItems: Set<string>;
+  onToggleHistoryItem: (itemKey: string) => void;
+  onAddHistoryItemsToCart: () => void;
+  onCreateVisit: () => void;
+  creatingVisit?: boolean;
   patientName?: string;
+  patientId?: string;
+  isHospitalMode?: boolean;
 }
 
+// ── Status badge ──────────────────────────────────────────────────────────────
+const STATUS_CONFIG: Record<string, { label: string; classes: string }> = {
+  Draft:        { label: "Draft",       classes: "bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 border border-gray-200 dark:border-gray-600" },
+  Submitted:    { label: "Submitted",   classes: "bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-200 dark:border-blue-700" },
+  Pending:      { label: "Pending",     classes: "bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400 border border-amber-200 dark:border-amber-700" },
+  "In Process": { label: "In Process",  classes: "bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400 border border-violet-200 dark:border-violet-700" },
+  Completed:    { label: "Completed",   classes: "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-700" },
+  Cancelled:    { label: "Cancelled",   classes: "bg-red-50 text-red-500 dark:bg-red-900/30 dark:text-red-400 border border-red-200 dark:border-red-700" },
+};
+
+function StatusBadge({ status }: { status?: string }) {
+  if (!status) return null;
+  const cfg = STATUS_CONFIG[status] ?? { label: status, classes: "bg-gray-100 text-gray-500 border border-gray-200" };
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold tracking-wide ${cfg.classes}`}>
+      {cfg.label}
+    </span>
+  );
+}
+
+// ── Shared item row type ──────────────────────────────────────────────────────
+interface ItemRow {
+  drug?: string;
+  drug_name?: string;
+  dosage?: string;
+  quantity?: number | string | null;
+  uom?: string;
+  patient_frequency?: string;
+  medication_type?: string;
+  is_prn?: number | boolean | string;
+}
+
+// ── Reusable items table ──────────────────────────────────────────────────────
+function ItemsTable({
+  items,
+  selectable,
+  selectedKeys,
+  onToggle,
+  orderName,
+}: {
+  items: ItemRow[];
+  selectable?: boolean;
+  selectedKeys?: Set<string>;
+  onToggle?: (key: string) => void;
+  orderName?: string;
+}) {
+  if (!items.length) return null;
+  const isPrn = (v: ItemRow["is_prn"]) => v === 1 || v === true || v === "1";
+
+  return (
+    <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden text-xs">
+      <table className="w-full">
+        <thead>
+          <tr className="bg-gray-50 dark:bg-gray-800/70 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+            {selectable && <th className="px-3 py-2 w-8" />}
+            <th className="px-3 py-2 text-left">Drug</th>
+            <th className="px-3 py-2 text-left">Dosage</th>
+            <th className="px-3 py-2 text-left">Qty</th>
+            <th className="px-3 py-2 text-left">Frequency</th>
+            <th className="px-3 py-2 text-left">Type</th>
+            <th className="px-3 py-2 text-center">PRN</th>
+           </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
+          {items.map((item, idx) => {
+            const itemKey = `${orderName}::${idx}::${item.drug ?? ""}`;
+            const checked = selectedKeys?.has(itemKey) ?? false;
+            return (
+              <tr
+                key={idx}
+                onClick={selectable && onToggle ? () => onToggle(itemKey) : undefined}
+                className={`transition-colors
+                  ${selectable ? "cursor-pointer" : ""}
+                  ${checked
+                    ? "bg-orange-50 dark:bg-orange-900/20"
+                    : selectable
+                    ? "bg-white dark:bg-gray-900 hover:bg-orange-50/50 dark:hover:bg-orange-900/10"
+                    : "bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800/40"
+                  }`}
+              >
+                {selectable && (
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggle?.(itemKey)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                    />
+                   </td>
+                )}
+                <td className="px-3 py-2 font-semibold text-gray-800 dark:text-gray-200 whitespace-nowrap">
+                  {item.drug_name || item.drug || "—"}
+                 </td>
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                  {item.dosage || "—"}
+                 </td>
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                  {item.quantity != null ? `${item.quantity}${item.uom ? ` ${item.uom}` : ""}` : "—"}
+                 </td>
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                  {item.patient_frequency || "—"}
+                 </td>
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                  {item.medication_type || "—"}
+                 </td>
+                <td className="px-3 py-2 text-center">
+                  {isPrn(item.is_prn)
+                    ? <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">PRN</span>
+                    : <span className="text-gray-300 dark:text-gray-600">—</span>
+                  }
+                 </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Main modal ────────────────────────────────────────────────────────────────
 export default function InpatientMedicationOrdersModal({
   isOpen,
   onClose,
-  orders,
+  pendingOrders,
+  historyOrders,
   selectedOrders,
   onToggleOrder,
   onAddToCart,
+  selectedHistoryItems,
+  onToggleHistoryItem,
+  onAddHistoryItemsToCart,
+  onCreateVisit,
+  creatingVisit = false,
   patientName,
+  patientId,
+  isHospitalMode = false,
 }: InpatientMedicationOrdersModalProps) {
+  const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit">("pending");
+  const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
+  const [openPrintMenuFor, setOpenPrintMenuFor] = useState<string | null>(null);
+  const [printMenuPosition, setPrintMenuPosition] = useState<{ top: number; right: number } | null>(null);
+  const printButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setActiveTab("pending");
+      setExpandedHistoryOrders(new Set());
+      setOpenPrintMenuFor(null);
+      setPrintMenuPosition(null);
+    }
+  }, [isOpen]);
+
+  useLayoutEffect(() => {
+    if (!openPrintMenuFor || !printButtonRef.current) return;
+    const rect = printButtonRef.current.getBoundingClientRect();
+    setPrintMenuPosition({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+  }, [openPrintMenuFor]);
+
+  useEffect(() => {
+    if (!openPrintMenuFor) return;
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-med-print-menu]") && !t.closest("[data-med-print-trigger]")) {
+        setOpenPrintMenuFor(null);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [openPrintMenuFor]);
+
+  const openPrint = (doctype: string, name: string, format = "Standard") => {
+    const params = new URLSearchParams({ doctype, name, format, trigger_print: "1", no_letterhead: "0" });
+    const base = typeof window !== "undefined" ? window.location.origin : "";
+    window.open(`${base}/printview?${params}`, "_blank", "noopener,noreferrer");
+  };
+
+  const printMenu =
+    openPrintMenuFor && printMenuPosition && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            data-med-print-menu
+            className="fixed z-[9999] min-w-[160px] rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
+            style={{ top: printMenuPosition.top, right: printMenuPosition.right, left: "auto" }}
+          >
+            <button
+              type="button"
+              className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+              onClick={() => {
+                openPrint("Patient Medication Order", openPrintMenuFor, "Standard");
+                setOpenPrintMenuFor(null);
+              }}
+            >
+              <Printer size={13} className="text-slate-400" /> Standard
+            </button>
+          </div>,
+          document.body
+        )
+      : null;
+
   if (!isOpen) return null;
+
+  const tabs = [
+    { id: "pending" as const, label: "Pending",       count: pendingOrders.length, icon: ClipboardList },
+    { id: "history" as const, label: "History",       count: historyOrders.length, icon: Clock },
+    { id: "visit"   as const, label: "Patient Visit", count: null,                 icon: UserPlus },
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/50 pointer-events-auto"
-        onClick={onClose}
-      />
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm pointer-events-auto" onClick={onClose} />
 
-      {/* Modal */}
-      <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden pointer-events-auto flex flex-col">
+      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-5xl h-[92vh] pointer-events-auto flex flex-col overflow-hidden border border-gray-100 dark:border-gray-700">
+
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-              Pending Medication Orders
-            </h2>
-            {patientName && (
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                Patient: {patientName}
-              </p>
-            )}
+        <div className="flex items-center justify-between px-8 py-5 border-b border-gray-200 dark:border-gray-700 bg-beveren-100 dark:bg-beveren-900/20">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-orange-600 flex items-center justify-center shadow-sm">
+              <ClipboardList size={18} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white tracking-tight">Medication Orders</h2>
+              {patientName && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">{patientName}</p>
+              )}
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/60 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors"
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
 
-        {/* Orders List */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {orders.length === 0 ? (
-            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-              No pending medication orders found.
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {orders.map((order) => {
-                const isSelected = selectedOrders.has(order.name);
+        {/* Tab Bar */}
+        {isHospitalMode && (
+          <div className="px-8 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-700/60">
+            <div className="flex items-stretch">
+              {tabs.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
                 return (
-                  <div
-                    key={order.name}
-                    className={`border rounded-lg p-4 cursor-pointer transition-all ${
-                      isSelected
-                        ? "border-beveren-500 bg-beveren-50 dark:bg-beveren-900/20"
-                        : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
-                    }`}
-                    onClick={() => onToggleOrder(order.name)}
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`relative flex items-center gap-2 px-5 py-4 text-sm font-semibold transition-all duration-150
+                      ${isActive
+                        ? "text-beveren-600 dark:text-beveren-400"
+                        : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                      }`}
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2 mb-2">
-                          <div
-                            className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                              isSelected
-                                ? "bg-beveren-500 border-beveren-500"
-                                : "border-gray-300 dark:border-gray-600"
-                            }`}
-                          >
-                            {isSelected && <Check size={12} className="text-white" />}
-                          </div>
-                          <h3 className="font-semibold text-gray-900 dark:text-white">
-                            Order: {order.name}
-                          </h3>
+                    <Icon size={15} className={isActive ? "text-orange-500" : "text-gray-400"} />
+                    <span>{tab.label}</span>
+                    {tab.count !== null && (
+                      <span className={`ml-0.5 min-w-[20px] h-5 px-1.5 rounded-full text-xs flex items-center justify-center font-bold
+                        ${isActive ? "bg-beveren-600 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300"}`}>
+                        {tab.count}
+                      </span>
+                    )}
+                    {isActive && (
+                      <span className="absolute bottom-0 left-0 right-0 h-[3px] bg-beveren-600 dark:bg-beveren-400 rounded-t-full" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-8 py-6 bg-white dark:bg-gray-900">
+
+          {/* ── PENDING ── */}
+          {(activeTab === "pending" || !isHospitalMode) && (
+            pendingOrders.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+                <ClipboardList size={40} className="mb-3 opacity-30" />
+                <p className="text-sm font-medium">No pending medication orders found.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {pendingOrders.map((order) => {
+                  const isSelected = selectedOrders.has(order.name);
+                  return (
+                    <div
+                      key={order.name}
+                      className={`group border rounded-xl p-4 cursor-pointer transition-all duration-150
+                        ${isSelected
+                          ? "border-orange-400 bg-orange-50 dark:bg-orange-900/20 shadow-sm"
+                          : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-sm"
+                        }`}
+                      onClick={() => onToggleOrder(order.name)}
+                    >
+                      {/* Row: checkbox · name · date · doctor · print */}
+                      <div className="flex items-center gap-3">
+                        <div className={`flex-shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-colors
+                          ${isSelected
+                            ? "bg-orange-500 border-orange-500"
+                            : "border-gray-300 dark:border-gray-600 group-hover:border-orange-400"
+                          }`}>
+                          {isSelected && <Check size={11} className="text-white" strokeWidth={3} />}
+                        </div>
+                        <h3 className="font-semibold text-gray-900 dark:text-white text-sm flex-1">{order.name}</h3>
+                        {order.posting_date && (
+                          <span className="text-xs text-gray-400 dark:text-gray-500 tabular-nums">
+                            {new Date(order.posting_date).toLocaleDateString()}
+                          </span>
+                        )}
+                        <button
+                          ref={openPrintMenuFor === order.name ? printButtonRef : null}
+                          data-med-print-trigger
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenPrintMenuFor((p) => (p === order.name ? null : order.name));
+                          }}
+                          className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 transition-colors"
+                          title="Print order"
+                        >
+                          <Printer size={14} />
+                        </button>
+                      </div>
+
+                      {(order.healthcare_practitioner_name || order.healthcare_practitioner) && (
+                        <div className="mt-2 ml-8 text-xs text-gray-600 dark:text-gray-300">
+                          Prescribed by: <span className="font-semibold">{order.healthcare_practitioner_name || order.healthcare_practitioner}</span>
+                        </div>
+                      )}
+
+                      {/* Items table */}
+                      {order.items && order.items.length > 0 && (
+                        <div className="mt-3 ml-8" onClick={(e) => e.stopPropagation()}>
+                          <ItemsTable items={order.items} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+
+          {/* ── HISTORY ── */}
+          {isHospitalMode && activeTab === "history" && (
+            historyOrders.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+                <Clock size={40} className="mb-3 opacity-30" />
+                <p className="text-sm font-medium">No medication history found.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {historyOrders.slice(0, 50).map((order) => {
+                  const isExpanded = expandedHistoryOrders.has(order.name);
+                  return (
+                    <div
+                      key={order.name}
+                      className="border border-orange-200 dark:border-orange-800/60 rounded-xl overflow-hidden bg-orange-50/40 dark:bg-orange-900/10"
+                    >
+                      {/* Accordion header */}
+                      <div className="flex items-center gap-2 px-4 py-3 bg-orange-100/70 dark:bg-orange-900/20">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedHistoryOrders((prev) => {
+                              const next = new Set(prev);
+                              next.has(order.name) ? next.delete(order.name) : next.add(order.name);
+                              return next;
+                            })
+                          }
+                          className="flex items-center gap-2 text-left flex-1 min-w-0"
+                        >
+                          <span className={`text-gray-400 transition-transform duration-150 flex-shrink-0 ${isExpanded ? "rotate-0" : "-rotate-90"}`}>
+                            <ChevronDown size={15} />
+                          </span>
+                          <span className="font-semibold text-sm text-gray-800 dark:text-white truncate">{order.name}</span>
                           {order.posting_date && (
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                            <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">
                               {new Date(order.posting_date).toLocaleDateString()}
                             </span>
                           )}
-                        </div>
-                        
-                        {/* Items in this order */}
-                        {order.items && order.items.length > 0 && (
-                          <div className="ml-7 space-y-2">
-                            {order.items.map((item, idx) => (
-                              <div
-                                key={idx}
-                                className="text-sm text-gray-700 dark:text-gray-300"
-                              >
-                                <span className="font-medium">
-                                  {item.drug_name || item.drug}
-                                </span>
-                                {item.dosage && (
-                                  <span className="text-gray-500 dark:text-gray-400">
-                                    {" "}• Dosage: {item.dosage}
-                                  </span>
-                                )}
-                                {item.quantity && (
-                                  <span className="text-gray-500 dark:text-gray-400">
-                                    {" "}• Qty: {item.quantity}
-                                  </span>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                          {(order.healthcare_practitioner_name || order.healthcare_practitioner) && (
+                            <span className="text-xs text-gray-500 dark:text-gray-400 truncate flex-shrink-0">
+                              Dr: {order.healthcare_practitioner_name || order.healthcare_practitioner}
+                            </span>
+                          )}
+                          <StatusBadge status={order.status} />
+                        </button>
+                        <button
+                          ref={openPrintMenuFor === order.name ? printButtonRef : null}
+                          data-med-print-trigger
+                          type="button"
+                          onClick={() => setOpenPrintMenuFor((p) => (p === order.name ? null : order.name))}
+                          className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 transition-colors"
+                          title="Print order"
+                        >
+                          <Printer size={14} />
+                        </button>
                       </div>
+
+                      {/* Expanded — selectable items table */}
+                      {isExpanded && order.items && order.items.length > 0 && (
+                        <div className="px-4 py-3 border-t border-orange-200 dark:border-orange-800/40 bg-white/70 dark:bg-gray-900/20">
+                          <ItemsTable
+                            items={order.items}
+                            selectable
+                            selectedKeys={selectedHistoryItems}
+                            onToggle={onToggleHistoryItem}
+                            orderName={order.name}
+                          />
+                        </div>
+                      )}
+
+                      {isExpanded && (!order.items || order.items.length === 0) && (
+                        <div className="px-4 py-4 border-t border-orange-200 dark:border-orange-800/40 text-sm text-gray-400 dark:text-gray-500 text-center bg-white/70 dark:bg-gray-900/20">
+                          No items in this order.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+
+          {/* ── VISIT ── */}
+          {isHospitalMode && activeTab === "visit" && (
+            <div className="max-w-md mx-auto py-6">
+              <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-6 py-5 bg-beveren-50 dark:bg-beveren-900/20 border-b border-beveren-100 dark:border-beveren-800/30">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-orange-600 flex items-center justify-center">
+                      <UserPlus size={17} className="text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-gray-900 dark:text-white text-base">Create Patient Visit</h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">New encounter from pharmacy</p>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+                <div className="px-6 py-5 space-y-4">
+                  <div className="space-y-0">
+                    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 dark:border-gray-800">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Patient</span>
+                      <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{patientName || "—"}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 dark:border-gray-800">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Patient ID</span>
+                      <span className="text-sm font-mono text-gray-600 dark:text-gray-400">{patientId || "—"}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onCreateVisit}
+                    disabled={creatingVisit}
+                    className="w-full px-4 py-3 text-sm font-bold text-orange-600 bg-white border-2 border-orange-600 rounded-xl hover:bg-orange-50 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+                  >
+                    {creatingVisit ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <span className="w-4 h-4 border-2 border-orange-600/30 border-t-orange-600 rounded-full animate-spin" />
+                        Creating…
+                      </span>
+                    ) : "Create Patient Visit"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between p-6 border-t border-gray-200 dark:border-gray-700">
-          <div className="text-sm text-gray-600 dark:text-gray-400">
-            {selectedOrders.size} of {orders.length} order(s) selected
+        <div className="flex items-center justify-between px-8 py-4 border-t border-gray-200 dark:border-gray-700 bg-beveren-100 dark:bg-beveren-900/20">
+          <div className="text-xs font-medium text-gray-400 dark:text-gray-500">
+            {!isHospitalMode
+              ? `${selectedOrders.size} of ${pendingOrders.length} order(s) selected`
+              : activeTab === "pending"
+              ? `${selectedOrders.size} of ${pendingOrders.length} pending selected`
+              : activeTab === "history"
+              ? `${selectedHistoryItems.size} item(s) selected`
+              : "Create a new encounter above"}
           </div>
-          <div className="flex space-x-3">
+          <div className="flex items-center gap-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+              className="px-4 py-2 text-sm font-semibold text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
             >
               Cancel
             </button>
-            <button
-              onClick={onAddToCart}
-              disabled={selectedOrders.size === 0}
-              className="px-4 py-2 text-sm font-medium text-white bg-beveren-600 rounded-lg hover:bg-beveren-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Add to Cart ({selectedOrders.size})
-            </button>
+            {(activeTab === "pending" || !isHospitalMode) && (
+              <button
+                onClick={onAddToCart}
+                disabled={selectedOrders.size === 0}
+                className="px-5 py-2 text-sm font-bold text-orange-600 bg-white border-2 border-orange-600 rounded-lg hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-[0.99]"
+              >
+                Add to Cart {selectedOrders.size > 0 && `(${selectedOrders.size})`}
+              </button>
+            )}
+            {isHospitalMode && activeTab === "history" && (
+              <button
+                onClick={onAddHistoryItemsToCart}
+                disabled={selectedHistoryItems.size === 0}
+                className="px-5 py-2 text-sm font-bold text-orange-600 bg-white border-2 border-orange-600 rounded-lg hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-[0.99]"
+              >
+                Add Selected {selectedHistoryItems.size > 0 && `(${selectedHistoryItems.size})`}
+              </button>
+            )}
           </div>
         </div>
+
+        {printMenu}
       </div>
     </div>
   );

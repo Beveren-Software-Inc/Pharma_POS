@@ -10,7 +10,7 @@ import {
   User,
   Building,
   Pill,
-  FileText,
+  Printer,
 } from "lucide-react";
 import type { CartItem, GiftCoupon } from "../../types";
 import type { Customer } from "../types/customer";
@@ -33,9 +33,10 @@ import { useCustomerStatistics } from "../hooks/useCustomerStatistics";
 import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, type Patient, type InpatientMedicationOrder } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, createPatientVisit, type Patient, type InpatientMedicationOrder } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
+import { createHospitalSalesOrder } from "../services/salesOrder";
 
 
 interface OrderSummaryProps {
@@ -891,8 +892,14 @@ export default function OrderSummary({
   const [redeemPointsInput, setRedeemPointsInput] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [medicationOrders, setMedicationOrders] = useState<InpatientMedicationOrder[]>([]);
+  const [medicationOrderHistory, setMedicationOrderHistory] = useState<InpatientMedicationOrder[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [selectedHistoryItems, setSelectedHistoryItems] = useState<Set<string>>(new Set());
+  const [isCreatingVisit, setIsCreatingVisit] = useState(false);
+  const [createdVisitRef, setCreatedVisitRef] = useState<{ doctype: string; name: string } | null>(null);
+  const [isDispensing, setIsDispensing] = useState(false);
+  const [lastDispensedSalesOrder, setLastDispensedSalesOrder] = useState<string | null>(null);
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
   const { customers, isLoading, refetch: refetchCustomers } = useCustomers(customerSearchQuery);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -906,6 +913,9 @@ export default function OrderSummary({
   const isPharmacy = posDetails?.custom_is_pharmacy === 1 ||
                      posDetails?.custom_is_pharmacy === true ||
                      posDetails?.custom_is_pharmacy === "1";
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+                             posDetails?.custom_is_hospital_pharmacy === true ||
+                             posDetails?.custom_is_hospital_pharmacy === "1";
 
   const pharmacyDefaultUom =
     typeof posDetails?.custom_pharmacy_default_uom === "string"
@@ -1285,10 +1295,14 @@ export default function OrderSummary({
       setSelectedCustomer(matchingCustomer);
     }
     
-    // Fetch pending medication orders for this patient and automatically add to cart
+    // Fetch pending/history medication orders for this patient and automatically add pending to cart
     try {
-      const orders = await getPendingInpatientMedicationOrders(patient.name);
+      const [orders, history] = await Promise.all([
+        getPendingInpatientMedicationOrders(patient.name),
+        getPatientMedicationOrderHistory(patient.name, 50),
+      ]);
       setMedicationOrders(orders);
+      setMedicationOrderHistory(history);
       
       if (orders.length === 0) {
         toast.info("No pending medication orders found for this patient.");
@@ -1350,7 +1364,7 @@ export default function OrderSummary({
             continue;
           }
 
-          const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom;
+          const uomToUse = itemToAdd.uom || ((isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom);
           const cartQuantity = await convertOrderQuantityToCartUOM(
             product.id,
             itemToAdd.quantity,
@@ -1390,8 +1404,8 @@ export default function OrderSummary({
           } else {
             let priceToUse = product.price;
 
-            if (isPharmacy && pharmacyDefaultUom && pharmacyDefaultUom !== product.uom && !selectedCustomer) {
-              const priceInfo = await getItemPriceForCustomer(product.id, undefined, pharmacyDefaultUom);
+            if (isPharmacy && uomToUse && uomToUse !== product.uom && !selectedCustomer) {
+              const priceInfo = await getItemPriceForCustomer(product.id, undefined, uomToUse);
               if (priceInfo?.success && priceInfo.price > 0) {
                 priceToUse = priceInfo.price;
               }
@@ -1523,7 +1537,7 @@ export default function OrderSummary({
           continue;
         }
 
-        const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom;
+        const uomToUse = itemToAdd.uom || ((isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom);
         const cartQuantity = await convertOrderQuantityToCartUOM(
           product.id,
           itemToAdd.quantity,
@@ -1561,8 +1575,8 @@ export default function OrderSummary({
         } else {
           let priceToUse = product.price;
 
-          if (isPharmacy && pharmacyDefaultUom && pharmacyDefaultUom !== product.uom && !selectedCustomer) {
-            const priceInfo = await getItemPriceForCustomer(product.id, undefined, pharmacyDefaultUom);
+          if (isPharmacy && uomToUse && uomToUse !== product.uom && !selectedCustomer) {
+            const priceInfo = await getItemPriceForCustomer(product.id, undefined, uomToUse);
             if (priceInfo?.success && priceInfo.price > 0) {
               priceToUse = priceInfo.price;
             }
@@ -1628,6 +1642,133 @@ export default function OrderSummary({
       console.error('Error adding items to cart:', error);
       toast.dismiss(loadingToast);
       toast.error('Failed to add items to cart. Please try again.');
+    }
+  };
+
+  const openMedicationOrdersModal = async () => {
+    const patientToUse = selectedPatient || (selectedCustomer ? patients.find(
+      p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
+    ) : null);
+    const patientId = patientToUse?.name ?? selectedCustomer?.id ?? selectedCustomer?.name;
+    if (!patientId) {
+      toast.error("Patient not found.");
+      return;
+    }
+    try {
+      const [orders, history] = await Promise.all([
+        getPendingInpatientMedicationOrders(patientId),
+        getPatientMedicationOrderHistory(patientId, 50),
+      ]);
+      setMedicationOrders(orders);
+      setMedicationOrderHistory(history);
+      setSelectedOrders(new Set(orders.map(o => o.name)));
+      setShowMedicationOrdersModal(true);
+      if (orders.length === 0 && history.length === 0) {
+        toast.info("No medication orders found for this patient.");
+      }
+    } catch (error) {
+      console.error('Error fetching medication orders:', error);
+      toast.error("Failed to fetch medication orders.");
+    }
+  };
+
+  const handleAddHistoryItemsToCart = async () => {
+    if (selectedHistoryItems.size === 0) {
+      toast.warning("Please select at least one history item.");
+      return;
+    }
+    const itemsToAdd: Array<{ item_code: string; quantity: number; uom?: string; dosage?: string; patient_frequency?: string; medication_order?: string }> = [];
+    medicationOrderHistory.forEach((order) => {
+      order.items.forEach((item, idx) => {
+        const key = `${order.name}::${idx}::${item.drug ?? ""}`;
+        if (selectedHistoryItems.has(key) && item.drug) {
+          itemsToAdd.push({
+            item_code: item.drug,
+            quantity: item.quantity ?? 1,
+            uom: item.uom,
+            dosage: item.dosage || undefined,
+            patient_frequency: item.patient_frequency,
+            medication_order: order.name,
+          });
+        }
+      });
+    });
+    if (itemsToAdd.length === 0) {
+      toast.warning("No valid items selected.");
+      return;
+    }
+    const loadingToast = toast.loading(`Adding ${itemsToAdd.length} history item(s) to cart...`);
+    try {
+      let addedCount = 0;
+      let notFoundCount = 0;
+      const qtyByItem = new Map<string, number>();
+      cartItems.forEach((ci) => qtyByItem.set(ci.id, ci.quantity));
+
+      for (const itemToAdd of itemsToAdd) {
+        const product = products.find(p => p.id === itemToAdd.item_code || p.item_code === itemToAdd.item_code);
+        if (!product) {
+          notFoundCount++;
+          continue;
+        }
+        const uomToUse = itemToAdd.uom || ((isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom);
+        const cartQuantity = await convertOrderQuantityToCartUOM(product.id, itemToAdd.quantity, itemToAdd.uom, uomToUse);
+        const currentQty = qtyByItem.get(product.id) ?? 0;
+        if (currentQty > 0) {
+          const newQty = currentQty + cartQuantity;
+          await onUpdateQuantity(product.id, newQty);
+          qtyByItem.set(product.id, newQty);
+        } else {
+          await addToCartWithQuantity(
+            {
+              id: product.id,
+              name: product.name,
+              category: product.category || "General",
+              price: product.price,
+              image: product.image || "",
+              available: product.available,
+              uom: uomToUse,
+              item_code: product.id,
+              ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order, medicationOrders: [itemToAdd.medication_order] }),
+            },
+            cartQuantity
+          );
+          qtyByItem.set(product.id, cartQuantity);
+        }
+        addedCount++;
+      }
+      toast.dismiss(loadingToast);
+      if (addedCount > 0 && notFoundCount === 0) toast.success(`Successfully added ${addedCount} history item(s).`);
+      else if (addedCount > 0) toast.warning(`Added ${addedCount} item(s). ${notFoundCount} item(s) not found.`);
+      else toast.error("No history items were added.");
+      setSelectedHistoryItems(new Set());
+    } catch {
+      toast.dismiss(loadingToast);
+      toast.error("Failed to add history items to cart.");
+    }
+  };
+
+  const handleCreatePatientVisit = async () => {
+    const patientToUse = selectedPatient || (selectedCustomer ? patients.find(
+      p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
+    ) : null);
+    const patientId = patientToUse?.name ?? selectedCustomer?.id ?? selectedCustomer?.name;
+    if (!patientId) {
+      toast.warning("Select a patient first.");
+      return;
+    }
+    try {
+      setIsCreatingVisit(true);
+      const result = await createPatientVisit(patientId);
+      if (result?.name) {
+        setCreatedVisitRef({ doctype: result.doctype, name: result.name });
+        toast.success(`Created ${result.doctype}: ${result.name}`);
+      } else {
+        toast.error("Failed to create patient visit.");
+      }
+    } catch (error) {
+      toast.error(extractErrorFromException(error, "Failed to create patient visit"));
+    } finally {
+      setIsCreatingVisit(false);
     }
   };
 
@@ -1759,6 +1900,91 @@ export default function OrderSummary({
       console.error("OrderSummary: Failed to refresh stock:", error);
       const errorMessage = error?.message || "Unknown error";
       toast.error(`Failed to update stock: ${errorMessage}`);
+    }
+  };
+
+  const handleStartNewOrder = async () => {
+    handleClearCart();
+    setLastDispensedSalesOrder(null);
+    setCreatedVisitRef(null);
+    try {
+      await refreshStockOnly();
+      const cartItemCodes = cartItems.map(item => item.item_code || item.id);
+      if (cartItemCodes.length > 0) {
+        await updateBatchQuantitiesForItems(cartItemCodes);
+        await updateSerialsForItems(cartItemCodes);
+      }
+    } catch (error) {
+      console.error("Failed to refresh stock for new order:", error);
+    }
+  };
+
+  const printSalesOrder = (salesOrderName: string) => {
+    const params = new URLSearchParams();
+    params.set("doctype", "Sales Order");
+    params.set("name", salesOrderName);
+    params.set("format", "Standard");
+    params.set("trigger_print", "1");
+    params.set("no_letterhead", "0");
+    const base = typeof window !== "undefined" ? window.location.origin : "";
+    window.open(`${base}/printview?${params.toString()}`, "_blank", "noopener,noreferrer");
+  };
+
+  const handleDispense = async () => {
+    if (!validateCustomer()) return;
+    if (!selectedCustomer) return;
+    if (!isHospitalPharmacy) {
+      setShowPaymentDialog(true);
+      return;
+    }
+    try {
+      setIsDispensing(true);
+      const allMedicationOrders = Array.from(new Set(
+        cartItems.flatMap((item) => {
+          const many = (item as CartItem & { medicationOrders?: string[] }).medicationOrders || [];
+          const one = (item as CartItem & { medicationOrder?: string }).medicationOrder;
+          return [...many, ...(one ? [one] : [])].filter(Boolean);
+        })
+      ));
+      const firstMedicationOrder = allMedicationOrders[0];
+      const sourceOrder = [...medicationOrders, ...medicationOrderHistory].find((o) => o.name === firstMedicationOrder);
+      const finalReferenceType = createdVisitRef?.doctype || sourceOrder?.custom_reference_type || "Patient Visit";
+      const finalReferenceName = createdVisitRef?.name || sourceOrder?.custom_reference_name || "";
+
+      const payload = {
+        customer: { id: selectedCustomer.id },
+        items: cartItems.map((item) => {
+          const lineKey = getLineKey(item);
+          const lineDiscount = (itemDiscounts[lineKey] || {}) as { batchNumber?: string; serialNumber?: string };
+          return {
+            id: item.id,
+            item_code: item.item_code || item.id,
+            quantity: item.quantity,
+            price: getDiscountedPrice(item),
+            uom: item.uom,
+            batchNumber: lineDiscount.batchNumber || (item as CartItem & { batch_no?: string }).batch_no,
+            serialNumber: lineDiscount.serialNumber || (item as CartItem & { serial_no?: string }).serial_no,
+          };
+        }),
+        medication_orders: allMedicationOrders,
+        base_reference: "Patient Medication Order",
+        base_reference_name: allMedicationOrders.join(", "),
+        reference_type: finalReferenceType,
+        reference_name: finalReferenceName,
+      };
+
+      const result = await createHospitalSalesOrder(payload);
+      const soName = result?.sales_order_name;
+      if (!soName) {
+        toast.error("Dispense failed. Sales Order was not created.");
+        return;
+      }
+      setLastDispensedSalesOrder(soName);
+      toast.success(`Dispensed successfully. Sales Order: ${soName}`);
+    } catch (error) {
+      toast.error(extractErrorFromException(error, "Failed to dispense items"));
+    } finally {
+      setIsDispensing(false);
     }
   };
 
@@ -2414,29 +2640,7 @@ const handleSetSerial = (event: CustomEvent) => {
                     {/* Pill: view medication orders - always show when customer/patient selected in pharmacy so it survives refresh */}
                     {(selectedPatient || (selectedCustomer && isPharmacy)) ? (
                       <button
-                        onClick={async () => {
-                          const patientToUse = selectedPatient || (selectedCustomer ? patients.find(
-                            p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
-                          ) : null);
-                          const patientId = patientToUse?.name ?? selectedCustomer?.id ?? selectedCustomer?.name;
-                          if (!patientId) {
-                            toast.error("Patient not found.");
-                            return;
-                          }
-                          try {
-                            const orders = await getPendingInpatientMedicationOrders(patientId);
-                            setMedicationOrders(orders);
-                            setSelectedOrders(new Set(orders.map(o => o.name)));
-                            if (orders.length > 0) {
-                              setShowMedicationOrdersModal(true);
-                            } else {
-                              toast.info("No pending medication orders found for this patient.");
-                            }
-                          } catch (error) {
-                            console.error('Error fetching medication orders:', error);
-                            toast.error("Failed to fetch medication orders.");
-                          }
-                        }}
+                        onClick={openMedicationOrdersModal}
                         className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"
                         title="View medication orders"
                       >
@@ -2450,7 +2654,9 @@ const handleSetSerial = (event: CustomEvent) => {
                         setCustomerSearchQuery("");
                         setUserRemovedDefaultCustomer(true);
                         setMedicationOrders([]);
+                        setMedicationOrderHistory([]);
                         setSelectedOrders(new Set());
+                        setSelectedHistoryItems(new Set());
                       }}
                       className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                     >
@@ -2569,29 +2775,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   {/* Pill: view medication orders - always show when customer/patient selected in pharmacy so it survives refresh */}
                   {(selectedPatient || (selectedCustomer && isPharmacy)) ? (
                     <button
-                      onClick={async () => {
-                        const patientToUse = selectedPatient || (selectedCustomer ? patients.find(
-                          p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
-                        ) : null);
-                        const patientId = patientToUse?.name ?? selectedCustomer?.id ?? selectedCustomer?.name;
-                        if (!patientId) {
-                          toast.error("Patient not found.");
-                          return;
-                        }
-                        try {
-                          const orders = await getPendingInpatientMedicationOrders(patientId);
-                          setMedicationOrders(orders);
-                          setSelectedOrders(new Set(orders.map(o => o.name)));
-                          if (orders.length > 0) {
-                            setShowMedicationOrdersModal(true);
-                          } else {
-                            toast.info("No pending medication orders found for this patient.");
-                          }
-                        } catch (error) {
-                          console.error('Error fetching medication orders:', error);
-                          toast.error("Failed to fetch medication orders.");
-                        }
-                      }}
+                      onClick={openMedicationOrdersModal}
                       className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"
                       title="View medication orders"
                     >
@@ -2605,7 +2789,9 @@ const handleSetSerial = (event: CustomEvent) => {
                       setCustomerSearchQuery("");
                       setUserRemovedDefaultCustomer(true);
                       setMedicationOrders([]);
+                      setMedicationOrderHistory([]);
                       setSelectedOrders(new Set());
+                      setSelectedHistoryItems(new Set());
                       setShowCustomerDropdown(false);
                     }}
                     className="text-gray-400 hover:text-gray-600"
@@ -3101,36 +3287,44 @@ const handleSetSerial = (event: CustomEvent) => {
         >
 
           {/* Action Buttons */}
-          <div className={`grid gap-3 ${isMobile ? "mb-3" : ""} ${isAllowAdditionalAmounts ? "grid-cols-[1fr_1fr_auto]" : "grid-cols-2"}`}>
-            <button
-              onClick={() => {
-                if (!validateCustomer()) return;
+          <div
+            className={`grid gap-3 ${isMobile ? "mb-3" : ""} ${
+              isAllowAdditionalAmounts
+                ? (isHospitalPharmacy ? "grid-cols-[1fr_auto]" : "grid-cols-[1fr_1fr_auto]")
+                : (isHospitalPharmacy ? "grid-cols-1" : "grid-cols-2")
+            }`}
+          >
+            {!isHospitalPharmacy && (
+              <button
+                onClick={() => {
+                  if (!validateCustomer()) return;
 
-                const sc = selectedCustomer;
-                if (!sc) return;
+                  const sc = selectedCustomer;
+                  if (!sc) return;
 
-                const orderData = {
-                  items: cartItems.map((item) => ({
-                    id: item.id,
-                    quantity: item.quantity,
-                    price: getDiscountedPrice(item),
-                  })),
-                  customer: { id: sc.id },
-                  subtotal,
-                  total,
-                  appliedCoupons,
-                  itemDiscounts,
-                  totalItemDiscount,
-                  totalSavings: totalItemDiscount + couponDiscount,
-                  status: "held",
-                };
+                  const orderData = {
+                    items: cartItems.map((item) => ({
+                      id: item.id,
+                      quantity: item.quantity,
+                      price: getDiscountedPrice(item),
+                    })),
+                    customer: { id: sc.id },
+                    subtotal,
+                    total,
+                    appliedCoupons,
+                    itemDiscounts,
+                    totalItemDiscount,
+                    totalSavings: totalItemDiscount + couponDiscount,
+                    status: "held",
+                  };
 
-                handleHoldOrder(orderData);
-              }}
-              className="px-3 py-2 border border-beveren-600 text-beveren-600 dark:text-beveren-400 rounded-lg font-medium hover:bg-beveren-600 hover:text-white transition-colors text-sm"
-            >
-              Hold
-            </button>
+                  handleHoldOrder(orderData);
+                }}
+                className="px-3 py-2 border border-beveren-600 text-beveren-600 dark:text-beveren-400 rounded-lg font-medium hover:bg-beveren-600 hover:text-white transition-colors text-sm"
+              >
+                Hold
+              </button>
+            )}
             <button
               onClick={handleClearCart}
               className="px-3 py-2 border border-red-500 text-red-600 dark:text-red-400 rounded-lg font-medium hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm"
@@ -3152,17 +3346,35 @@ const handleSetSerial = (event: CustomEvent) => {
 
           {/* Pay Button */}
           <button
-            onClick={() => {
-              if (!validateCustomer()) return;
-              setShowPaymentDialog(true);
-            }}
+            onClick={handleDispense}
+            disabled={isDispensing}
             className={`w-full bg-beveren-600 text-white rounded-xl font-semibold hover:bg-beveren-700 transition-colors ${
               isMobile ? "py-3 text-base" : "py-2 text-sm"
-            }`}
+            } disabled:opacity-60`}
           >
-            Checkout {currency_symbol}
+            {isHospitalPharmacy ? (isDispensing ? "Dispensing..." : "Dispense ") : "Checkout "}
+            {currency_symbol}
             {total.toFixed(3)}
           </button>
+          {isHospitalPharmacy && lastDispensedSalesOrder && (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => printSalesOrder(lastDispensedSalesOrder)}
+                className="px-3 py-2 border border-beveren-600 text-beveren-600 rounded-lg font-medium hover:bg-beveren-50 transition-colors text-sm flex items-center justify-center gap-2"
+              >
+                <Printer size={15} />
+                Print Sales Order
+              </button>
+              <button
+                type="button"
+                onClick={handleStartNewOrder}
+                className="px-3 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors text-sm"
+              >
+                New Order
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -3309,8 +3521,10 @@ const handleSetSerial = (event: CustomEvent) => {
         onClose={() => {
           setShowMedicationOrdersModal(false);
           setSelectedOrders(new Set());
+          setSelectedHistoryItems(new Set());
         }}
-        orders={medicationOrders}
+        pendingOrders={medicationOrders}
+        historyOrders={medicationOrderHistory}
         selectedOrders={selectedOrders}
         onToggleOrder={(orderName) => {
           setSelectedOrders(prev => {
@@ -3324,7 +3538,21 @@ const handleSetSerial = (event: CustomEvent) => {
           });
         }}
         onAddToCart={handleAddOrdersToCart}
+        selectedHistoryItems={selectedHistoryItems}
+        onToggleHistoryItem={(itemKey) => {
+          setSelectedHistoryItems((prev) => {
+            const next = new Set(prev);
+            if (next.has(itemKey)) next.delete(itemKey);
+            else next.add(itemKey);
+            return next;
+          });
+        }}
+        onAddHistoryItemsToCart={handleAddHistoryItemsToCart}
+        onCreateVisit={handleCreatePatientVisit}
+        creatingVisit={isCreatingVisit}
         patientName={selectedPatient?.patient_name || selectedPatient?.name}
+        patientId={selectedPatient?.name}
+        isHospitalMode={isHospitalPharmacy}
       />
     </div>
   );

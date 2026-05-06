@@ -13,6 +13,8 @@ export interface InpatientMedicationOrderItem {
   patient_frequency?: string;
   dosage_form?: string;
   period?: string;
+  is_prn?: number | boolean | string;
+  medication_type?: string;
   quantity?: number;
   /** UOM from the order entry (e.g. drug default/stock UOM) */
   uom?: string;
@@ -24,7 +26,11 @@ export interface InpatientMedicationOrder {
   patient_name?: string;
   status?: string;
   posting_date?: string;
+  healthcare_practitioner?: string;
+  healthcare_practitioner_name?: string;
   items: InpatientMedicationOrderItem[];
+  custom_reference_type?: string;
+  custom_reference_name?: string;
 }
 
 export async function searchPatients(searchQuery: string): Promise<Patient[]> {
@@ -80,5 +86,47 @@ export async function getPendingInpatientMedicationOrders(patient: string): Prom
   } catch (error) {
     console.error(`Error fetching medication orders:`, error);
     return [];
+  }
+}
+
+export async function getPatientMedicationOrderHistory(patient: string, limit = 50): Promise<InpatientMedicationOrder[]> {
+  try {
+    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_medication_order_history?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch medication order history');
+    }
+    return data?.message || [];
+  } catch (error) {
+    console.error('Error fetching medication order history:', error);
+    return [];
+  }
+}
+
+export async function createPatientVisit(patient: string): Promise<{ doctype: string; name: string; docstatus?: number } | null> {
+  try {
+    const csrfToken = window.csrf_token;
+    const response = await fetch('/api/method/klik_pos.api.patient.create_patient_visit', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Frappe-CSRF-Token': csrfToken,
+      },
+      body: JSON.stringify({ patient }),
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to create patient visit');
+    }
+    return data?.message || null;
+  } catch (error) {
+    console.error('Error creating patient visit:', error);
+    throw error;
   }
 }

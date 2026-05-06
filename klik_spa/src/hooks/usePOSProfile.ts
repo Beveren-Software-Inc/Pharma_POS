@@ -118,6 +118,7 @@ export type POSDetails = {
   write_off_cost_center?: string;
   custom_delivery_required?: number | boolean | string;
   custom_is_pharmacy?: number | boolean | string;
+  custom_is_hospital_pharmacy?: number | boolean | string;
   custom_pharmacy_default_uom?: string | null;
   custom_allow_item_tax_template?: number | boolean | string;
   custom_allow_additional_amounts?: number | boolean | string;
