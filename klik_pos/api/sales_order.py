@@ -93,6 +93,52 @@ def _derive_reference_from_medication_orders(reference_type, reference_name, med
 	return reference_type, reference_name
 
 
+def _resolve_patient_for_hospital_order(data, medication_orders):
+	"""
+	Link Sales Order to Patient (Healthcare) when field exists.
+	Order: explicit payload -> first medication order's patient.
+	"""
+	patient = (data.get("patient") or data.get("patient_id") or "").strip()
+	if patient and frappe.db.exists("Patient", patient):
+		return patient
+
+	if medication_orders:
+		first = medication_orders[0]
+		if frappe.db.exists("Patient Medication Order", first):
+			p = frappe.db.get_value("Patient Medication Order", first, "patient")
+			if p and frappe.db.exists("Patient", p):
+				return p
+
+	return None
+
+
+def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_profile):
+	"""Create submitted Delivery Note from Sales Order so stock updates immediately (not long SO reservation)."""
+	try:
+		from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
+	except ImportError:
+		frappe.throw("ERPNext is required to create Delivery Note from Sales Order.")
+
+	dn = make_delivery_note(sales_order_name)
+	if isinstance(dn, dict):
+		dn = frappe.get_doc(dn)
+
+	warehouse = getattr(pos_profile, "warehouse", None)
+	if warehouse:
+		if hasattr(dn, "set_warehouse"):
+			dn.set_warehouse = warehouse
+		for row in dn.get("items") or []:
+			if not getattr(row, "warehouse", None):
+				row.warehouse = warehouse
+
+	if hasattr(dn, "update_stock"):
+		dn.update_stock = 1
+
+	dn.insert(ignore_permissions=True)
+	dn.submit()
+	return dn.name
+
+
 @frappe.whitelist()
 def create_and_submit_hospital_sales_order(data):
 	try:
@@ -123,8 +169,9 @@ def create_and_submit_hospital_sales_order(data):
 			doc.currency = pos_profile.currency
 		if hasattr(doc, "set_warehouse") and getattr(pos_profile, "warehouse", None):
 			doc.set_warehouse = pos_profile.warehouse
+		# Stock is updated via submitted Delivery Note right after SO; avoid long-lived reservation only.
 		if hasattr(doc, "reserve_stock"):
-			doc.reserve_stock = 1
+			doc.reserve_stock = 0
 
 		base_reference = data.get("base_reference") or "Patient Medication Order"
 		base_reference_name = data.get("base_reference_name")
@@ -143,6 +190,10 @@ def create_and_submit_hospital_sales_order(data):
 			doc.custom_reference_type = reference_type
 		if reference_name and frappe.db.has_column("Sales Order", "custom_reference_name"):
 			doc.custom_reference_name = reference_name
+
+		patient_link = _resolve_patient_for_hospital_order(data, medication_orders)
+		if patient_link and frappe.get_meta("Sales Order").has_field("patient"):
+			doc.patient = patient_link
 
 		for item in items:
 			item_code = item.get("id") or item.get("item_code")
@@ -163,13 +214,22 @@ def create_and_submit_hospital_sales_order(data):
 
 			doc.append("items", row)
 
-		doc.insert(ignore_permissions=True)
-		doc.submit()
-		_mark_medication_orders_completed(medication_orders)
+		savepoint = "hospital_dispense_so_dn"
+		frappe.db.savepoint(savepoint)
+		try:
+			doc.insert(ignore_permissions=True)
+			doc.submit()
+
+			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(doc.name, pos_profile)
+			_mark_medication_orders_completed(medication_orders)
+		except Exception:
+			frappe.db.rollback(save_point=savepoint)
+			raise
 
 		return {
 			"success": True,
 			"sales_order_name": doc.name,
+			"delivery_note_name": delivery_note_name,
 			"sales_order": {
 				"name": doc.name,
 				"customer": doc.customer,

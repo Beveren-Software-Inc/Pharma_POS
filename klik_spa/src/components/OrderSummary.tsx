@@ -1951,8 +1951,19 @@ export default function OrderSummary({
       const finalReferenceType = createdVisitRef?.doctype || sourceOrder?.custom_reference_type || "Patient Visit";
       const finalReferenceName = createdVisitRef?.name || sourceOrder?.custom_reference_name || "";
 
+      const patientToUse =
+        selectedPatient ||
+        (selectedCustomer
+          ? patients.find(
+              (p) =>
+                (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
+            )
+          : null);
+      const patientIdForSo = patientToUse?.name;
+
       const payload = {
         customer: { id: selectedCustomer.id },
+        ...(patientIdForSo ? { patient: patientIdForSo } : {}),
         items: cartItems.map((item) => {
           const lineKey = getLineKey(item);
           const lineDiscount = (itemDiscounts[lineKey] || {}) as { batchNumber?: string; serialNumber?: string };
