@@ -78,6 +78,7 @@ fixtures = [
      "Sales Invoice-custom_column_break_tbrxu",
      "Sales Invoice-custom_health_insurance",
      "Sales Invoice-custom_insurance",
+     "POS Profile-custom_is_hospital_pharmacy",
 				),
 			]
 		],

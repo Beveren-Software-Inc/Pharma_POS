@@ -151,6 +151,8 @@ export default function PaymentDialog({
 }: PaymentDialogProps) {
   const [selectedSalesTaxCharges, setSelectedSalesTaxCharges] = useState("");
   const [paymentAmounts, setPaymentAmounts] = useState<PaymentAmount>({});
+  const [paymentInputValues, setPaymentInputValues] = useState<Record<string, string>>({});
+  const [editingPaymentMethodId, setEditingPaymentMethodId] = useState<string | null>(null);
   const [activeMethodId, setActiveMethodId] = useState<string | null>(null);
   // Track which payment method was last modified for round-off targeting
   const [, setLastModifiedMethodId] = useState<string | null>(null);
@@ -622,6 +624,7 @@ export default function PaymentDialog({
 
   useEffect(() => {
   if (!isOpen || modes.length === 0 || isCompanyDelivery) return;
+  if (editingPaymentMethodId) return;
  
   const defaultMode = modes.find((mode) => mode.default === 1);
   if (!defaultMode) return;
@@ -641,7 +644,7 @@ export default function PaymentDialog({
     setPaymentAmounts({ [defaultMode.mode_of_payment]: newAmount });
     setLastModifiedMethodId(defaultMode.mode_of_payment);
   }
-}, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery]);
+}, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery, editingPaymentMethodId]);
 
 
   // useEffect(() => {
@@ -656,6 +659,7 @@ export default function PaymentDialog({
   // }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery]);
 
   useEffect(() => {
+    if (editingPaymentMethodId) return;
 
     if (modes.length > 0 && Object.keys(paymentAmounts).length > 0) {
       const defaultMode = modes.find((mode) => mode.default === 1);
@@ -683,7 +687,7 @@ export default function PaymentDialog({
         }
       }
     }
-  }, [effectiveGrandTotal, modes, isB2C, isB2B, isCombined, paymentAmounts]);
+  }, [effectiveGrandTotal, modes, isB2C, isB2B, isCombined, paymentAmounts, editingPaymentMethodId]);
 
   // Auto-print when invoice is submitted and auto-print is enabled
   useEffect(() => {
@@ -771,6 +775,7 @@ export default function PaymentDialog({
     if (!isOpen || isCompanyDelivery) return;
     if (!selectedDeliveryPersonnel) return;
     if (modes.length === 0) return;
+    if (editingPaymentMethodId) return;
 
     const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
     if (!defaultMode) return;
@@ -783,6 +788,7 @@ export default function PaymentDialog({
     selectedDeliveryPersonnel,
     modes,
     effectiveGrandTotal,
+    editingPaymentMethodId,
   ]);
 
   // When a delivery personnel is selected (paid now), auto-fill payment with full amount
@@ -790,6 +796,7 @@ export default function PaymentDialog({
   useEffect(() => {
     if (!selectedDeliveryPersonnel || isCompanyDelivery) return;
     if (!isOpen || modes.length === 0) return;
+    if (editingPaymentMethodId) return;
 
     const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
     if (hasAnyPayment) return;
@@ -806,7 +813,18 @@ export default function PaymentDialog({
     modes,
     paymentAmounts,
     effectiveGrandTotal,
+    editingPaymentMethodId,
   ]);
+
+  // Keep editable string inputs synced with numeric payment state when not actively typing.
+  useEffect(() => {
+    if (editingPaymentMethodId) return;
+    const nextValues: Record<string, string> = {};
+    Object.entries(paymentAmounts).forEach(([methodId, amount]) => {
+      nextValues[methodId] = amount > 0 ? amount.toFixed(3) : "";
+    });
+    setPaymentInputValues(nextValues);
+  }, [paymentAmounts, editingPaymentMethodId]);
 
   if (!isOpen) return null;
   if (isLoading || posLoading) return <div className="p-6">Loading...</div>;
@@ -877,7 +895,9 @@ export default function PaymentDialog({
   const handlePaymentAmountChange = (methodId: string, amount: string) => {
     if (invoiceSubmitted || isProcessingPayment) return;
 
-    const numericAmount = roundCurrency(parseFloat(amount) || 0);
+    setPaymentInputValues((prev) => ({ ...prev, [methodId]: amount }));
+    const numericAmount =
+      amount.trim() === "" ? 0 : roundCurrency(parseFloat(amount) || 0);
 
     setLastModifiedMethodId(methodId); // Track which method was just modified
     setPaymentAmounts((prev) => {
@@ -888,6 +908,22 @@ export default function PaymentDialog({
 
       return newAmounts;
     });
+  };
+
+  const getPaymentInputValue = (methodId: string, amount: number) => {
+    if (editingPaymentMethodId === methodId) {
+      return paymentInputValues[methodId] ?? (amount > 0 ? amount.toFixed(3) : "");
+    }
+    return amount > 0 ? amount.toFixed(3) : "";
+  };
+
+  const handlePaymentInputBlur = (methodId: string) => {
+    setEditingPaymentMethodId((prev) => (prev === methodId ? null : prev));
+    const amount = paymentAmounts[methodId] || 0;
+    setPaymentInputValues((prev) => ({
+      ...prev,
+      [methodId]: amount > 0 ? amount.toFixed(3) : "",
+    }));
   };
 
   // Auto-fill payment method with grand total and clear others
@@ -1111,19 +1147,23 @@ const handleAutoFillPayment = (methodId: string) => {
       toast.error("Kindly select a customer");
       return;
     }
+    // Allow invoice completion with partial/zero payment only when
+    // delivery personnel is selected OR insurance is selected.
+    const allowIncompletePayment = !!selectedDeliveryPersonnel || !!selectedHealthInsurance;
+
     // For B2B, we don't need payment validation
-    // For B2C, validate payment completion
+    // For B2C, validate payment completion unless exception applies.
     if (isB2C) {
       const activePaymentMethods = Object.entries(paymentAmounts)
         .filter(([, amount]) => amount > 0)
         .map(([method, amount]) => ({ method, amount }));
 
-      if (activePaymentMethods.length === 0) {
+      if (activePaymentMethods.length === 0 && !allowIncompletePayment) {
         toast.error("Please enter payment amounts");
         return;
       }
 
-      if (outstandingAmount > 0) {
+      if (outstandingAmount > 0 && !allowIncompletePayment) {
         toast.error("Please complete the payment before proceeding");
         return;
       }
@@ -1793,14 +1833,16 @@ const handleAutoFillPayment = (methodId: string) => {
                             </label>
                             <input
                               type="number"
-                              value={method.amount.toFixed(3) || "0.000"}
+                              value={getPaymentInputValue(method.id, method.amount)}
                               onChange={(e) =>
                                 handlePaymentAmountChange(
                                   method.id,
                                   e.target.value
                                 )
                               }
-                              placeholder="0.00"
+                              onFocus={() => setEditingPaymentMethodId(method.id)}
+                              onBlur={() => handlePaymentInputBlur(method.id)}
+                              placeholder="0.000"
                               disabled={invoiceSubmitted || isProcessingPayment}
                               className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
                                 invoiceSubmitted || isProcessingPayment
@@ -2573,16 +2615,10 @@ const handleAutoFillPayment = (methodId: string) => {
                           <input
                             type="number"
                             step="0.01"
-                              value={method.amount.toFixed(3)}
+                            value={getPaymentInputValue(method.id, method.amount)}
                             onChange={(e) => {
                               setActiveMethodId(method.id);
-                              const inputValue = e.target.value;
-                              const numValue =
-                                inputValue === "" ? 0 : parseFloat(inputValue);
-                              handleManualAmountChange(
-                                method.id,
-                                isNaN(numValue) ? "0" : numValue.toString()
-                              );
+                              handlePaymentAmountChange(method.id, e.target.value);
                             }}
                             onBlur={(e) => {
                               setActiveMethodId(method.id);
@@ -2591,9 +2627,11 @@ const handleAutoFillPayment = (methodId: string) => {
                                 const formatted = parseFloat(
                                   numValue.toFixed(3)
                                 );
-                                handleManualAmountChange(method.id, formatted.toString());
+                                handlePaymentAmountChange(method.id, formatted.toString());
                               }
+                              handlePaymentInputBlur(method.id);
                             }}
+                            onFocus={() => setEditingPaymentMethodId(method.id)}
                             placeholder="0.00"
                             disabled={invoiceSubmitted || isProcessingPayment}
                             className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm ${
