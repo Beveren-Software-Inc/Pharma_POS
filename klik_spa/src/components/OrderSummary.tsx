@@ -898,6 +898,7 @@ export default function OrderSummary({
   const [selectedHistoryItems, setSelectedHistoryItems] = useState<Set<string>>(new Set());
   const [isCreatingVisit, setIsCreatingVisit] = useState(false);
   const [createdVisitRef, setCreatedVisitRef] = useState<{ doctype: string; name: string } | null>(null);
+  const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
   const [isDispensing, setIsDispensing] = useState(false);
   const [lastDispensedSalesOrder, setLastDispensedSalesOrder] = useState<string | null>(null);
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
@@ -1761,6 +1762,7 @@ export default function OrderSummary({
       const result = await createPatientVisit(patientId);
       if (result?.name) {
         setCreatedVisitRef({ doctype: result.doctype, name: result.name });
+        setPatientVisitCreatedSignal((s) => s + 1);
         toast.success(`Created ${result.doctype}: ${result.name}`);
       } else {
         toast.error("Failed to create patient visit.");
@@ -3564,6 +3566,8 @@ const handleSetSerial = (event: CustomEvent) => {
         patientName={selectedPatient?.patient_name || selectedPatient?.name}
         patientId={selectedPatient?.name}
         isHospitalMode={isHospitalPharmacy}
+        lastCreatedVisit={createdVisitRef}
+        patientVisitCreatedSignal={patientVisitCreatedSignal}
       />
     </div>
   );

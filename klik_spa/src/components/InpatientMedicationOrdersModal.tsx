@@ -2,7 +2,7 @@
 
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus } from "lucide-react";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle } from "lucide-react";
 import type { InpatientMedicationOrder } from "../services/patientService";
 
 interface InpatientMedicationOrdersModalProps {
@@ -21,6 +21,10 @@ interface InpatientMedicationOrdersModalProps {
   patientName?: string;
   patientId?: string;
   isHospitalMode?: boolean;
+  /** Shown on Patient Visit tab after a successful create (persists while modal can reopen). */
+  lastCreatedVisit?: { doctype: string; name: string } | null;
+  /** Incremented on each successful visit create — switches modal to Patient Visit tab. */
+  patientVisitCreatedSignal?: number;
 }
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -161,6 +165,8 @@ export default function InpatientMedicationOrdersModal({
   patientName,
   patientId,
   isHospitalMode = false,
+  lastCreatedVisit = null,
+  patientVisitCreatedSignal = 0,
 }: InpatientMedicationOrdersModalProps) {
   const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit">("pending");
   const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
@@ -176,6 +182,23 @@ export default function InpatientMedicationOrdersModal({
       setPrintMenuPosition(null);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (isOpen && isHospitalMode && patientVisitCreatedSignal > 0) {
+      setActiveTab("visit");
+    }
+  }, [isOpen, isHospitalMode, patientVisitCreatedSignal]);
+
+  const openDocPrint = (doctype: string, name: string) => {
+    const params = new URLSearchParams();
+    params.set("doctype", doctype);
+    params.set("name", name);
+    params.set("format", "Standard");
+    params.set("trigger_print", "1");
+    params.set("no_letterhead", "0");
+    const base = typeof window !== "undefined" ? window.location.origin : "";
+    window.open(`${base}/printview?${params.toString()}`, "_blank", "noopener,noreferrer");
+  };
 
   useLayoutEffect(() => {
     if (!openPrintMenuFor || !printButtonRef.current) return;
@@ -452,7 +475,41 @@ export default function InpatientMedicationOrdersModal({
 
           {/* ── VISIT ── */}
           {isHospitalMode && activeTab === "visit" && (
-            <div className="max-w-md mx-auto py-6">
+            <div className="max-w-lg mx-auto py-6 space-y-4">
+              {lastCreatedVisit?.name && (
+                <div className="rounded-2xl border-2 border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/80 dark:bg-emerald-900/20 overflow-hidden">
+                  <div className="px-5 py-4 flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center flex-shrink-0">
+                      <CheckCircle size={22} className="text-white" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold text-emerald-900 dark:text-emerald-100">Patient visit created</p>
+                      <p className="text-xs text-emerald-800/80 dark:text-emerald-200/80 mt-1">
+                        This document is linked when you press <span className="font-semibold">Dispense</span> on the cart.
+                      </p>
+                      <div className="mt-3 space-y-1.5 text-sm">
+                        <div className="flex flex-wrap gap-x-2 gap-y-1">
+                          <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700/70 dark:text-emerald-300/70">Type</span>
+                          <span className="font-mono text-emerald-900 dark:text-emerald-100">{lastCreatedVisit.doctype}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-2 gap-y-1 items-baseline">
+                          <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700/70 dark:text-emerald-300/70">Name</span>
+                          <span className="font-mono font-semibold text-emerald-950 dark:text-emerald-50 break-all">{lastCreatedVisit.name}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openDocPrint(lastCreatedVisit.doctype, lastCreatedVisit.name)}
+                        className="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-bold text-orange-600 bg-white dark:bg-gray-900 border-2 border-orange-600 rounded-xl hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
+                      >
+                        <Printer size={16} />
+                        Print visit
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div className="px-6 py-5 bg-beveren-50 dark:bg-beveren-900/20 border-b border-beveren-100 dark:border-beveren-800/30">
                   <div className="flex items-center gap-3">
@@ -460,21 +517,19 @@ export default function InpatientMedicationOrdersModal({
                       <UserPlus size={17} className="text-white" />
                     </div>
                     <div>
-                      <h3 className="font-bold text-gray-900 dark:text-white text-base">Create Patient Visit</h3>
+                      <h3 className="font-bold text-gray-900 dark:text-white text-base">
+                        {lastCreatedVisit?.name ? "Create another visit" : "Create Patient Visit"}
+                      </h3>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">New encounter from pharmacy</p>
                     </div>
                   </div>
                 </div>
                 <div className="px-6 py-5 space-y-4">
-                  <div className="space-y-0">
-                    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 dark:border-gray-800">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Patient</span>
-                      <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{patientName || "—"}</span>
-                    </div>
-                    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 dark:border-gray-800">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Patient ID</span>
-                      <span className="text-sm font-mono text-gray-600 dark:text-gray-400">{patientId || "—"}</span>
-                    </div>
+                  <div className="text-sm text-gray-600 dark:text-gray-300">
+                    Patient: <span className="font-semibold text-gray-900 dark:text-white">{patientName || "—"}</span>
+                    {patientId ? (
+                      <span className="text-gray-500 dark:text-gray-400"> · ID: <span className="font-mono">{patientId}</span></span>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -487,7 +542,7 @@ export default function InpatientMedicationOrdersModal({
                         <span className="w-4 h-4 border-2 border-orange-600/30 border-t-orange-600 rounded-full animate-spin" />
                         Creating…
                       </span>
-                    ) : "Create Patient Visit"}
+                    ) : lastCreatedVisit?.name ? "Create another Patient Visit" : "Create Patient Visit"}
                   </button>
                 </div>
               </div>
@@ -504,6 +559,8 @@ export default function InpatientMedicationOrdersModal({
               ? `${selectedOrders.size} of ${pendingOrders.length} pending selected`
               : activeTab === "history"
               ? `${selectedHistoryItems.size} item(s) selected`
+              : lastCreatedVisit?.name
+              ? "Visit created — used when you dispense"
               : "Create a new encounter above"}
           </div>
           <div className="flex items-center gap-2">
