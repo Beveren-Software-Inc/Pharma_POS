@@ -42,6 +42,15 @@ def _normalize_medication_orders(data):
 	return [o for o in orders if isinstance(o, str) and o.strip()]
 
 
+def _normalize_batch_nos(batch_nos):
+	if isinstance(batch_nos, str):
+		batch_nos = [b.strip() for b in batch_nos.split(",") if b and b.strip()]
+	elif not isinstance(batch_nos, list):
+		batch_nos = [batch_nos]
+
+	return [b for b in batch_nos if isinstance(b, str) and b.strip()]
+
+
 def _mark_medication_orders_completed(order_names):
 	if not order_names:
 		return
@@ -110,6 +119,48 @@ def _resolve_patient_for_hospital_order(data, medication_orders):
 				return p
 
 	return None
+
+
+@frappe.whitelist()
+def get_batch_label_details(batch_nos):
+	try:
+		normalized_batch_nos = _normalize_batch_nos(batch_nos)
+		if not normalized_batch_nos:
+			return {}
+
+		batches = frappe.get_all(
+			"Batch",
+			filters={"name": ["in", normalized_batch_nos]},
+			fields=["name", "batch_id", "expiry_date"],
+		)
+
+		if len(batches) < len(normalized_batch_nos):
+			existing_names = {b.get("name") for b in batches}
+			missing = [b for b in normalized_batch_nos if b not in existing_names]
+			if missing:
+				batches.extend(
+					frappe.get_all(
+						"Batch",
+						filters={"batch_id": ["in", missing]},
+						fields=["name", "batch_id", "expiry_date"],
+					)
+				)
+
+		result = {}
+		for batch in batches:
+			entry = {
+				"batch_no": batch.get("batch_id") or batch.get("name"),
+				"expiry_date": str(batch.get("expiry_date")) if batch.get("expiry_date") else None,
+			}
+			if batch.get("name"):
+				result[batch.get("name")] = entry
+			if batch.get("batch_id"):
+				result[batch.get("batch_id")] = entry
+
+		return result
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Get batch label details error")
+		return {}
 
 
 def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_profile):

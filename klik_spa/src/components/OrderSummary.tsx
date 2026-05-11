@@ -36,7 +36,7 @@ import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../servi
 import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, createPatientVisit, type Patient, type InpatientMedicationOrder } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
-import { createHospitalSalesOrder } from "../services/salesOrder";
+import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
 
 
 interface OrderSummaryProps {
@@ -49,6 +49,43 @@ interface OrderSummaryProps {
   onRemoveCoupon: (couponCode: string) => void;
   isMobile?: boolean;
 }
+
+interface DispensedLabelItem {
+  itemCode: string;
+  itemName: string;
+  dosage: string;
+  frequency: string;
+  batchNo: string;
+  expiryDate: string;
+}
+
+const getCartSignature = (items: CartItem[]) =>
+  items
+    .map((item) => {
+      const line = item as CartItem & { cartLineId?: string; batch_no?: string; serial_no?: string; medicationOrder?: string; medicationOrders?: string[] };
+      return [
+        line.cartLineId || item.id,
+        item.id,
+        item.quantity,
+        line.batch_no || "",
+        line.serial_no || "",
+        line.medicationOrder || "",
+        (line.medicationOrders || []).join("|"),
+      ].join("::");
+    })
+    .sort()
+    .join("||");
+
+const MEDICATION_LABEL_CSS = `
+  body { font-family: Arial, sans-serif; margin: 0; padding: 0; box-sizing: border-box; }
+  @page { size: 2.299in 1.5in; margin: 0; }
+  .label-page { width: 2.299in; height: 1.5in; padding: 5px; box-sizing: border-box; page-break-after: always; }
+  .label-page:last-child { page-break-after: auto; }
+  .medication-label { width: 100%; height: 100%; border: 1px solid #000; padding: 5px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
+  .title { font-size: 8px; font-weight: 700; text-align: center; margin-bottom: 3px; }
+  .item { font-size: 8px; font-weight: 700; text-align: center; margin-bottom: 4px; }
+  .detail-row { font-size: 7px; line-height: 1.25; margin-bottom: 1px; }
+`;
 
 // Component to handle quantity input with local state
 interface QuantityInputProps {
@@ -113,8 +150,8 @@ const QuantityInput = ({ item, onUpdateQuantity, isMobile }: QuantityInputProps)
 // Component to handle dosage input with local state (allows empty + decimals)
 interface DosageInputProps {
   itemId: string;
-  value: number | null | undefined;
-  onChange: (itemId: string, value: number | null) => void;
+  value: string | number | null | undefined;
+  onChange: (itemId: string, value: string) => void;
   isMobile?: boolean;
 }
 
@@ -132,34 +169,18 @@ const DosageInput = ({ itemId, value, onChange, isMobile }: DosageInputProps) =>
   const handleBlur = () => {
     setIsEditing(false);
     const trimmed = inputValue.trim();
-    if (trimmed === "") {
-      onChange(itemId, null);
-      setInputValue("");
-      return;
-    }
-
-    const numValue = Number(trimmed);
-    if (Number.isNaN(numValue) || numValue < 0) {
-      // Invalid input - reset to last known good value
-      setInputValue(value === null || value === undefined ? "" : String(value));
-      return;
-    }
-
-    // Normalize to remove leading zeros etc.
-    onChange(itemId, numValue);
-    setInputValue(String(numValue));
+    onChange(itemId, trimmed);
+    setInputValue(trimmed);
   };
 
   return (
     <input
-      type="number"
-      step="0.01"
-      min="0"
+      type="text"
       value={inputValue}
       onChange={(e) => setInputValue(e.target.value)}
       onFocus={() => setIsEditing(true)}
       onBlur={handleBlur}
-      placeholder="e.g. 9.8"
+      placeholder="e.g. 1 tablet"
       className={`w-full ${
         isMobile ? "text-sm" : "text-sm"
       } px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
@@ -901,6 +922,8 @@ export default function OrderSummary({
   const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
   const [isDispensing, setIsDispensing] = useState(false);
   const [lastDispensedSalesOrder, setLastDispensedSalesOrder] = useState<string | null>(null);
+  const [lastDispensedLabelItems, setLastDispensedLabelItems] = useState<DispensedLabelItem[]>([]);
+  const [lastDispensedCartSignature, setLastDispensedCartSignature] = useState<string | null>(null);
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
   const { customers, isLoading, refetch: refetchCustomers } = useCustomers(customerSearchQuery);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1055,7 +1078,7 @@ export default function OrderSummary({
         serialNumber: string;
         availableQuantity: number;
         prescriptionDosage?: string; // From Prescription Frequency doctype (dropdown)
-        dosage?: number | null; // Actual dosage amount/quantity (float input)
+        dosage?: string; // Free text dosage copied from patient medication order
         medicationOrder?: string; // Patient Medication Order (when items added from order)
       }
     >
@@ -1373,7 +1396,7 @@ export default function OrderSummary({
             uomToUse
           );
           
-          const prescriptionDosageValue = itemToAdd.patient_frequency || itemToAdd.dosage;
+          const prescriptionDosageValue = itemToAdd.patient_frequency;
           
           const currentQty = qtyByItem.get(product.id) ?? 0;
           const willExist = currentQty > 0;
@@ -1387,8 +1410,7 @@ export default function OrderSummary({
               updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
             }
             if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-              const dosageVal = parseFloat(String(itemToAdd.dosage));
-              updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
+              updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
             }
             if (itemToAdd.medication_order) {
               const s = medsByItem.get(product.id) ?? new Set<string>();
@@ -1434,9 +1456,8 @@ export default function OrderSummary({
               }, 100);
             }
             if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-              const dosageVal = parseFloat(String(itemToAdd.dosage));
               setTimeout(() => {
-                updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
+                updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
               }, 100);
             }
             if (itemToAdd.medication_order) {
@@ -1545,7 +1566,7 @@ export default function OrderSummary({
           itemToAdd.uom,
           uomToUse
         );
-        const prescriptionDosageValue = itemToAdd.patient_frequency || itemToAdd.dosage;
+        const prescriptionDosageValue = itemToAdd.patient_frequency;
 
         const currentQty = qtyByItem.get(product.id) ?? 0;
         const willExist = currentQty > 0;
@@ -1559,8 +1580,7 @@ export default function OrderSummary({
             updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
           }
           if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-            const dosageVal = parseFloat(String(itemToAdd.dosage));
-            updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
+            updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
           }
           if (itemToAdd.medication_order) {
             const s = medsByItem.get(product.id) ?? new Set<string>();
@@ -1605,9 +1625,8 @@ export default function OrderSummary({
             }, 100);
           }
           if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-            const dosageVal = parseFloat(String(itemToAdd.dosage));
             setTimeout(() => {
-              updateItemDiscount(product.id, "dosage", Number.isNaN(dosageVal) ? itemToAdd.dosage : dosageVal);
+              updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
             }, 100);
           }
           if (itemToAdd.medication_order) {
@@ -1718,6 +1737,12 @@ export default function OrderSummary({
           const newQty = currentQty + cartQuantity;
           await onUpdateQuantity(product.id, newQty);
           qtyByItem.set(product.id, newQty);
+          if (itemToAdd.patient_frequency) {
+            updateItemDiscount(product.id, "prescriptionDosage", itemToAdd.patient_frequency);
+          }
+          if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
+            updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
+          }
         } else {
           await addToCartWithQuantity(
             {
@@ -1734,6 +1759,16 @@ export default function OrderSummary({
             cartQuantity
           );
           qtyByItem.set(product.id, cartQuantity);
+          if (itemToAdd.patient_frequency) {
+            setTimeout(() => {
+              updateItemDiscount(product.id, "prescriptionDosage", itemToAdd.patient_frequency!);
+            }, 100);
+          }
+          if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
+            setTimeout(() => {
+              updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
+            }, 100);
+          }
         }
         addedCount++;
       }
@@ -1908,6 +1943,8 @@ export default function OrderSummary({
   const handleStartNewOrder = async () => {
     handleClearCart();
     setLastDispensedSalesOrder(null);
+    setLastDispensedLabelItems([]);
+    setLastDispensedCartSignature(null);
     setCreatedVisitRef(null);
     try {
       await refreshStockOnly();
@@ -1932,11 +1969,75 @@ export default function OrderSummary({
     window.open(`${base}/printview?${params.toString()}`, "_blank", "noopener,noreferrer");
   };
 
+  const printMedicationLabels = (labels: DispensedLabelItem[]) => {
+    if (!labels.length) {
+      toast.error("No dispensed medicines found for label printing.");
+      return;
+    }
+
+const pages = labels.map((label) => `
+  <div class="label-page">
+    <div class="medication-label" style="
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    ">
+      <div class="title" style="margin-bottom: 20px;">Medication Label</div>
+      <div class="item" style="margin-bottom: 15px;">${label.itemCode} - ${label.itemName}</div>
+      <div class="detail-row" style="margin-bottom: 8px;"><strong>Dosage:</strong> ${label.dosage}</div>
+      <div class="detail-row" style="margin-bottom: 8px;"><strong>Frequency:</strong> ${label.frequency}</div>
+      <div class="detail-row" style="margin-bottom: 8px;"><strong>Batch No:</strong> ${label.batchNo}</div>
+      <div class="detail-row"><strong>Expiry Date:</strong> ${label.expiryDate}</div>
+    </div>
+  </div>
+`);
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      toast.error("Unable to open print window. Please allow popups and try again.");
+      return;
+    }
+
+    printWindow.document.write(
+      "<html><head><style>" + MEDICATION_LABEL_CSS + "</style></head><body>" +
+      pages.join("") +
+      '<script>window.onload=function(){window.print();window.onafterprint=function(){window.close();}};</script></body></html>'
+    );
+    printWindow.document.close();
+  };
+
+  const showPostDispenseActions =
+    isHospitalPharmacy &&
+    !!lastDispensedSalesOrder &&
+    !!lastDispensedCartSignature &&
+    lastDispensedCartSignature === getCartSignature(cartItems);
+
   const handleDispense = async () => {
     if (!validateCustomer()) return;
     if (!selectedCustomer) return;
     if (!isHospitalPharmacy) {
       setShowPaymentDialog(true);
+      return;
+    }
+    const missingMedicationDetails = cartItems
+      .map((item) => {
+        const lineKey = getLineKey(item);
+        const lineDiscount = ((itemDiscounts[item.id] || itemDiscounts[lineKey]) || {}) as { dosage?: string; prescriptionDosage?: string };
+        const dosageRaw = lineDiscount.dosage;
+        const frequencyRaw = lineDiscount.prescriptionDosage;
+        const hasDosage = dosageRaw !== null && dosageRaw !== undefined && String(dosageRaw).trim() !== "";
+        const hasFrequency = typeof frequencyRaw === "string" && frequencyRaw.trim() !== "";
+        if (hasDosage && hasFrequency) return null;
+        return item.name || item.item_code || item.id;
+      })
+      .filter(Boolean) as string[];
+
+    if (missingMedicationDetails.length > 0) {
+      const uniqueItems = Array.from(new Set(missingMedicationDetails));
+      toast.error(
+        `Missing dosage or prescription frequency for: ${uniqueItems.join(", ")}. Kindly update Patient Medication Order items before dispensing.`
+      );
       return;
     }
     try {
@@ -1992,7 +2093,58 @@ export default function OrderSummary({
         toast.error("Dispense failed. Sales Order was not created.");
         return;
       }
+      const dispensedCartSignature = getCartSignature(cartItems);
+
+      const labelsFromCart: DispensedLabelItem[] = cartItems.map((item) => {
+        const lineKey = getLineKey(item);
+        const lineDiscount = ((itemDiscounts[item.id] || itemDiscounts[lineKey]) || {}) as {
+          dosage?: string;
+          prescriptionDosage?: string;
+          batchNumber?: string;
+        };
+        const dosage = lineDiscount.dosage;
+        const frequency = lineDiscount.prescriptionDosage;
+        const batchNo =
+          lineDiscount.batchNumber ||
+          (item as CartItem & { batch_no?: string }).batch_no ||
+          "N/A";
+
+        return {
+          itemCode: item.item_code || item.id,
+          itemName: item.name,
+          dosage: dosage === null || dosage === undefined || String(dosage).trim() === "" ? "N/A" : String(dosage),
+          frequency: typeof frequency === "string" && frequency.trim() ? frequency : "N/A",
+          batchNo,
+          expiryDate: "N/A",
+        };
+      });
+
+      const batchNumbers = Array.from(
+        new Set(labelsFromCart.map((label) => label.batchNo).filter((batchNo) => batchNo && batchNo !== "N/A"))
+      );
+
+      if (batchNumbers.length > 0) {
+        try {
+          const batchDetails = await getBatchLabelDetails(batchNumbers);
+          const labelsWithExpiry = labelsFromCart.map((label) => {
+            const matchedBatch = batchDetails[label.batchNo];
+            return {
+              ...label,
+              expiryDate: matchedBatch?.expiry_date || "N/A",
+              batchNo: matchedBatch?.batch_no || label.batchNo,
+            };
+          });
+          setLastDispensedLabelItems(labelsWithExpiry);
+        } catch (batchError) {
+          console.error("Failed to fetch batch expiry details for labels:", batchError);
+          setLastDispensedLabelItems(labelsFromCart);
+        }
+      } else {
+        setLastDispensedLabelItems(labelsFromCart);
+      }
+
       setLastDispensedSalesOrder(soName);
+      setLastDispensedCartSignature(dispensedCartSignature);
       toast.success(`Dispensed successfully. Sales Order: ${soName}`);
     } catch (error) {
       toast.error(extractErrorFromException(error, "Failed to dispense items"));
@@ -2878,7 +3030,8 @@ const handleSetSerial = (event: CustomEvent) => {
                   serialNumber: "",
                   availableQuantity: 150,
                   prescriptionDosage: "",
-                  dosage: 0,
+                  dosage: "",
+                  ...(itemDiscounts[item.id] || {}),
                   ...(itemDiscounts[lineKey] || {}),
                   // Persisted batch survives refresh
                   ...(cartItemBatch !== undefined && cartItemBatch !== "" ? { batchNumber: cartItemBatch } : {}),
@@ -3338,12 +3491,14 @@ const handleSetSerial = (event: CustomEvent) => {
                 Hold
               </button>
             )}
-            <button
-              onClick={handleClearCart}
-              className="px-3 py-2 border border-red-500 text-red-600 dark:text-red-400 rounded-lg font-medium hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm"
-            >
-              Clear Cart
-            </button>
+            {!showPostDispenseActions && (
+              <button
+                onClick={handleClearCart}
+                className="px-3 py-2 border border-red-500 text-red-600 dark:text-red-400 rounded-lg font-medium hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm"
+              >
+                Clear Cart
+              </button>
+            )}
             {isAllowAdditionalAmounts && (
               <button
                 onClick={() => setShowAdditionalAmountModal(true)}
@@ -3359,32 +3514,34 @@ const handleSetSerial = (event: CustomEvent) => {
 
           {/* Pay Button */}
           <button
-            onClick={handleDispense}
+            onClick={showPostDispenseActions ? handleStartNewOrder : handleDispense}
             disabled={isDispensing}
             className={`w-full bg-beveren-600 text-white rounded-xl font-semibold hover:bg-beveren-700 transition-colors ${
               isMobile ? "py-3 text-base" : "py-2 text-sm"
             } disabled:opacity-60`}
           >
-            {isHospitalPharmacy ? (isDispensing ? "Dispensing..." : "Dispense ") : "Checkout "}
-            {currency_symbol}
-            {total.toFixed(3)}
+            {isHospitalPharmacy
+              ? (showPostDispenseActions
+                ? "New Order"
+                : `${isDispensing ? "Dispensing..." : "Dispense "} ${currency_symbol}${total.toFixed(3)}`)
+              : `Checkout ${currency_symbol}${total.toFixed(3)}`}
           </button>
-          {isHospitalPharmacy && lastDispensedSalesOrder && (
-            <div className="grid grid-cols-2 gap-2">
+          {showPostDispenseActions && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => printSalesOrder(lastDispensedSalesOrder)}
+                onClick={() => printMedicationLabels(lastDispensedLabelItems)}
                 className="px-3 py-2 border border-beveren-600 text-beveren-600 rounded-lg font-medium hover:bg-beveren-50 transition-colors text-sm flex items-center justify-center gap-2"
               >
                 <Printer size={15} />
-                Print Report
+                Print Labels
               </button>
               <button
                 type="button"
-                onClick={handleStartNewOrder}
+                onClick={() => printSalesOrder(lastDispensedSalesOrder)}
                 className="px-3 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors text-sm"
               >
-                New Order
+                Print Report
               </button>
             </div>
           )}
