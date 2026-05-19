@@ -4,8 +4,15 @@ from erpnext.stock.doctype.batch.batch import get_batch_qty
 from erpnext.stock.utils import get_stock_balance
 from frappe import _
 
+from frappe.utils import flt
+
 from klik_pos.api.sales_invoice import get_current_pos_opening_entry
 from klik_pos.klik_pos.utils import get_current_pos_profile
+
+
+def use_dispensing_lot_mode(pos_doc=None):
+	pos_doc = pos_doc or get_current_pos_profile()
+	return bool(int(getattr(pos_doc, "custom_dispense_lot", 0) or 0))
 
 
 def get_price_list_with_customer_priority(customer=None):
@@ -410,9 +417,31 @@ def get_item_by_identifier(code: str):
 				matched_type = "batch"
 				matched_value = code
 
-		# 3) Try Serial No
+		dispensing_lot_name = None
+		dispensing_batch_no = None
+
+		# 3) Try Dispensing Lot (when POS profile uses dispense-lot mode)
+		if not item_row and use_dispensing_lot_mode(pos_doc):
+			lot_row = frappe.db.sql(
+				"""
+				SELECT item, name, serial_no, batch_no
+				FROM `tabDispensing Lot`
+				WHERE (serial_no = %s OR name = %s)
+					AND status IN ('Active', 'Partially Sold')
+					AND remaining_qty > 0
+				""",
+				(code, code),
+				as_dict=True,
+			)
+			if lot_row:
+				item_row = [{"item_code": lot_row[0].item}]
+				matched_type = "dispensing_lot"
+				matched_value = lot_row[0].serial_no or code
+				dispensing_lot_name = lot_row[0].name
+				dispensing_batch_no = lot_row[0].batch_no
+
+		# 4) Try Serial No (legacy)
 		if not item_row:
-			# In ERPNext, the Serial No doctype has field name=serial_no; item_code links to Item
 			item_row = frappe.db.sql(
 				"""
 				SELECT s.item_code as item_code
@@ -437,7 +466,7 @@ def get_item_by_identifier(code: str):
 		balance = fetch_item_balance(item_code, warehouse)
 		price_info = fetch_item_price(item_code, price_list)
 		item_tax_template = _fetch_item_tax_templates([item_code], frappe.defaults.get_user_default("Company")).get(item_code)
-		return {
+		response = {
 			"item_code": item_code,
 			"item_name": item_doc.item_name or item_code,
 			"description": item_doc.description or "",
@@ -452,10 +481,80 @@ def get_item_by_identifier(code: str):
 			"matched_type": matched_type,
 			"matched_value": matched_value,
 			"item_tax_template": item_tax_template,
+			"stock_uom": item_doc.stock_uom,
 		}
+		if dispensing_lot_name:
+			response["dispensing_lot"] = dispensing_lot_name
+		if dispensing_batch_no:
+			response["batch_no"] = dispensing_batch_no
+		if matched_type == "batch" and matched_value:
+			response["batch_no"] = matched_value
+		return response
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), f"Error fetching item by identifier: {code}")
 		frappe.throw(_("Error fetching item by identifier: {0}").format(str(e)))
+
+
+@frappe.whitelist(allow_guest=True)
+def get_dispensing_lots_for_item(item_code: str, batch_no=None):
+	"""Available dispensing lots for POS serial picker (replaces Serial No when configured)."""
+	if not item_code:
+		return []
+
+	try:
+		pos_doc = get_current_pos_profile()
+		warehouse = getattr(pos_doc, "warehouse", None)
+
+		filters = {
+			"item": item_code,
+			"status": ["in", ["Active", "Partially Sold"]],
+			"remaining_qty": [">", 0],
+		}
+		if warehouse:
+			filters["warehouse"] = warehouse
+		if batch_no:
+			filters["batch_no"] = batch_no
+
+		lots = frappe.get_all(
+			"Dispensing Lot",
+			filters=filters,
+			fields=[
+				"name",
+				"serial_no",
+				"remaining_qty",
+				"initial_qty",
+				"uom",
+				"stock_uom",
+				"batch_no",
+			],
+			order_by="modified desc",
+			limit=500,
+		)
+
+		result = []
+		for lot in lots:
+			remaining = flt(lot.remaining_qty)
+			initial = flt(lot.initial_qty)
+			serial = (lot.serial_no or lot.name or "").strip()
+			uom = lot.uom or ""
+			pack_sale_allowed = remaining >= initial and initial > 0
+			result.append(
+				{
+					"name": lot.name,
+					"serial_no": serial,
+					"remaining_qty": remaining,
+					"initial_qty": initial,
+					"uom": uom,
+					"stock_uom": lot.stock_uom,
+					"batch_no": lot.batch_no,
+					"pack_sale_allowed": pack_sale_allowed,
+					"label": f"{remaining:g} {uom} | {serial}" if uom else serial,
+				}
+			)
+		return result
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"Get Dispensing Lots Error for {item_code}")
+		return []
 
 
 def _get_pos_context():

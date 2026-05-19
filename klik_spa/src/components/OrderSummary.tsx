@@ -25,6 +25,12 @@ import { toast } from "react-toastify";
 import { extractErrorFromException } from "../utils/errorExtraction";
 import { getBatches } from "../utils/batch";
 import { getSerials } from "../utils/serial";
+import {
+  getDispensingLots,
+  formatDispensingLotLabel,
+  buildSerialLotMap,
+  type DispensingLotOption,
+} from "../utils/dispensingLot";
 import { usePOSDetails } from "../hooks/usePOSProfile";
 import { useItemTaxTemplates } from "../hooks/useItemTaxTemplates";
 import { useItemTaxTemplateRates } from "../hooks/useItemTaxTemplateRates";
@@ -597,17 +603,38 @@ const BatchSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value
 //   );
 // };
 
-// Compact multi-select searchable dropdown for Serial selection
+export type SerialSelectOption = string | { value: string; label: string };
+
+function normalizeSerialOptions(options: SerialSelectOption[]): { value: string; label: string }[] {
+  return options.map((o) =>
+    typeof o === "string" ? { value: o, label: o } : o
+  );
+}
+
+// Compact multi-select searchable dropdown for Serial / Dispensing Lot selection
 interface SerialSelectFieldProps {
   itemId: string;
   itemCode: string;
-  options: string[];
-  value: string; // comma-separated: "SN001,SN002,SN003"
+  options: SerialSelectOption[];
+  value: string; // comma-separated serial values
   onChange: (value: string) => void;
   isMobile?: boolean;
+  emptyLabel?: string;
 }
 
-const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value, onChange, isMobile }: SerialSelectFieldProps) => {
+const SerialSelectField = ({
+  itemId: _itemId,
+  itemCode: _itemCode,
+  options,
+  value,
+  onChange,
+  isMobile,
+  emptyLabel = "Select Serial(s)",
+}: SerialSelectFieldProps) => {
+  const normalizedOptions = normalizeSerialOptions(options);
+  const labelByValue = Object.fromEntries(
+    normalizedOptions.map((o) => [o.value, o.label])
+  );
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -635,8 +662,9 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
     value ? value.split(",").map(s => s.trim()).filter(Boolean) : []
   );
 
-  const filtered = options.filter(sn =>
-    sn.toLowerCase().includes(query.toLowerCase())
+  const filtered = normalizedOptions.filter((o) =>
+    o.label.toLowerCase().includes(query.toLowerCase()) ||
+    o.value.toLowerCase().includes(query.toLowerCase())
   );
 
   const toggleSerial = (sn: string) => {
@@ -647,6 +675,11 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
       next.add(sn);
     }
     onChange(Array.from(next).join(","));
+  };
+
+  const displayLabel = (sn: string) => {
+    const full = labelByValue[sn] || sn;
+    return full.length > 24 ? `${full.slice(0, 22)}...` : full;
   };
 
   const removeSerial = (sn: string, e: React.MouseEvent) => {
@@ -668,15 +701,16 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
         className={`w-full ${isMobile ? "text-xs" : "text-xs"} px-2 py-1 min-h-[30px] border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-left flex flex-wrap items-center gap-1`}
       >
         {count === 0 ? (
-          <span className="text-gray-400 dark:text-gray-500">Select Serial(s)</span>
+          <span className="text-gray-400 dark:text-gray-500">{emptyLabel}</span>
         ) : (
           <>
             {selectedArray.slice(0, 3).map(sn => (
               <span
                 key={sn}
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-beveren-100 dark:bg-beveren-900/30 text-beveren-700 dark:text-beveren-300 rounded text-xs font-medium"
+                title={labelByValue[sn] || sn}
               >
-                {sn.length > 8 ? `${sn.slice(0, 6)}...` : sn}
+                {displayLabel(sn)}
                 <span
                   role="button"
                   tabIndex={0}
@@ -736,20 +770,19 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
           {/* Serial list with checkboxes */}
           <div className="max-h-36 overflow-y-auto">
             {filtered.length > 0 ? (
-              filtered.map((sn) => {
-                const isSelected = selected.has(sn);
+              filtered.map((opt) => {
+                const isSelected = selected.has(opt.value);
                 return (
                   <button
-                    key={sn}
+                    key={opt.value}
                     type="button"
-                    onClick={() => toggleSerial(sn)}
+                    onClick={() => toggleSerial(opt.value)}
                     className={`w-full px-2 py-1.5 text-left text-xs flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-gray-700 ${
                       isSelected
                         ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-700 dark:text-beveren-300'
                         : 'text-gray-900 dark:text-white'
                     }`}
                   >
-                    {/* Checkbox */}
                     <span className={`flex-shrink-0 w-4 h-4 rounded border-2 flex items-center justify-center ${
                       isSelected
                         ? 'bg-beveren-600 border-beveren-600'
@@ -761,7 +794,7 @@ const SerialSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, valu
                         </svg>
                       )}
                     </span>
-                    {sn}
+                    <span className="truncate">{opt.label}</span>
                   </button>
                 );
               })
@@ -954,6 +987,11 @@ export default function OrderSummary({
     posDetails?.custom_allow_additional_amounts === true ||
     posDetails?.custom_allow_additional_amounts === "1";
 
+  const useDispenseLot =
+    posDetails?.custom_dispense_lot === 1 ||
+    posDetails?.custom_dispense_lot === true ||
+    posDetails?.custom_dispense_lot === "1";
+
   const { templates: itemTaxTemplates } = useItemTaxTemplates();
   const itemTaxTemplateNames = cartItems
     .map((item) => (item as { item_tax_template?: string }).item_tax_template)
@@ -1076,6 +1114,7 @@ export default function OrderSummary({
         discountAmount: number;
         batchNumber: string;
         serialNumber: string;
+        dispensingLot?: string;
         availableQuantity: number;
         prescriptionDosage?: string; // From Prescription Frequency doctype (dropdown)
         dosage?: string; // Free text dosage copied from patient medication order
@@ -1092,6 +1131,14 @@ export default function OrderSummary({
     Record<string, string[]>
   >({});
 
+  const [itemDispensingLots, setItemDispensingLots] = useState<
+    Record<string, DispensingLotOption[]>
+  >({});
+
+  const [serialLotMaps, setSerialLotMaps] = useState<
+    Record<string, Record<string, string>>
+  >({});
+
   // Pending pre-selections when item not yet in cart
   const [pendingPreselect, setPendingPreselect] = useState<
     Record<string, { batchId?: string; serialNo?: string }>
@@ -1101,12 +1148,64 @@ export default function OrderSummary({
 
   // Ref so batch/serial handlers always merge with latest discounts (avoids losing other lines when state is stale)
   const itemDiscountsRef = useRef(itemDiscounts);
+  const serialLotMapsRef = useRef(serialLotMaps);
   useEffect(() => {
     itemDiscountsRef.current = itemDiscounts;
   }, [itemDiscounts]);
+  useEffect(() => {
+    serialLotMapsRef.current = serialLotMaps;
+  }, [serialLotMaps]);
 
   // Per-line key for batch/serial/discount (same item can appear in multiple lines when allow duplicate)
   const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
+
+  const getSerialSelectOptions = useCallback(
+    (item: CartItem) => {
+      const itemCode = item.item_code || item.id;
+      const stockUom = item.stock_uom || item.base_uom;
+      const showRemaining =
+        !!useDispenseLot && !!item.uom && !!stockUom && item.uom !== stockUom;
+
+      if (useDispenseLot) {
+        const lots = itemDispensingLots[itemCode] || [];
+        return lots.map((lot) => ({
+          value: lot.serial_no,
+          label: formatDispensingLotLabel(lot, showRemaining),
+        }));
+      }
+      return (itemSerials[itemCode] || []).map((s) => ({ value: s, label: s }));
+    },
+    [useDispenseLot, itemDispensingLots, itemSerials]
+  );
+
+  const syncDispensingLotMetadata = useCallback(
+    (lineKey: string, itemCode: string, serialCsv: string) => {
+      if (!useDispenseLot) return;
+      const map = serialLotMaps[itemCode] || {};
+      const serials = serialCsv.split(",").map((s) => s.trim()).filter(Boolean);
+      const lotNames = serials.map((s) => map[s]).filter(Boolean);
+      const lotName = lotNames[0] || undefined;
+      updateItemMetadata(lineKey, {
+        dispensing_lot: lotName,
+      });
+      if (lotName) {
+        setItemDiscounts((prev) => ({
+          ...prev,
+          [lineKey]: {
+            ...(prev[lineKey] || {
+              discountPercentage: 0,
+              discountAmount: 0,
+              batchNumber: "",
+              serialNumber: "",
+              availableQuantity: 0,
+            }),
+            dispensingLot: lotName,
+          },
+        }));
+      }
+    },
+    [useDispenseLot, serialLotMaps, updateItemMetadata]
+  );
 
   // Helper function to calculate item price after discount
   const getDiscountedPrice = (item: CartItem) => {
@@ -2302,6 +2401,8 @@ const pages = labels.map((label) => `
     const fetchAndSetInfo = async () => {
       const newBatches = { ...itemBatches };
       const newSerials = { ...itemSerials } as Record<string, string[]>;
+      const newDispensingLots = { ...itemDispensingLots };
+      const newLotMaps = { ...serialLotMaps };
 
       for (const item of cartItems) {
         const key = item.item_code || item.id;
@@ -2314,7 +2415,18 @@ const pages = labels.map((label) => `
               console.error("Error fetching batches", err);
             }
           }
-          if (!newSerials[key]) {
+          const batchNo = (item as CartItem & { batch_no?: string }).batch_no;
+          if (useDispenseLot) {
+            if (!newDispensingLots[key]) {
+              try {
+                const lots = await getDispensingLots(key, batchNo);
+                newDispensingLots[key] = lots;
+                newLotMaps[key] = buildSerialLotMap(lots);
+              } catch (err) {
+                console.error("Error fetching dispensing lots", err);
+              }
+            }
+          } else if (!newSerials[key]) {
             try {
               const serials = await getSerials(key);
               if (Array.isArray(serials)) newSerials[key] = serials;
@@ -2329,12 +2441,14 @@ const pages = labels.map((label) => `
 
       setItemBatches(newBatches);
       setItemSerials(newSerials);
+      setItemDispensingLots(newDispensingLots);
+      setSerialLotMaps(newLotMaps);
     };
 
     if (cartItems.length) {
       fetchAndSetInfo();
     }
-  }, [cartItems]);
+  }, [cartItems, useDispenseLot]);
 
   // Listen for batch quantity updates from ProductProvider
   useEffect(() => {
@@ -2517,7 +2631,13 @@ const handleSetBatch = (event: CustomEvent) => {
 }
 
 const handleSetSerial = (event: CustomEvent) => {
-  const { itemCode, serialNo, forLastAdded, lineKey: detailLineKey } = event.detail as { itemCode: string; serialNo: string; forLastAdded?: boolean; lineKey?: string };
+  const { itemCode, serialNo, forLastAdded, lineKey: detailLineKey, dispensingLot } = event.detail as {
+    itemCode: string;
+    serialNo: string;
+    forLastAdded?: boolean;
+    lineKey?: string;
+    dispensingLot?: string;
+  };
   let lineKey: string | undefined;
   if (detailLineKey) {
     lineKey = detailLineKey;
@@ -2537,15 +2657,29 @@ const handleSetSerial = (event: CustomEvent) => {
       if (serialNo) existing.add(serialNo);
       return Array.from(existing).join(',');
     })();
+    const lotMap = serialLotMapsRef.current[itemCode] || {};
+    const lotName =
+      dispensingLot ||
+      (serialNo ? lotMap[serialNo] : undefined) ||
+      accumulated
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => lotMap[s])
+        .find(Boolean);
+
     setItemDiscounts({
       ...base,
       [lineKey]: {
         ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
         serialNumber: accumulated,
-      }
+        dispensingLot: lotName || undefined,
+      },
     });
-    // ✅ Persist full accumulated serial string
-    updateItemMetadata(lineKey, { serial_no: accumulated || undefined });
+    updateItemMetadata(lineKey, {
+      serial_no: accumulated || undefined,
+      dispensing_lot: lotName || undefined,
+    });
     setItemSerials(prev => {
       const existing = new Set(prev[itemCode] || []);
       if (!existing.has(serialNo)) {
@@ -2598,21 +2732,35 @@ const handleSetSerial = (event: CustomEvent) => {
           updateItemMetadata(lineKey, { batch_no: pending.batchId || undefined })
         }
         if (pending.serialNo) {
+          const accumulated = (() => {
+            const existing = new Set(
+              (base[lineKey]?.serialNumber || '').split(',').map(s => s.trim()).filter(Boolean)
+            );
+            if (pending.serialNo) existing.add(pending.serialNo);
+            return Array.from(existing).join(',');
+          })();
+          const lotMap = serialLotMapsRef.current[itemCode] || {};
+          const lotName =
+            (pending as { dispensingLot?: string }).dispensingLot ||
+            lotMap[pending.serialNo] ||
+            accumulated
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+              .map((s) => lotMap[s])
+              .find(Boolean);
           setItemDiscounts({
             ...base,
             [lineKey]: {
               ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
-              // serialNumber: pending.serialNo || '',
-              serialNumber: (() => {
-                  const existing = new Set(
-                    (base[lineKey]?.serialNumber || '').split(',').map(s => s.trim()).filter(Boolean)
-                  );
-                  if (pending.serialNo) existing.add(pending.serialNo);
-                  return Array.from(existing).join(',');
-                })(),
+              serialNumber: accumulated,
+              dispensingLot: lotName || undefined,
             }
           })
-          updateItemMetadata(lineKey, { serial_no: pending.serialNo || undefined })
+          updateItemMetadata(lineKey, {
+            serial_no: accumulated || undefined,
+            dispensing_lot: lotName || undefined,
+          })
           setItemSerials(prev => {
             const existing = new Set(prev[itemCode] || [])
             if (!existing.has(pending.serialNo!)) {
@@ -3315,16 +3463,18 @@ const handleSetSerial = (event: CustomEvent) => {
                           </div>
                           <div>
                             <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
-                              Serial No
+                              {useDispenseLot ? "Dispensing Lot" : "Serial No"}
                             </label>
                             <SerialSelectField
                               itemId={lineKey}
                               itemCode={item.item_code || item.id}
-                              options={itemSerials[item.item_code || item.id] || []}
+                              options={getSerialSelectOptions(item)}
                               value={itemDiscount.serialNumber || ""}
+                              emptyLabel={useDispenseLot ? "Select lot(s)" : "Select Serial(s)"}
                               onChange={(sn) => {
                                 updateItemDiscount(lineKey, "serialNumber", sn)
                                 updateItemMetadata(lineKey, { serial_no: sn || undefined })
+                                syncDispensingLotMetadata(lineKey, item.item_code || item.id, sn)
                               }}
                               isMobile={isMobile}
                             />
@@ -3636,6 +3786,13 @@ const handleSetSerial = (event: CustomEvent) => {
   ])).join(",");
 
   const lineDiscount = itemDiscounts[lineKey] || {};
+  const itemCode = item.item_code || item.id;
+  const lotMap = serialLotMaps[itemCode] || {};
+  const firstSerial = mergedSerial.split(",")[0]?.trim();
+  const resolvedDispensingLot =
+    (item as CartItem & { dispensing_lot?: string }).dispensing_lot ||
+    (lineDiscount as { dispensingLot?: string }).dispensingLot ||
+    (firstSerial ? lotMap[firstSerial] : undefined);
 
   return {
     ...item,
@@ -3645,11 +3802,13 @@ const handleSetSerial = (event: CustomEvent) => {
       ...lineDiscount,
       // ✅ override serialNumber with merged value
       serialNumber: mergedSerial,
+      dispensingLot: resolvedDispensingLot,
     },
     originalPrice: item.price,
     finalAmount: getDiscountedPrice(item) * item.quantity + itemAdditional,
     // ✅ also override serial_no on the item itself so backend gets full list
     serial_no: mergedSerial || undefined,
+    dispensing_lot: resolvedDispensingLot,
     // ✅ quantity must match number of serials for ERPNext validation
     quantity: mergedSerial
       ? Math.max(item.quantity, mergedSerial.split(",").filter(Boolean).length)

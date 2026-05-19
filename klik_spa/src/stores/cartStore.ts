@@ -30,8 +30,18 @@ function preserveBatchAndSerial(merged: CartItem[], currentCart: CartItem[]): Ca
     const current = lineId
       ? currentCart.find((c) => (c as { cartLineId?: string }).cartLineId === lineId)
       : currentCart.find((c) => c.id === item.id && !(c as { cartLineId?: string }).cartLineId);
-    if (current && ((current as { batch_no?: string }).batch_no != null || (current as { serial_no?: string }).serial_no != null)) {
-      return { ...item, batch_no: (current as { batch_no?: string }).batch_no, serial_no: (current as { serial_no?: string }).serial_no };
+    if (current && (
+      (current as { batch_no?: string }).batch_no != null ||
+      (current as { serial_no?: string }).serial_no != null ||
+      (current as { dispensing_lot?: string }).dispensing_lot != null
+    )) {
+      return {
+        ...item,
+        batch_no: (current as { batch_no?: string }).batch_no,
+        serial_no: (current as { serial_no?: string }).serial_no,
+        dispensing_lot: (current as { dispensing_lot?: string }).dispensing_lot,
+        stock_uom: (current as { stock_uom?: string }).stock_uom,
+      };
     }
     return item;
   });

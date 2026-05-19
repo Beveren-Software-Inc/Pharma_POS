@@ -38,6 +38,9 @@ export interface CartItem {
   /** Persisted batch/serial so they survive page refresh (stored on cart item). */
   batch_no?: string
   serial_no?: string
+  /** Dispensing Lot docname (when POS profile uses dispense-lot mode). */
+  dispensing_lot?: string
+  stock_uom?: string
 }
 
 export interface MenuItem {
@@ -56,6 +59,7 @@ export interface MenuItem {
   barcode?: string
   has_serial_no?: number | boolean
   has_batch_no?: number | boolean
+  stock_uom?: string
 }
 
 export interface Category {

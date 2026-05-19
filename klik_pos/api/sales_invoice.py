@@ -1110,6 +1110,7 @@ def build_sales_invoice_doc(
 	pos_profile = _get_active_pos_profile()
 	_set_pos_profile_fields(doc, pos_profile, customer, business_type)
 
+	items = _normalize_pos_items_for_dispensing(items, pos_profile)
 	_validate_and_autofetch_batch_and_serial(items, pos_profile)
 	# Set additional remark on invoice if field exists
 	if additional_remark and frappe.db.has_column("Sales Invoice", "custom_remark"):
@@ -1145,6 +1146,38 @@ def build_sales_invoice_doc(
 	return doc
 
 
+def _validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot_name):
+	"""Block full-pack POS sale when the lot was partially sold in dispensing UOM."""
+	from beveren_health.beveren_health.customize.dispensing_lot import (
+		_get_lot_name_by_serial,
+		validate_dispensing_lot_for_sale,
+	)
+
+	lot_name = dispensing_lot_name
+	if not frappe.db.exists("Dispensing Lot", lot_name):
+		lot_name = _get_lot_name_by_serial(dispensing_lot_name)
+	if not lot_name:
+		return
+
+	lot = frappe.get_doc("Dispensing Lot", lot_name)
+	uom = item.get("uom") or lot.stock_uom or frappe.db.get_value("Item", item_code, "stock_uom")
+	qty = flt(item.get("quantity"))
+	conversion_factor = 1.0
+	stock_uom = lot.stock_uom or frappe.db.get_value("Item", item_code, "stock_uom")
+	if uom and stock_uom and uom != stock_uom:
+		conversion_factor = frappe.db.get_value(
+			"UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor"
+		) or 1.0
+
+	row = frappe._dict(
+		item_code=item_code,
+		uom=uom,
+		qty=qty,
+		stock_qty=qty * flt(conversion_factor),
+	)
+	validate_dispensing_lot_for_sale(row, lot)
+
+
 def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 	"""
 	Validate that all batch/serial requirements are satisfied for POS items.
@@ -1178,6 +1211,42 @@ def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 
 		batch_number = item.get("batchNumber")
 		serial_number = item.get("serialNumber")
+		dispensing_lot = _resolve_dispensing_lot_name(item)
+
+		from beveren_health.beveren_health.customize.dispensing_lot import item_requires_dispensing_lot
+
+		if item_requires_dispensing_lot(item_code):
+			if has_batch_no and not batch_number:
+				frappe.throw(
+					_("Batch is mandatory for Item {0}. Please select a batch before submitting.").format(
+						item_code
+					)
+				)
+			if not dispensing_lot:
+				frappe.throw(
+					_(
+						"Dispensing Lot is mandatory for Item {0}. Please select a dispensing lot before submitting."
+					).format(item_code)
+				)
+			_validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot)
+			continue
+
+		if _use_dispensing_lot_mode(pos_profile):
+			if has_batch_no and not batch_number:
+				frappe.throw(
+					_("Batch is mandatory for Item {0}. Please select a batch before submitting.").format(
+						item_code
+					)
+				)
+			if has_batch_no and not dispensing_lot and not serial_number:
+				frappe.throw(
+					_(
+						"Dispensing Lot (serial) is mandatory for Item {0}. Please select a lot before submitting."
+					).format(item_code)
+				)
+			if dispensing_lot:
+				_validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot)
+			continue
 
 		# Serial-number items: always require explicit selection from UI
 		if has_serial_no and not serial_number:
@@ -1354,8 +1423,12 @@ def _populate_invoice_items(doc, items, pos_profile):
 
 	# Add each item to the invoice
 	for item in items:
-		item_data = _prepare_item_data(item, item_data_map, pos_profile)
-		doc.append("items", item_data)
+		if _use_dispensing_lot_mode(pos_profile):
+			for item_data in _expand_item_rows_for_dispensing(item, item_data_map, pos_profile):
+				doc.append("items", item_data)
+		else:
+			item_data = _prepare_item_data(item, item_data_map, pos_profile)
+			doc.append("items", item_data)
 
 
 def _batch_fetch_item_data(item_codes):
@@ -1424,7 +1497,8 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 	# Add optional fields
 	_add_uom_to_item(item_data, item)
 	_add_batch_to_item(item_data, item, item_data_map.get(item_code, {}))
-	_add_serial_to_item(item_data, item)
+	_add_serial_to_item(item_data, item, pos_profile)
+	_add_dispensing_lot_to_item(item_data, item, pos_profile)
 	_add_dosage_to_item(item_data, item)
 	_add_item_tax_template_to_item(item_data, item, pos_profile)
 
@@ -1462,8 +1536,97 @@ def _add_batch_to_item(item_data, item, item_db_data):
 		item_data["batch_no"] = batch_number
 
 
-def _add_serial_to_item(item_data, item):
-	"""Add serial number if provided."""
+def _use_dispensing_lot_mode(pos_profile):
+	return bool(int(getattr(pos_profile, "custom_dispense_lot", 0) or 0))
+
+
+def _get_dispensing_lot_by_serial(serial_no):
+	if not serial_no:
+		return None
+	return frappe.db.get_value(
+		"Dispensing Lot",
+		{"serial_no": serial_no},
+		"name",
+		order_by="modified desc",
+	)
+
+
+def _resolve_dispensing_lot_name(item):
+	"""Resolve Dispensing Lot docname from POS item payload (camelCase or snake_case)."""
+	for key in ("dispensingLot", "dispensing_lot"):
+		lot_name = item.get(key)
+		if lot_name and frappe.db.exists("Dispensing Lot", lot_name):
+			return lot_name
+
+	serial_number = item.get("serialNumber") or item.get("serial_no") or ""
+	first_serial = serial_number.split(",")[0].strip() if serial_number else None
+	if first_serial:
+		return _get_dispensing_lot_by_serial(first_serial)
+	return None
+
+
+def _normalize_pos_items_for_dispensing(items, pos_profile):
+	"""Ensure each POS line has dispensingLot set before invoice build."""
+	if not items or not _use_dispensing_lot_mode(pos_profile):
+		return items
+
+	normalized = []
+	for item in items:
+		row = dict(item)
+		lot_name = _resolve_dispensing_lot_name(row)
+		if lot_name:
+			row["dispensingLot"] = lot_name
+		normalized.append(row)
+	return normalized
+
+
+def _expand_item_rows_for_dispensing(item, item_data_map, pos_profile):
+	"""Split pack sales into one invoice row per dispensing lot when needed."""
+	item_code = item.get("id")
+	stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
+	sell_uom = item.get("uom") or stock_uom
+	serials = [s.strip() for s in (item.get("serialNumber") or "").split(",") if s.strip()]
+
+	if not serials:
+		return [_prepare_item_data(item, item_data_map, pos_profile)]
+
+	if sell_uom == stock_uom:
+		rows = []
+		for serial in serials:
+			row_item = dict(item)
+			row_item["quantity"] = 1
+			row_item["serialNumber"] = serial
+			row_item["dispensingLot"] = _get_dispensing_lot_by_serial(serial) or _resolve_dispensing_lot_name(item)
+			rows.append(_prepare_item_data(row_item, item_data_map, pos_profile))
+		return rows
+
+	row_item = dict(item)
+	row_item["dispensingLot"] = _resolve_dispensing_lot_name(item)
+	return [_prepare_item_data(row_item, item_data_map, pos_profile)]
+
+
+def _add_dispensing_lot_to_item(item_data, item, pos_profile):
+	"""Link Sales Invoice Item to Dispensing Lot (Beveren Health)."""
+	if not _use_dispensing_lot_mode(pos_profile):
+		return
+
+	lot_name = _resolve_dispensing_lot_name(item)
+	if not lot_name:
+		return
+
+	if frappe.db.has_column("Sales Invoice Item", "custom_dispensing_lot"):
+		item_data["custom_dispensing_lot"] = lot_name
+		item_data["use_serial_batch_fields"] = 1
+		lot_batch = frappe.db.get_value("Dispensing Lot", lot_name, "batch_no")
+		if lot_batch and not item_data.get("batch_no"):
+			item_data["batch_no"] = lot_batch
+
+
+def _add_serial_to_item(item_data, item, pos_profile=None):
+	"""Add serial number if provided (skipped when using dispensing lots)."""
+	if pos_profile and _use_dispensing_lot_mode(pos_profile):
+		return
+
 	serial_number = item.get("serialNumber")
 	if serial_number:
 		item_data["use_serial_batch_fields"] = 1

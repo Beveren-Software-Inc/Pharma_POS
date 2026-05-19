@@ -23,6 +23,8 @@ export type ScanResult =
       matched_type?: string
       matched_value?: string
       gs1?: GS1ScanMeta          // present when scanned code was a GS1 DataMatrix
+      dispensing_lot?: string
+      batch_no?: string
     }
 
 interface UseBarcodeScannerReturn {
@@ -82,6 +84,7 @@ export function useBarcodeScanner(
       has_batch_no:  msg.has_batch_no as number | undefined,
       has_serial_no: msg.has_serial_no as number | undefined,
       item_tax_template: msg.item_tax_template as string | undefined,
+      stock_uom: msg.stock_uom as string | undefined,
     }
   }
 
@@ -194,6 +197,8 @@ export function useBarcodeScanner(
       matched_type,
       matched_value,
       gs1:          gs1Meta,
+      dispensing_lot: msg.dispensing_lot as string | undefined,
+      batch_no: (msg.batch_no as string | undefined) ?? batchId,
     }
   }
 
@@ -229,6 +234,8 @@ export function useBarcodeScanner(
         item_code:     item.id,
         matched_type:  msg.matched_type  as string | undefined,
         matched_value: msg.matched_value as string | undefined,
+        dispensing_lot: msg.dispensing_lot as string | undefined,
+        batch_no: msg.batch_no as string | undefined,
       }
     } catch {
       setError('Product not found for this barcode')

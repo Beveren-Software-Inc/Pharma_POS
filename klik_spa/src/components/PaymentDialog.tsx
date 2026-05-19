@@ -1221,6 +1221,10 @@ const handleAutoFillPayment = (methodId: string) => {
           price: (item as any).discountedPrice || item.price, // Use discounted price
           batchNumber: (item as { batch_no?: string }).batch_no ?? discount?.batchNumber ?? null,
           serialNumber: (item as { serial_no?: string }).serial_no ?? discount?.serialNumber ?? null,
+          dispensingLot:
+            (item as { dispensing_lot?: string }).dispensing_lot
+            ?? (discount as { dispensingLot?: string })?.dispensingLot
+            ?? null,
           uom: item.uom || 'Nos', // Include selected UOM
           discountPercentage: discount?.discountPercentage || 0,
           discountAmount: discount?.discountAmount || 0,
@@ -1535,6 +1539,10 @@ const handleAutoFillPayment = (methodId: string) => {
           ...item,
           batchNumber: (item as { batch_no?: string }).batch_no ?? discount?.batchNumber ?? null,
           serialNumber: (item as { serial_no?: string }).serial_no ?? discount?.serialNumber ?? null,
+          dispensingLot:
+            (item as { dispensing_lot?: string }).dispensing_lot
+            ?? (discount as { dispensingLot?: string })?.dispensingLot
+            ?? null,
           dosage: discount?.dosage ?? item.dosage ?? null,
           prescriptionDosage: discount?.prescriptionDosage ?? item.prescriptionDosage ?? null,
           item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
