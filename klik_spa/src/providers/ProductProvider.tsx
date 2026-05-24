@@ -16,6 +16,9 @@ interface ProductContextType {
   updateStockForItems: (itemCodes: string[]) => Promise<void>;
   updateBatchQuantitiesForItems: (itemCodes: string[]) => Promise<void>;
   updateSerialsForItems: (itemCodes: string[]) => Promise<void>;
+  updateDispensingLotsForItems: (
+    items: Array<{ itemCode: string; batchNo?: string }>
+  ) => Promise<void>;
   loadMoreProducts: () => Promise<void>;
   searchProducts: (query: string) => Promise<void>;
   clearSearch: () => void;
@@ -575,6 +578,57 @@ export function ProductProvider({ children }: ProductProviderProps) {
     }
   }, []);
 
+  // Refresh dispensing lots after a sale (used lot should drop off the picker list)
+  const updateDispensingLotsForItems = useCallback(
+    async (items: Array<{ itemCode: string; batchNo?: string }>) => {
+      if (items.length === 0) return;
+
+      try {
+        const lotUpdatePromises = items.map(async ({ itemCode, batchNo }) => {
+          if (!itemCode || itemCode === "undefined") return null;
+
+          try {
+            const params = new URLSearchParams({ item_code: itemCode });
+            if (batchNo) {
+              params.set("batch_no", batchNo);
+            }
+            const response = await fetch(
+              `/api/method/klik_pos.api.item.get_dispensing_lots_for_item?${params.toString()}`
+            );
+            const resData = await response.json();
+
+            if (resData?.message && Array.isArray(resData.message)) {
+              return { itemCode, batchNo: batchNo || "", lots: resData.message };
+            }
+            return { itemCode, batchNo: batchNo || "", lots: [] };
+          } catch (error) {
+            console.error(`Failed to update dispensing lots for ${itemCode}:`, error);
+            return null;
+          }
+        });
+
+        const lotResults = await Promise.all(lotUpdatePromises);
+        const validResults = lotResults.filter(
+          (
+            result
+          ): result is { itemCode: string; batchNo: string; lots: unknown[] } =>
+            result !== null
+        );
+
+        if (validResults.length > 0) {
+          window.dispatchEvent(
+            new CustomEvent("dispensingLotsUpdated", {
+              detail: { updatedItems: validResults },
+            })
+          );
+        }
+      } catch (error) {
+        console.error("Failed to update dispensing lots for items:", error);
+      }
+    },
+    []
+  );
+
   const refetchProducts = async () => {
   };
 
@@ -644,6 +698,7 @@ export function ProductProvider({ children }: ProductProviderProps) {
     updateStockForItems,
     updateBatchQuantitiesForItems,
     updateSerialsForItems,
+    updateDispensingLotsForItems,
     loadMoreProducts,
     searchProducts,
     clearSearch,

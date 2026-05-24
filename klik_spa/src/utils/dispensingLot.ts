@@ -53,3 +53,23 @@ export function buildSerialLotMap(
   });
   return map;
 }
+
+/** Cache key for per-item / per-batch dispensing lot lists in POS state. */
+export function getDispensingLotCacheKey(
+  itemCode: string,
+  batchNo?: string
+): string {
+  const batch = (batchNo || "").trim();
+  return batch ? `${itemCode}::${batch}` : itemCode;
+}
+
+export function filterLotsByBatch(
+  lots: DispensingLotOption[],
+  batchNo?: string
+): DispensingLotOption[] {
+  const batch = (batchNo || "").trim();
+  if (!batch) {
+    return lots;
+  }
+  return lots.filter((lot) => (lot.batch_no || "").trim() === batch);
+}

@@ -29,6 +29,8 @@ import {
   getDispensingLots,
   formatDispensingLotLabel,
   buildSerialLotMap,
+  getDispensingLotCacheKey,
+  filterLotsByBatch,
   type DispensingLotOption,
 } from "../utils/dispensingLot";
 import { usePOSDetails } from "../hooks/usePOSProfile";
@@ -960,7 +962,7 @@ export default function OrderSummary({
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
   const { customers, isLoading, refetch: refetchCustomers } = useCustomers(customerSearchQuery);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { products, refetch: _refetchProducts, refreshStockOnly, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems, updateSerialsForItems } = useProducts();
+  const { products, refetch: _refetchProducts, refreshStockOnly, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems, updateSerialsForItems, updateDispensingLotsForItems } = useProducts();
   // const navigate = useNavigate();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { posDetails, loading: _posLoading } = usePOSDetails();
@@ -991,6 +993,42 @@ export default function OrderSummary({
     posDetails?.custom_dispense_lot === 1 ||
     posDetails?.custom_dispense_lot === true ||
     posDetails?.custom_dispense_lot === "1";
+
+  const getSoldLineItems = useCallback(() => {
+    return cartItems
+      .map((item) => ({
+        itemCode: item.item_code || item.id,
+        batchNo: (item as CartItem & { batch_no?: string }).batch_no,
+      }))
+      .filter((row) => row.itemCode && row.itemCode !== "undefined");
+  }, [cartItems]);
+
+  const refreshSoldItemPickers = useCallback(
+    async (soldItems: Array<{ itemCode: string; batchNo?: string }>) => {
+      const itemCodes = [...new Set(soldItems.map((row) => row.itemCode))];
+      if (itemCodes.length === 0) return;
+
+      await updateBatchQuantitiesForItems(itemCodes);
+      await updateSerialsForItems(itemCodes);
+      if (useDispenseLot) {
+        await updateDispensingLotsForItems(soldItems);
+      }
+    },
+    [
+      updateBatchQuantitiesForItems,
+      updateSerialsForItems,
+      updateDispensingLotsForItems,
+      useDispenseLot,
+    ]
+  );
+
+  const refreshDispensingLotsForItem = useCallback(
+    async (itemCode: string, batchNo?: string) => {
+      if (!useDispenseLot || !itemCode) return;
+      await updateDispensingLotsForItems([{ itemCode, batchNo }]);
+    },
+    [useDispenseLot, updateDispensingLotsForItems]
+  );
 
   const { templates: itemTaxTemplates } = useItemTaxTemplates();
   const itemTaxTemplateNames = cartItems
@@ -1159,6 +1197,32 @@ export default function OrderSummary({
   // Per-line key for batch/serial/discount (same item can appear in multiple lines when allow duplicate)
   const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
 
+  const getLineBatchNo = useCallback(
+    (item: CartItem, lineKey?: string) => {
+      const key = lineKey || getLineKey(item);
+      const discount = itemDiscounts[key];
+      return (
+        discount?.batchNumber?.trim() ||
+        (item as CartItem & { batch_no?: string }).batch_no?.trim() ||
+        ""
+      );
+    },
+    [itemDiscounts, getLineKey]
+  );
+
+  const getLotsForLine = useCallback(
+    (item: CartItem) => {
+      const itemCode = item.item_code || item.id;
+      const batchNo = getLineBatchNo(item);
+      const cacheKey = getDispensingLotCacheKey(itemCode, batchNo);
+      if (itemDispensingLots[cacheKey]) {
+        return itemDispensingLots[cacheKey];
+      }
+      return filterLotsByBatch(itemDispensingLots[itemCode] || [], batchNo);
+    },
+    [getLineBatchNo, itemDispensingLots]
+  );
+
   const getSerialSelectOptions = useCallback(
     (item: CartItem) => {
       const itemCode = item.item_code || item.id;
@@ -1167,7 +1231,7 @@ export default function OrderSummary({
         !!useDispenseLot && !!item.uom && !!stockUom && item.uom !== stockUom;
 
       if (useDispenseLot) {
-        const lots = itemDispensingLots[itemCode] || [];
+        const lots = getLotsForLine(item);
         return lots.map((lot) => ({
           value: lot.serial_no,
           label: formatDispensingLotLabel(lot, showRemaining),
@@ -1175,13 +1239,16 @@ export default function OrderSummary({
       }
       return (itemSerials[itemCode] || []).map((s) => ({ value: s, label: s }));
     },
-    [useDispenseLot, itemDispensingLots, itemSerials]
+    [useDispenseLot, getLotsForLine, itemSerials]
   );
 
   const syncDispensingLotMetadata = useCallback(
     (lineKey: string, itemCode: string, serialCsv: string) => {
       if (!useDispenseLot) return;
-      const map = serialLotMaps[itemCode] || {};
+      const batchNo = itemDiscounts[lineKey]?.batchNumber || "";
+      const mapKey = getDispensingLotCacheKey(itemCode, batchNo);
+      const map =
+        serialLotMaps[mapKey] || serialLotMaps[itemCode] || {};
       const serials = serialCsv.split(",").map((s) => s.trim()).filter(Boolean);
       const lotNames = serials.map((s) => map[s]).filter(Boolean);
       const lotName = lotNames[0] || undefined;
@@ -1204,7 +1271,7 @@ export default function OrderSummary({
         }));
       }
     },
-    [useDispenseLot, serialLotMaps, updateItemMetadata]
+    [useDispenseLot, serialLotMaps, itemDiscounts, updateItemMetadata]
   );
 
   // Helper function to calculate item price after discount
@@ -2000,6 +2067,8 @@ export default function OrderSummary({
   const handleClosePaymentDialog = async (paymentCompleted?: boolean) => {
     setShowPaymentDialog(false);
 
+    const soldItems = getSoldLineItems();
+
     // Only clear cart if payment was completed
     if (paymentCompleted) {
       // console.log("OrderSummary: Payment was completed - clearing cart for next order");
@@ -2017,18 +2086,11 @@ export default function OrderSummary({
         console.log("OrderSummary: No stock updates needed");
       }
 
-      // Also update batch quantities for items that were in the cart
-      const cartItemCodes = cartItems.map(item => item.item_code || item.id);
-      if (cartItemCodes.length > 0) {
+      if (soldItems.length > 0) {
         try {
-          await updateBatchQuantitiesForItems(cartItemCodes);
+          await refreshSoldItemPickers(soldItems);
         } catch (error) {
-          console.error("OrderSummary: Failed to update batch quantities:", error);
-        }
-        try {
-          await updateSerialsForItems(cartItemCodes);
-        } catch (error) {
-          console.error("OrderSummary: Failed to update serials:", error);
+          console.error("OrderSummary: Failed to refresh batch/serial/lot pickers:", error);
         }
       }
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2040,6 +2102,7 @@ export default function OrderSummary({
   };
 
   const handleStartNewOrder = async () => {
+    const soldItems = getSoldLineItems();
     handleClearCart();
     setLastDispensedSalesOrder(null);
     setLastDispensedLabelItems([]);
@@ -2047,10 +2110,8 @@ export default function OrderSummary({
     setCreatedVisitRef(null);
     try {
       await refreshStockOnly();
-      const cartItemCodes = cartItems.map(item => item.item_code || item.id);
-      if (cartItemCodes.length > 0) {
-        await updateBatchQuantitiesForItems(cartItemCodes);
-        await updateSerialsForItems(cartItemCodes);
+      if (soldItems.length > 0) {
+        await refreshSoldItemPickers(soldItems);
       }
     } catch (error) {
       console.error("Failed to refresh stock for new order:", error);
@@ -2415,13 +2476,14 @@ const pages = labels.map((label) => `
               console.error("Error fetching batches", err);
             }
           }
-          const batchNo = (item as CartItem & { batch_no?: string }).batch_no;
+          const batchNo = getLineBatchNo(item);
           if (useDispenseLot) {
-            if (!newDispensingLots[key]) {
+            const cacheKey = getDispensingLotCacheKey(key, batchNo);
+            if (!newDispensingLots[cacheKey]) {
               try {
-                const lots = await getDispensingLots(key, batchNo);
-                newDispensingLots[key] = lots;
-                newLotMaps[key] = buildSerialLotMap(lots);
+                const lots = await getDispensingLots(key, batchNo || undefined);
+                newDispensingLots[cacheKey] = lots;
+                newLotMaps[cacheKey] = buildSerialLotMap(lots);
               } catch (err) {
                 console.error("Error fetching dispensing lots", err);
               }
@@ -2448,7 +2510,7 @@ const pages = labels.map((label) => `
     if (cartItems.length) {
       fetchAndSetInfo();
     }
-  }, [cartItems, useDispenseLot]);
+  }, [cartItems, useDispenseLot, itemDiscounts, getLineBatchNo]);
 
   // Listen for batch quantity updates from ProductProvider
   useEffect(() => {
@@ -2481,6 +2543,61 @@ const pages = labels.map((label) => `
     };
 
     window.addEventListener('batchQuantitiesUpdated', handleBatchUpdate as EventListener);
+
+    const handleDispensingLotsUpdate = (event: CustomEvent) => {
+      const { updatedItems } = event.detail;
+
+      setItemDispensingLots((prevLots) => {
+        const newLots = { ...prevLots };
+
+        updatedItems.forEach(
+          ({
+            itemCode,
+            batchNo,
+            lots,
+          }: {
+            itemCode: string;
+            batchNo?: string;
+            lots: DispensingLotOption[];
+          }) => {
+            if (itemCode && itemCode !== "undefined") {
+              const cacheKey = getDispensingLotCacheKey(itemCode, batchNo);
+              newLots[cacheKey] = lots;
+            }
+          }
+        );
+
+        return newLots;
+      });
+
+      setSerialLotMaps((prevMaps) => {
+        const newMaps = { ...prevMaps };
+
+        updatedItems.forEach(
+          ({
+            itemCode,
+            batchNo,
+            lots,
+          }: {
+            itemCode: string;
+            batchNo?: string;
+            lots: DispensingLotOption[];
+          }) => {
+            if (itemCode && itemCode !== "undefined") {
+              const cacheKey = getDispensingLotCacheKey(itemCode, batchNo);
+              newMaps[cacheKey] = buildSerialLotMap(lots);
+            }
+          }
+        );
+
+        return newMaps;
+      });
+    };
+
+    window.addEventListener(
+      "dispensingLotsUpdated",
+      handleDispensingLotsUpdate as EventListener
+    );
 
     // Listen for serial updates from ProductProvider
     const handleSerialUpdate = (event: CustomEvent) => {
@@ -2615,13 +2732,24 @@ const handleSetBatch = (event: CustomEvent) => {
     setItemDiscounts({
       ...base,
       [lineKey]: {
-        ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
-        batchNumber: batchId || '',
+        ...(base[lineKey] || {
+          discountPercentage: 0,
+          discountAmount: 0,
+          batchNumber: "",
+          serialNumber: "",
+          availableQuantity: 0,
+        }),
+        batchNumber: batchId || "",
         availableQuantity: selectedQty,
-      }
+        serialNumber: "",
+      },
     });
-    // ✅ Only update batch metadata here — no serial logic
-    updateItemMetadata(lineKey, { batch_no: batchId || undefined });
+    updateItemMetadata(lineKey, {
+      batch_no: batchId || undefined,
+      serial_no: undefined,
+      dispensing_lot: undefined,
+    });
+    void refreshDispensingLotsForItem(itemCode, batchId || undefined);
   } else {
     setPendingPreselect(prev => ({
       ...prev,
@@ -2699,11 +2827,15 @@ const handleSetSerial = (event: CustomEvent) => {
 
     return () => {
       window.removeEventListener('batchQuantitiesUpdated', handleBatchUpdate as EventListener);
+      window.removeEventListener(
+        "dispensingLotsUpdated",
+        handleDispensingLotsUpdate as EventListener
+      );
       window.removeEventListener('serialsUpdated', handleSerialUpdate as EventListener);
       window.removeEventListener('cart:setBatchForItem', handleSetBatch as EventListener)
       window.removeEventListener('cart:setSerialForItem', handleSetSerial as EventListener)
     };
-  }, [cartItems, itemBatches, getLineKey, updateItemMetadata]);
+  }, [cartItems, itemBatches, getLineKey, updateItemMetadata, refreshDispensingLotsForItem]);
 
   // Apply any pending pre-selections when cart items change
   useEffect(() => {
@@ -2739,7 +2871,17 @@ const handleSetSerial = (event: CustomEvent) => {
             if (pending.serialNo) existing.add(pending.serialNo);
             return Array.from(existing).join(',');
           })();
-          const lotMap = serialLotMapsRef.current[itemCode] || {};
+          const pendingBatch =
+            pending.batchId ||
+            base[lineKey]?.batchNumber ||
+            (target as CartItem & { batch_no?: string }).batch_no ||
+            "";
+          const lotMap =
+            serialLotMapsRef.current[
+              getDispensingLotCacheKey(itemCode, pendingBatch)
+            ] ||
+            serialLotMapsRef.current[itemCode] ||
+            {};
           const lotName =
             (pending as { dispensingLot?: string }).dispensingLot ||
             lotMap[pending.serialNo] ||
@@ -3456,7 +3598,18 @@ const handleSetSerial = (event: CustomEvent) => {
                               onChange={(selectedBatch, selectedQty) => {
                                 updateItemDiscount(lineKey, "batchNumber", selectedBatch)
                                 updateItemDiscount(lineKey, "availableQuantity", selectedQty)
-                                updateItemMetadata(lineKey, { batch_no: selectedBatch || undefined })
+                                updateItemDiscount(lineKey, "serialNumber", "")
+                                updateItemMetadata(lineKey, {
+                                  batch_no: selectedBatch || undefined,
+                                  serial_no: undefined,
+                                  dispensing_lot: undefined,
+                                })
+                                if (useDispenseLot) {
+                                  void refreshDispensingLotsForItem(
+                                    item.item_code || item.id,
+                                    selectedBatch || undefined
+                                  )
+                                }
                               }}
                               isMobile={isMobile}
                             />
@@ -3787,7 +3940,14 @@ const handleSetSerial = (event: CustomEvent) => {
 
   const lineDiscount = itemDiscounts[lineKey] || {};
   const itemCode = item.item_code || item.id;
-  const lotMap = serialLotMaps[itemCode] || {};
+  const batchNo =
+    lineDiscount.batchNumber?.trim() ||
+    (item as CartItem & { batch_no?: string }).batch_no?.trim() ||
+    "";
+  const lotMap =
+    serialLotMaps[getDispensingLotCacheKey(itemCode, batchNo)] ||
+    serialLotMaps[itemCode] ||
+    {};
   const firstSerial = mergedSerial.split(",")[0]?.trim();
   const resolvedDispensingLot =
     (item as CartItem & { dispensing_lot?: string }).dispensing_lot ||
