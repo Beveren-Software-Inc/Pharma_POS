@@ -1238,12 +1238,7 @@ def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 						item_code
 					)
 				)
-			if has_batch_no and not dispensing_lot and not serial_number:
-				frappe.throw(
-					_(
-						"Dispensing Lot (serial) is mandatory for Item {0}. Please select a lot before submitting."
-					).format(item_code)
-				)
+			# Optional lot: validate only when user selected one (mandatory lots handled above).
 			if dispensing_lot:
 				_validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot)
 			continue
