@@ -29,6 +29,7 @@ import {
   getDispensingLots,
   formatDispensingLotLabel,
   buildSerialLotMap,
+  joinDispensingLotNames,
   getDispensingLotCacheKey,
   filterLotsByBatch,
   type DispensingLotOption,
@@ -1250,12 +1251,14 @@ export default function OrderSummary({
       const map =
         serialLotMaps[mapKey] || serialLotMaps[itemCode] || {};
       const serials = serialCsv.split(",").map((s) => s.trim()).filter(Boolean);
-      const lotNames = serials.map((s) => map[s]).filter(Boolean);
-      const lotName = lotNames[0] || undefined;
+      const lotNames = Array.from(
+        new Set(serials.map((s) => map[s]).filter(Boolean))
+      );
+      const lotsValue = joinDispensingLotNames(lotNames);
       updateItemMetadata(lineKey, {
-        dispensing_lot: lotName,
+        dispensing_lot: lotsValue || undefined,
       });
-      if (lotName) {
+      if (lotsValue) {
         setItemDiscounts((prev) => ({
           ...prev,
           [lineKey]: {
@@ -1266,7 +1269,7 @@ export default function OrderSummary({
               serialNumber: "",
               availableQuantity: 0,
             }),
-            dispensingLot: lotName,
+            dispensingLot: lotsValue,
           },
         }));
       }
@@ -2785,28 +2788,33 @@ const handleSetSerial = (event: CustomEvent) => {
       if (serialNo) existing.add(serialNo);
       return Array.from(existing).join(',');
     })();
-    const lotMap = serialLotMapsRef.current[itemCode] || {};
-    const lotName =
-      dispensingLot ||
-      (serialNo ? lotMap[serialNo] : undefined) ||
-      accumulated
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => lotMap[s])
-        .find(Boolean);
+    const batchNo = base[lineKey]?.batchNumber || "";
+    const lotMap =
+      serialLotMapsRef.current[getDispensingLotCacheKey(itemCode, batchNo)] ||
+      serialLotMapsRef.current[itemCode] ||
+      {};
+    const lotNames = Array.from(
+      new Set(
+        accumulated
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((s) => lotMap[s] || (dispensingLot && s === serialNo ? dispensingLot : undefined))
+          .filter(Boolean) as string[]
+      )
+    );
+    const lotsValue = joinDispensingLotNames(lotNames);
 
     setItemDiscounts({
       ...base,
       [lineKey]: {
         ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
         serialNumber: accumulated,
-        dispensingLot: lotName || undefined,
+        dispensingLot: lotsValue || undefined,
       },
     });
     updateItemMetadata(lineKey, {
-      serial_no: accumulated || undefined,
-      dispensing_lot: lotName || undefined,
+      dispensing_lot: lotsValue || undefined,
     });
     setItemSerials(prev => {
       const existing = new Set(prev[itemCode] || []);
@@ -2882,26 +2890,27 @@ const handleSetSerial = (event: CustomEvent) => {
             ] ||
             serialLotMapsRef.current[itemCode] ||
             {};
-          const lotName =
-            (pending as { dispensingLot?: string }).dispensingLot ||
-            lotMap[pending.serialNo] ||
-            accumulated
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean)
-              .map((s) => lotMap[s])
-              .find(Boolean);
+          const lotNames = Array.from(
+            new Set(
+              accumulated
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .map((s) => lotMap[s])
+                .filter(Boolean) as string[]
+            )
+          );
+          const lotsValue = joinDispensingLotNames(lotNames);
           setItemDiscounts({
             ...base,
             [lineKey]: {
               ...(base[lineKey] || { discountPercentage: 0, discountAmount: 0, batchNumber: '', serialNumber: '', availableQuantity: 0 }),
               serialNumber: accumulated,
-              dispensingLot: lotName || undefined,
+              dispensingLot: lotsValue || undefined,
             }
           })
           updateItemMetadata(lineKey, {
-            serial_no: accumulated || undefined,
-            dispensing_lot: lotName || undefined,
+            dispensing_lot: lotsValue || undefined,
           })
           setItemSerials(prev => {
             const existing = new Set(prev[itemCode] || [])
@@ -3948,30 +3957,31 @@ const handleSetSerial = (event: CustomEvent) => {
     serialLotMaps[getDispensingLotCacheKey(itemCode, batchNo)] ||
     serialLotMaps[itemCode] ||
     {};
-  const firstSerial = mergedSerial.split(",")[0]?.trim();
-  const resolvedDispensingLot =
+  const mergedSerials = mergedSerial.split(",").map((s) => s.trim()).filter(Boolean);
+  const resolvedLotNames = Array.from(
+    new Set(
+      mergedSerials.map((s) => lotMap[s]).filter(Boolean) as string[]
+    )
+  );
+  const resolvedDispensingLots =
     (item as CartItem & { dispensing_lot?: string }).dispensing_lot ||
     (lineDiscount as { dispensingLot?: string }).dispensingLot ||
-    (firstSerial ? lotMap[firstSerial] : undefined);
+    joinDispensingLotNames(resolvedLotNames) ||
+    undefined;
 
   return {
     ...item,
     discountedPrice: getDiscountedPrice(item),
-    // ✅ use lineKey, not item.id
     itemDiscount: {
       ...lineDiscount,
-      // ✅ override serialNumber with merged value
       serialNumber: mergedSerial,
-      dispensingLot: resolvedDispensingLot,
+      dispensingLot: resolvedDispensingLots,
     },
     originalPrice: item.price,
     finalAmount: getDiscountedPrice(item) * item.quantity + itemAdditional,
-    // ✅ also override serial_no on the item itself so backend gets full list
-    serial_no: mergedSerial || undefined,
-    dispensing_lot: resolvedDispensingLot,
-    // ✅ quantity must match number of serials for ERPNext validation
-    quantity: mergedSerial
-      ? Math.max(item.quantity, mergedSerial.split(",").filter(Boolean).length)
+    dispensing_lot: resolvedDispensingLots,
+    quantity: mergedSerials.length
+      ? Math.max(item.quantity, mergedSerials.length)
       : item.quantity,
   };
 })}

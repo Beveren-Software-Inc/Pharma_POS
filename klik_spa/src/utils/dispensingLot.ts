@@ -42,6 +42,11 @@ export function formatDispensingLotLabel(
   return uom ? `${qty} ${uom} | ${serial}` : serial;
 }
 
+/** Join lot docnames for Sales Invoice Item.custom_dispensing_lot (newline-separated, like serial_no). */
+export function joinDispensingLotNames(lotNames: string[]): string {
+  return lotNames.map((n) => n.trim()).filter(Boolean).join("\n");
+}
+
 export function buildSerialLotMap(
   lots: DispensingLotOption[]
 ): Record<string, string> {
