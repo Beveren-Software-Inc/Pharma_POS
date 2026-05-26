@@ -1,7 +1,7 @@
 // Copyright (c) 2026, Beveren Sooftware Inc and contributors
 // For license information, please see license.txt
 
-frappe.query_reports["Talabat"] = {
+frappe.query_reports["Complete Talabat"] = {
 	"filters": [
 		{
 			"fieldname": "company",

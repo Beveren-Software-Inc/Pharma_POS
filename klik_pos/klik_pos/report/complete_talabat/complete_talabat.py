@@ -5,6 +5,7 @@ import frappe
 
 from klik_pos.klik_pos.report.talabat.talabat_pricing import (
 	fetch_talabat_lines,
+	get_discounted_unit_net_rate,
 	get_template_tax_rates,
 	get_unit_price_including_vat,
 )
@@ -18,13 +19,13 @@ def execute(filters=None):
 
 def get_columns():
 	return [
-		{"label": "SKU", "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 150},
+		{"label": "SKU", "fieldname": "item_code", "fieldtype": "Data", "width": 150},
 		{"label": "Barcode", "fieldname": "barcode", "fieldtype": "Data", "width": 150},
-		{"label": "Reason", "fieldname": "reason", "fieldtype": "Data", "width": 70},
-		{"label": "Start Date", "fieldname": "start_date", "fieldtype": "Date", "width": 80},
-		{"label": "End Date", "fieldname": "end_date", "fieldtype": "Date", "width": 80},
-		{"label": "Campaign Status", "fieldname": "campaign_status", "fieldtype": "Data", "width": 80},
-		{"label": "Discounted Price", "fieldname": "discounted_price", "fieldtype": "Data", "width": 90},
+		{"label": "Reason", "fieldname": "reason", "fieldtype": "Data", "width": 150},
+		{"label": "Start Date", "fieldname": "start_date", "fieldtype": "Date", "width": 120},
+		{"label": "End Date", "fieldname": "end_date", "fieldtype": "Date", "width": 120},
+		{"label": "Campaign Status", "fieldname": "campaign_status", "fieldtype": "Data", "width": 150},
+		{"label": "Discounted Price", "fieldname": "discounted_price", "fieldtype": "Currency", "width": 120},
 		{"label": "Original Price", "fieldname": "original_price", "fieldtype": "Currency", "width": 120},
 		{"label": "Active", "fieldname": "active", "fieldtype": "Check", "width": 80},
 	]
@@ -38,6 +39,10 @@ def get_data(filters):
 
 	for row in lines:
 		original_price = get_unit_price_including_vat(row, template_tax_rates)
+		discounted_net = get_discounted_unit_net_rate(row)
+		discounted_price = get_unit_price_including_vat(
+			row, template_tax_rates, unit_net_rate=discounted_net
+		)
 
 		barcode = ""
 		if row.batch_no:
@@ -53,11 +58,11 @@ def get_data(filters):
 		data.append({
 			"item_code": row.item_code,
 			"barcode": barcode,
-			# "reason": "Transport",
-			# "start_date": row.posting_date,
-			# "end_date": row.posting_date,
-			# "campaign_status": "Completed",
-			# "discounted_price": discounted_price,
+			"reason": "Transport",
+			"start_date": row.posting_date,
+			"end_date": row.posting_date,
+			"campaign_status": "Completed",
+			"discounted_price": discounted_price,
 			"original_price": original_price,
 			"active": 1,
 		})
