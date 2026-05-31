@@ -1,4 +1,5 @@
-import PrintPreview  from "../utils/posPreview"
+import { useMemo } from "react";
+import PrintPreview from "../utils/posPreview";
 
 interface Invoice {
   name?: string;
@@ -8,15 +9,22 @@ interface Invoice {
 }
 
 export default function DisplayPrintPreview({ invoice }: { invoice: Invoice }) {
-  // Ensure invoice has required fields for PrintPreview
-  const invoiceWithRequiredFields = {
-    pos_profile: (typeof invoice.pos_profile === 'string' ? invoice.pos_profile : '') || '',
-    name: (typeof invoice.name === 'string' ? invoice.name : invoice.id) || '',
-    ...invoice
-  };
+  const invoiceName =
+    (typeof invoice.name === "string" ? invoice.name : invoice.id) || "";
+  const posProfile =
+    typeof invoice.pos_profile === "string" ? invoice.pos_profile : "";
 
-  return (
-      <PrintPreview invoice={invoiceWithRequiredFields} />
-
+  const previewInvoice = useMemo(
+    () => ({
+      name: invoiceName,
+      pos_profile: posProfile,
+    }),
+    [invoiceName, posProfile]
   );
+
+  if (!invoiceName) {
+    return null;
+  }
+
+  return <PrintPreview invoice={previewInvoice} />;
 }

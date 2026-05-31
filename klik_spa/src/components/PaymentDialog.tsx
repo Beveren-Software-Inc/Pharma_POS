@@ -691,15 +691,41 @@ export default function PaymentDialog({
 
   // Auto-print when invoice is submitted and auto-print is enabled
   useEffect(() => {
-    if (invoiceSubmitted && invoiceData && print_receipt_on_order_complete) {
-      setIsAutoPrinting(true);
-      // Small delay to ensure the preview is rendered
-      setTimeout(() => {
+    if (!invoiceSubmitted || !invoiceData || !print_receipt_on_order_complete) {
+      return;
+    }
+
+    setIsAutoPrinting(true);
+    let attempts = 0;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const tryAutoPrint = () => {
+      const preview = document.querySelector(
+        ".print-preview-container .print-preview-content"
+      ) as HTMLElement | null;
+
+      if (preview?.innerHTML.trim()) {
         handlePrintInvoice(invoiceData);
         setIsAutoPrinting(false);
-      }, 500);
-    }
-  }, [invoiceSubmitted, invoiceData, print_receipt_on_order_complete]);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts >= 20) {
+        setIsAutoPrinting(false);
+        return;
+      }
+
+      timeoutId = setTimeout(tryAutoPrint, 300);
+    };
+
+    timeoutId = setTimeout(tryAutoPrint, 300);
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      setIsAutoPrinting(false);
+    };
+  }, [invoiceSubmitted, invoiceData?.name, print_receipt_on_order_complete]);
 
   // Determine if roundoff should be enabled
   const isRoundOffEnabled = () => {

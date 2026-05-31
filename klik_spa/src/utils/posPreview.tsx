@@ -1,11 +1,10 @@
-
 import { useState, useEffect } from "react";
 import { getPrintFormatHTML } from "./getPrintHTML.js";
 import { usePOSDetails } from "../hooks/usePOSProfile.js";
 
 type PrintPreviewProps = {
   invoice: {
-    pos_profile: string;
+    pos_profile?: string;
     name: string;
     [key: string]: unknown;
   };
@@ -15,52 +14,69 @@ export default function PrintPreview({ invoice }: PrintPreviewProps) {
   const [html, setHtml] = useState("");
   const [style, setStyle] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const { posDetails, loading: posLoading } = usePOSDetails();
-
   const printFormat = posDetails?.print_format ?? "Sales Invoice";
+  const invoiceName = typeof invoice.name === "string" ? invoice.name : "";
 
   useEffect(() => {
-    const fetchPrintHTML = async () => {
-      // Wait until posDetails is loaded
-      if (posLoading || !posDetails) return;
+    if (posLoading) return;
+    if (!invoiceName) {
+      setLoading(false);
+      setError("Invoice name is missing");
+      return;
+    }
 
+    let cancelled = false;
+
+    const fetchPrintHTML = async () => {
       setLoading(true);
+      setError(null);
       try {
-        // console.log("Fetching print format for invoice:", printFormat);
-        // Convert invoice to the format expected by getPrintFormatHTML
-        const invoiceName = typeof invoice.name === 'string' ? invoice.name : '';
-        const invoiceForAPI: { doctype: string; name: string; [key: string]: unknown } = {
-          ...invoice,
-          doctype: 'Sales Invoice',
-          name: invoiceName
-        };
-        const { html, style } = await getPrintFormatHTML(invoiceForAPI, printFormat);
+        const { html, style } = await getPrintFormatHTML(
+          { doctype: "Sales Invoice", name: invoiceName },
+          printFormat
+        );
+        if (cancelled) return;
         setHtml(html);
         setStyle(style);
       } catch (err) {
+        if (cancelled) return;
         console.error("Error loading print format:", err);
+        setError("Failed to load print preview");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchPrintHTML();
-  }, [invoice, posDetails, posLoading, printFormat]); // re-run when posDetails or invoice changes
 
-  if (loading) return <p className="text-gray-600 dark:text-gray-400">Loading Print Preview...</p>;
+    return () => {
+      cancelled = true;
+    };
+  }, [invoiceName, printFormat, posLoading]);
 
-  // Always use light/print colors so preview is readable in dark mode and matches print output
   return (
     <div
       className="print-preview-container p-4 bg-white text-gray-900 shadow overflow-auto max-h-[90vh] dark:bg-white dark:text-gray-900"
       style={{ colorScheme: "light" }}
     >
-      <style dangerouslySetInnerHTML={{ __html: style }} />
-      <div
-        className="print-preview-content text-gray-900 dark:text-gray-900"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+      {loading && (
+        <p className="text-gray-600 dark:text-gray-400">Loading Print Preview...</p>
+      )}
+      {!loading && error && (
+        <p className="text-red-600 dark:text-red-400">{error}</p>
+      )}
+      {!loading && !error && (
+        <>
+          <style dangerouslySetInnerHTML={{ __html: style }} />
+          <div
+            className="print-preview-content text-gray-900 dark:text-gray-900"
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        </>
+      )}
     </div>
   );
 }
