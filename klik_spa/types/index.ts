@@ -41,6 +41,20 @@ export interface CartItem {
   /** Dispensing Lot docname (when POS profile uses dispense-lot mode). */
   dispensing_lot?: string
   stock_uom?: string
+  /** Pharmacy service line (non-stock); added via hospital pharmacy Add Service. */
+  is_pharmacy_service?: boolean
+  /** Cart line this service was added for (hospital pharmacy). */
+  parent_cart_line_id?: string
+  /** User manually edited the service rate in cart. */
+  rate_edited?: boolean
+  /** Patient Medication Order line requires a reference (is pink). */
+  is_pink?: boolean
+  /** Child row on Patient Medication Order. */
+  medication_order_entry?: string
+  medicationOrder?: string
+  medicationOrders?: string[]
+  /** Reference written back to PMO child row on dispense. */
+  reference_no?: string
 }
 
 export interface MenuItem {

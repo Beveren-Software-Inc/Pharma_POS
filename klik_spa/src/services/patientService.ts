@@ -18,6 +18,10 @@ export interface InpatientMedicationOrderItem {
   quantity?: number;
   /** UOM from the order entry (e.g. drug default/stock UOM) */
   uom?: string;
+  /** Child row name on Patient Medication Order */
+  medication_order_entry?: string;
+  is_pink?: number | boolean | string;
+  reference_no?: string;
 }
 
 export interface InpatientMedicationOrder {

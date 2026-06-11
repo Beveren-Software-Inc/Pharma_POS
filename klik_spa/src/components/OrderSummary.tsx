@@ -18,6 +18,8 @@ import PaymentDialog from "./PaymentDialog";
 import AddCustomerModal from "./AddCustomerModal";
 import InpatientMedicationOrdersModal from "./InpatientMedicationOrdersModal";
 import AdditionalAmountModal from "./AdditionalAmountModal";
+import PharmacyServiceModal from "./PharmacyServiceModal";
+import type { PharmacyServiceItem } from "../services/pharmacyService";
 import { createDraftSalesInvoice } from "../services/salesInvoice";
 import { useCustomers } from "../hooks/useCustomers";
 import { useProducts } from "../hooks/useProducts";
@@ -152,6 +154,48 @@ const QuantityInput = ({ item, onUpdateQuantity, isMobile }: QuantityInputProps)
       className={`w-full ${
         isMobile ? "text-sm" : "text-sm"
       } px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+    />
+  );
+};
+
+interface ServiceRateInputProps {
+  lineKey: string;
+  price: number;
+  onRateChange: (lineKey: string, rate: number) => void;
+  isMobile?: boolean;
+}
+
+const ServiceRateInput = ({ lineKey, price, onRateChange, isMobile }: ServiceRateInputProps) => {
+  const [inputValue, setInputValue] = useState(price.toString());
+  const [isEditing, setIsEditing] = useState(false);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setInputValue(price.toString());
+    }
+  }, [price, isEditing]);
+
+  const handleBlur = () => {
+    setIsEditing(false);
+    const numValue = Number(inputValue);
+    if (isNaN(numValue) || numValue < 0) {
+      setInputValue(price.toString());
+      return;
+    }
+    setInputValue(numValue.toString());
+    onRateChange(lineKey, numValue);
+  };
+
+  return (
+    <input
+      type="number"
+      step="0.001"
+      min="0"
+      value={inputValue}
+      onChange={(e) => setInputValue(e.target.value)}
+      onFocus={() => setIsEditing(true)}
+      onBlur={handleBlur}
+      className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
     />
   );
 };
@@ -946,6 +990,11 @@ export default function OrderSummary({
   const [showMedicationOrdersModal, setShowMedicationOrdersModal] = useState(false);
   const [showRedeemLoyaltyModal, setShowRedeemLoyaltyModal] = useState(false);
   const [showAdditionalAmountModal, setShowAdditionalAmountModal] = useState(false);
+  const [showPharmacyServiceModal, setShowPharmacyServiceModal] = useState(false);
+  const [pharmacyServiceParent, setPharmacyServiceParent] = useState<{
+    lineKey: string;
+    itemName: string;
+  } | null>(null);
   const [redeemPointsInput, setRedeemPointsInput] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [medicationOrders, setMedicationOrders] = useState<InpatientMedicationOrder[]>([]);
@@ -1425,6 +1474,142 @@ export default function OrderSummary({
     }));
   };
 
+  type MedicationOrderLineInput = {
+    item_code: string;
+    quantity: number;
+    uom?: string;
+    dosage?: string;
+    patient_frequency?: string;
+    drug_name?: string;
+    medication_order?: string;
+    medication_order_entry?: string;
+    is_pink?: number | boolean | string;
+    reference_no?: string;
+  };
+
+  const isPinkMedicationLine = (item: MedicationOrderLineInput) =>
+    item.is_pink === 1 || item.is_pink === true || item.is_pink === "1";
+
+  const addMedicationOrderLineToCart = useCallback(
+    async (
+      itemToAdd: MedicationOrderLineInput,
+      qtyByItem: Map<string, number>,
+      medsByItem: Map<string, Set<string>>,
+      extraOrderNames: string[] = []
+    ): Promise<"added" | "not_found"> => {
+      const product = products.find(
+        (p) => p.id === itemToAdd.item_code || p.item_code === itemToAdd.item_code
+      );
+      if (!product) {
+        console.warn(`Product not found for item_code: ${itemToAdd.item_code}`);
+        return "not_found";
+      }
+
+      const pink = isPinkMedicationLine(itemToAdd);
+      const uomToUse =
+        itemToAdd.uom || (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : product.uom);
+      const cartQuantity = await convertOrderQuantityToCartUOM(
+        product.id,
+        itemToAdd.quantity,
+        itemToAdd.uom,
+        uomToUse
+      );
+      const prescriptionDosageValue = itemToAdd.patient_frequency;
+      const lineId = pink ? crypto.randomUUID() : undefined;
+      const currentQty = pink ? 0 : (qtyByItem.get(product.id) ?? 0);
+      const willExist = !pink && currentQty > 0;
+
+      const applyLineMeta = (lineKey: string) => {
+        if (prescriptionDosageValue) {
+          updateItemDiscount(lineKey, "prescriptionDosage", prescriptionDosageValue);
+        }
+        if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
+          updateItemDiscount(lineKey, "dosage", String(itemToAdd.dosage).trim());
+        }
+        if (itemToAdd.medication_order) {
+          updateItemDiscount(lineKey, "medicationOrder", itemToAdd.medication_order);
+          const s = medsByItem.get(product.id) ?? new Set<string>();
+          s.add(itemToAdd.medication_order);
+          extraOrderNames.forEach((o) => s.add(o));
+          medsByItem.set(product.id, s);
+          updateItemMetadata(lineKey, {
+            medicationOrder: itemToAdd.medication_order,
+            medicationOrders: Array.from(s),
+          });
+        }
+        if (pink) {
+          updateItemMetadata(lineKey, {
+            is_pink: true,
+            reference_no: itemToAdd.reference_no || "",
+            ...(itemToAdd.medication_order_entry
+              ? { medication_order_entry: itemToAdd.medication_order_entry }
+              : {}),
+          });
+        }
+      };
+
+      if (willExist) {
+        const newQuantity = currentQty + cartQuantity;
+        await onUpdateQuantity(product.id, newQuantity);
+        qtyByItem.set(product.id, newQuantity);
+        applyLineMeta(product.id);
+        return "added";
+      }
+
+      let priceToUse = product.price;
+      if (isPharmacy && uomToUse && uomToUse !== product.uom && !selectedCustomer) {
+        const priceInfo = await getItemPriceForCustomer(product.id, undefined, uomToUse);
+        if (priceInfo?.success && priceInfo.price > 0) {
+          priceToUse = priceInfo.price;
+        }
+      }
+
+      const metaKey = pink && lineId ? lineId : product.id;
+      await addToCartWithQuantity(
+        {
+          id: product.id,
+          name: product.name,
+          category: product.category || "General",
+          price: priceToUse,
+          image: product.image || "",
+          available: product.available,
+          uom: uomToUse,
+          item_code: product.id,
+          ...(pink && {
+            allowDuplicate: true,
+            cartLineId: lineId,
+            is_pink: true,
+            medication_order_entry: itemToAdd.medication_order_entry,
+            reference_no: itemToAdd.reference_no || "",
+          }),
+          ...(itemToAdd.medication_order && {
+            medicationOrder: itemToAdd.medication_order,
+            medicationOrders: [itemToAdd.medication_order],
+          }),
+        },
+        cartQuantity
+      );
+
+      if (!pink) {
+        qtyByItem.set(product.id, cartQuantity);
+      }
+
+      setTimeout(() => applyLineMeta(metaKey), 100);
+      return "added";
+    },
+    [
+      products,
+      isPharmacy,
+      pharmacyDefaultUom,
+      selectedCustomer,
+      convertOrderQuantityToCartUOM,
+      onUpdateQuantity,
+      addToCartWithQuantity,
+      updateItemDiscount,
+      updateItemMetadata,
+    ]
+  );
+
   // Filtered customers based on search query
   const filteredCustomers =
     customerSearchQuery.trim() === ""
@@ -1504,7 +1689,7 @@ export default function OrderSummary({
       
       // Automatically add all medication orders to cart (quantity, uom, patient_frequency from order entry)
       const selectedOrderNamesAll = Array.from(new Set(orders.map((o) => o.name).filter(Boolean)));
-      const itemsToAdd: Array<{ item_code: string; quantity: number; uom?: string; dosage?: string; patient_frequency?: string; drug_name?: string; medication_order?: string }> = [];
+      const itemsToAdd: MedicationOrderLineInput[] = [];
       
       orders.forEach(order => {
         order.items.forEach(item => {
@@ -1517,6 +1702,9 @@ export default function OrderSummary({
               patient_frequency: item.patient_frequency,
               drug_name: item.drug_name || undefined,
               medication_order: order.name,
+              medication_order_entry: item.medication_order_entry,
+              is_pink: item.is_pink,
+              reference_no: item.reference_no,
             });
           }
         });
@@ -1546,102 +1734,15 @@ export default function OrderSummary({
           }
         });
         
-        // Process each item
         for (const itemToAdd of itemsToAdd) {
-          // Find the product in the products list
-          const product = products.find(p => p.id === itemToAdd.item_code || p.item_code === itemToAdd.item_code);
-          
-          if (!product) {
-            console.warn(`Product not found for item_code: ${itemToAdd.item_code}`);
-            notFoundCount++;
-            continue;
-          }
-
-          const uomToUse = itemToAdd.uom || ((isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom);
-          const cartQuantity = await convertOrderQuantityToCartUOM(
-            product.id,
-            itemToAdd.quantity,
-            itemToAdd.uom,
-            uomToUse
+          const result = await addMedicationOrderLineToCart(
+            itemToAdd,
+            qtyByItem,
+            medsByItem,
+            selectedOrderNamesAll
           );
-          
-          const prescriptionDosageValue = itemToAdd.patient_frequency;
-          
-          const currentQty = qtyByItem.get(product.id) ?? 0;
-          const willExist = currentQty > 0;
-
-          if (willExist) {
-            const newQuantity = currentQty + cartQuantity;
-            await onUpdateQuantity(product.id, newQuantity);
-            qtyByItem.set(product.id, newQuantity);
-            
-            if (prescriptionDosageValue) {
-              updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
-            }
-            if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-              updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
-            }
-            if (itemToAdd.medication_order) {
-              const s = medsByItem.get(product.id) ?? new Set<string>();
-              s.add(itemToAdd.medication_order);
-              selectedOrderNamesAll.forEach((o) => s.add(o));
-              medsByItem.set(product.id, s);
-              const arr = Array.from(s);
-              // Keep medicationOrder for backward compatibility, but also keep all selected orders.
-              updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order, medicationOrders: arr });
-              updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order);
-            }
-            
-            addedCount++;
-          } else {
-            let priceToUse = product.price;
-
-            if (isPharmacy && uomToUse && uomToUse !== product.uom && !selectedCustomer) {
-              const priceInfo = await getItemPriceForCustomer(product.id, undefined, uomToUse);
-              if (priceInfo?.success && priceInfo.price > 0) {
-                priceToUse = priceInfo.price;
-              }
-            }
-
-            await addToCartWithQuantity(
-              {
-                id: product.id,
-                name: product.name,
-                category: product.category || 'General',
-                price: priceToUse,
-                image: product.image || '',
-                available: product.available,
-                uom: uomToUse,
-                item_code: product.id,
-                ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order, medicationOrders: [itemToAdd.medication_order] }),
-              },
-              cartQuantity
-            );
-            qtyByItem.set(product.id, cartQuantity);
-            
-            if (prescriptionDosageValue) {
-              setTimeout(() => {
-                updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
-              }, 100);
-            }
-            if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-              setTimeout(() => {
-                updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
-              }, 100);
-            }
-            if (itemToAdd.medication_order) {
-              const s = medsByItem.get(product.id) ?? new Set<string>();
-              s.add(itemToAdd.medication_order);
-              selectedOrderNamesAll.forEach((o) => s.add(o));
-              medsByItem.set(product.id, s);
-              updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order, medicationOrders: Array.from(s) });
-              setTimeout(() => {
-                updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order!);
-              }, 100);
-            }
-            
-            addedCount++;
-          }
+          if (result === "added") addedCount++;
+          else notFoundCount++;
         }
         
         toast.dismiss(loadingToast);
@@ -1677,7 +1778,7 @@ export default function OrderSummary({
     const selectedOrderNames = Array.from(new Set(ordersToAdd.map((o) => o.name).filter(Boolean)));
     
     // Collect all items from selected orders (quantity, uom, patient_frequency from order entry)
-    const itemsToAdd: Array<{ item_code: string; quantity: number; uom?: string; dosage?: string; patient_frequency?: string; drug_name?: string; medication_order?: string }> = [];
+    const itemsToAdd: MedicationOrderLineInput[] = [];
     
     ordersToAdd.forEach(order => {
       order.items.forEach(item => {
@@ -1690,6 +1791,9 @@ export default function OrderSummary({
             patient_frequency: item.patient_frequency,
             drug_name: item.drug_name || undefined,
             medication_order: order.name,
+            medication_order_entry: item.medication_order_entry,
+            is_pink: item.is_pink,
+            reference_no: item.reference_no,
           });
         }
       });
@@ -1720,97 +1824,14 @@ export default function OrderSummary({
       });
       
       for (const itemToAdd of itemsToAdd) {
-        const product = products.find(p => p.id === itemToAdd.item_code || p.item_code === itemToAdd.item_code);
-        
-        if (!product) {
-          console.warn(`Product not found for item_code: ${itemToAdd.item_code}`);
-          notFoundCount++;
-          continue;
-        }
-
-        const uomToUse = itemToAdd.uom || ((isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom);
-        const cartQuantity = await convertOrderQuantityToCartUOM(
-          product.id,
-          itemToAdd.quantity,
-          itemToAdd.uom,
-          uomToUse
+        const result = await addMedicationOrderLineToCart(
+          itemToAdd,
+          qtyByItem,
+          medsByItem,
+          selectedOrderNames
         );
-        const prescriptionDosageValue = itemToAdd.patient_frequency;
-
-        const currentQty = qtyByItem.get(product.id) ?? 0;
-        const willExist = currentQty > 0;
-
-        if (willExist) {
-          const newQuantity = currentQty + cartQuantity;
-          await onUpdateQuantity(product.id, newQuantity);
-          qtyByItem.set(product.id, newQuantity);
-          
-          if (prescriptionDosageValue) {
-            updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
-          }
-          if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-            updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
-          }
-          if (itemToAdd.medication_order) {
-            const s = medsByItem.get(product.id) ?? new Set<string>();
-            s.add(itemToAdd.medication_order);
-            selectedOrderNames.forEach((o) => s.add(o));
-            medsByItem.set(product.id, s);
-            const arr = Array.from(s);
-            updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order, medicationOrders: arr });
-            updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order);
-          }
-          
-          addedCount++;
-        } else {
-          let priceToUse = product.price;
-
-          if (isPharmacy && uomToUse && uomToUse !== product.uom && !selectedCustomer) {
-            const priceInfo = await getItemPriceForCustomer(product.id, undefined, uomToUse);
-            if (priceInfo?.success && priceInfo.price > 0) {
-              priceToUse = priceInfo.price;
-            }
-          }
-
-          await addToCartWithQuantity(
-            {
-              id: product.id,
-              name: product.name,
-              category: product.category || 'General',
-              price: priceToUse,
-              image: product.image || '',
-              available: product.available,
-              uom: uomToUse,
-              item_code: product.id,
-              ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order, medicationOrders: [itemToAdd.medication_order] }),
-            },
-            cartQuantity
-          );
-          qtyByItem.set(product.id, cartQuantity);
-          
-          if (prescriptionDosageValue) {
-            setTimeout(() => {
-              updateItemDiscount(product.id, "prescriptionDosage", prescriptionDosageValue);
-            }, 100);
-          }
-          if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-            setTimeout(() => {
-              updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
-            }, 100);
-          }
-          if (itemToAdd.medication_order) {
-            const s = medsByItem.get(product.id) ?? new Set<string>();
-            s.add(itemToAdd.medication_order);
-            selectedOrderNames.forEach((o) => s.add(o));
-            medsByItem.set(product.id, s);
-            updateItemMetadata(product.id, { medicationOrder: itemToAdd.medication_order, medicationOrders: Array.from(s) });
-            setTimeout(() => {
-              updateItemDiscount(product.id, "medicationOrder", itemToAdd.medication_order!);
-            }, 100);
-          }
-          
-          addedCount++;
-        }
+        if (result === "added") addedCount++;
+        else notFoundCount++;
       }
       
       toast.dismiss(loadingToast);
@@ -1866,7 +1887,7 @@ export default function OrderSummary({
       toast.warning("Please select at least one history item.");
       return;
     }
-    const itemsToAdd: Array<{ item_code: string; quantity: number; uom?: string; dosage?: string; patient_frequency?: string; medication_order?: string }> = [];
+    const itemsToAdd: MedicationOrderLineInput[] = [];
     medicationOrderHistory.forEach((order) => {
       order.items.forEach((item, idx) => {
         const key = `${order.name}::${idx}::${item.drug ?? ""}`;
@@ -1878,6 +1899,9 @@ export default function OrderSummary({
             dosage: item.dosage || undefined,
             patient_frequency: item.patient_frequency,
             medication_order: order.name,
+            medication_order_entry: item.medication_order_entry,
+            is_pink: item.is_pink,
+            reference_no: item.reference_no,
           });
         }
       });
@@ -1891,55 +1915,19 @@ export default function OrderSummary({
       let addedCount = 0;
       let notFoundCount = 0;
       const qtyByItem = new Map<string, number>();
-      cartItems.forEach((ci) => qtyByItem.set(ci.id, ci.quantity));
+      const medsByItem = new Map<string, Set<string>>();
+      cartItems.forEach((ci) => {
+        qtyByItem.set(ci.id, ci.quantity);
+        const existing = ci.medicationOrders;
+        if (Array.isArray(existing) && existing.length) {
+          medsByItem.set(ci.id, new Set(existing));
+        }
+      });
 
       for (const itemToAdd of itemsToAdd) {
-        const product = products.find(p => p.id === itemToAdd.item_code || p.item_code === itemToAdd.item_code);
-        if (!product) {
-          notFoundCount++;
-          continue;
-        }
-        const uomToUse = itemToAdd.uom || ((isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : product.uom);
-        const cartQuantity = await convertOrderQuantityToCartUOM(product.id, itemToAdd.quantity, itemToAdd.uom, uomToUse);
-        const currentQty = qtyByItem.get(product.id) ?? 0;
-        if (currentQty > 0) {
-          const newQty = currentQty + cartQuantity;
-          await onUpdateQuantity(product.id, newQty);
-          qtyByItem.set(product.id, newQty);
-          if (itemToAdd.patient_frequency) {
-            updateItemDiscount(product.id, "prescriptionDosage", itemToAdd.patient_frequency);
-          }
-          if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-            updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
-          }
-        } else {
-          await addToCartWithQuantity(
-            {
-              id: product.id,
-              name: product.name,
-              category: product.category || "General",
-              price: product.price,
-              image: product.image || "",
-              available: product.available,
-              uom: uomToUse,
-              item_code: product.id,
-              ...(itemToAdd.medication_order && { medicationOrder: itemToAdd.medication_order, medicationOrders: [itemToAdd.medication_order] }),
-            },
-            cartQuantity
-          );
-          qtyByItem.set(product.id, cartQuantity);
-          if (itemToAdd.patient_frequency) {
-            setTimeout(() => {
-              updateItemDiscount(product.id, "prescriptionDosage", itemToAdd.patient_frequency!);
-            }, 100);
-          }
-          if (itemToAdd.dosage != null && itemToAdd.dosage !== "") {
-            setTimeout(() => {
-              updateItemDiscount(product.id, "dosage", String(itemToAdd.dosage).trim());
-            }, 100);
-          }
-        }
-        addedCount++;
+        const result = await addMedicationOrderLineToCart(itemToAdd, qtyByItem, medsByItem);
+        if (result === "added") addedCount++;
+        else notFoundCount++;
       }
       toast.dismiss(loadingToast);
       if (addedCount > 0 && notFoundCount === 0) toast.success(`Successfully added ${addedCount} history item(s).`);
@@ -2176,6 +2164,39 @@ const pages = labels.map((label) => `
     !!lastDispensedCartSignature &&
     lastDispensedCartSignature === getCartSignature(cartItems);
 
+  const openPharmacyServiceModal = (lineKey: string, itemName: string) => {
+    setPharmacyServiceParent({ lineKey, itemName });
+    setShowPharmacyServiceModal(true);
+  };
+
+  const handleSelectPharmacyService = async (service: PharmacyServiceItem) => {
+    if (!pharmacyServiceParent) return;
+    try {
+      await addToCartWithQuantity(
+        {
+          id: service.id,
+          name: service.name,
+          category: service.category || "Service",
+          price: service.price,
+          image: service.image || "",
+          uom: service.uom,
+          item_code: service.id,
+          item_tax_template: service.item_tax_template,
+          allowDuplicate: true,
+          is_pharmacy_service: true,
+          parent_cart_line_id: pharmacyServiceParent.lineKey,
+        },
+        1
+      );
+      toast.success(`Added ${service.name} to cart`);
+      setShowPharmacyServiceModal(false);
+      setPharmacyServiceParent(null);
+    } catch (error) {
+      console.error("Failed to add pharmacy service:", error);
+      toast.error("Failed to add service to cart");
+    }
+  };
+
   const handleDispense = async () => {
     if (!validateCustomer()) return;
     if (!selectedCustomer) return;
@@ -2184,6 +2205,7 @@ const pages = labels.map((label) => `
       return;
     }
     const missingMedicationDetails = cartItems
+      .filter((item) => !(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service)
       .map((item) => {
         const lineKey = getLineKey(item);
         const lineDiscount = ((itemDiscounts[item.id] || itemDiscounts[lineKey]) || {}) as { dosage?: string; prescriptionDosage?: string };
@@ -2203,6 +2225,18 @@ const pages = labels.map((label) => `
       );
       return;
     }
+
+    const missingPinkReference = cartItems
+      .filter((item) => (item as CartItem).is_pink)
+      .filter((item) => !String((item as CartItem).reference_no || "").trim())
+      .map((item) => item.name || item.item_code || item.id);
+
+    if (missingPinkReference.length > 0) {
+      const uniqueItems = Array.from(new Set(missingPinkReference));
+      toast.error(`Reference is required for: ${uniqueItems.join(", ")}.`);
+      return;
+    }
+
     try {
       setIsDispensing(true);
       const allMedicationOrders = Array.from(new Set(
@@ -2232,15 +2266,24 @@ const pages = labels.map((label) => `
         ...(patientIdForSo ? { patient: patientIdForSo } : {}),
         items: cartItems.map((item) => {
           const lineKey = getLineKey(item);
-          const lineDiscount = (itemDiscounts[lineKey] || {}) as { batchNumber?: string; serialNumber?: string };
+          const lineDiscount = (itemDiscounts[lineKey] || itemDiscounts[item.id] || {}) as {
+            batchNumber?: string;
+            serialNumber?: string;
+            medicationOrder?: string;
+          };
+          const cartLine = item as CartItem;
           return {
             id: item.id,
             item_code: item.item_code || item.id,
             quantity: item.quantity,
             price: getDiscountedPrice(item),
             uom: item.uom,
-            batchNumber: lineDiscount.batchNumber || (item as CartItem & { batch_no?: string }).batch_no,
-            serialNumber: lineDiscount.serialNumber || (item as CartItem & { serial_no?: string }).serial_no,
+            batchNumber: lineDiscount.batchNumber || cartLine.batch_no,
+            serialNumber: lineDiscount.serialNumber || cartLine.serial_no,
+            medication_order: cartLine.medicationOrder || lineDiscount.medicationOrder,
+            medication_order_entry: cartLine.medication_order_entry,
+            reference_no: cartLine.reference_no,
+            is_pink: cartLine.is_pink ? 1 : 0,
           };
         }),
         medication_orders: allMedicationOrders,
@@ -3305,6 +3348,13 @@ const handleSetSerial = (event: CustomEvent) => {
           ) : (
             cartItems.map((item) => {
               const lineKey = getLineKey(item);
+              const isServiceItem = !!(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service;
+              const showAddService = isHospitalPharmacy && !isServiceItem;
+              const row5FieldCount = [
+                isItemTaxTemplateMode,
+                showAddService,
+                isAllowAdditionalAmounts,
+              ].filter(Boolean).length;
               const discountedPrice = getDiscountedPrice(item);
               const originalTotal = item.price * item.quantity;
               const discountedTotal = discountedPrice * item.quantity;
@@ -3521,7 +3571,7 @@ const handleSetSerial = (event: CustomEvent) => {
                       } bg-gray-25 dark:bg-gray-750`}
                     >
                       <div className="w-full">
-                        {/* Row 1: Quantity | UOM */}
+                        {/* Row 1: Quantity | UOM (or Rate for service items) */}
                         <div className="grid grid-cols-2 gap-4 mb-4">
                           <div>
                             <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
@@ -3533,19 +3583,35 @@ const handleSetSerial = (event: CustomEvent) => {
                               isMobile={isMobile}
                             />
                           </div>
-                          <div>
-                            <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
-                              UOM
-                            </label>
-                            <UOMSelectField
-                              item={item}
-                              onUOMChange={(_, uom, price, conversionFactor) =>
-                                handleUOMChange(lineKey, uom, price, conversionFactor)
-                              }
-                              isMobile={isMobile}
-                              selectedCustomer={selectedCustomer}
-                            />
-                          </div>
+                          {isServiceItem ? (
+                            <div>
+                              <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                                Rate
+                              </label>
+                              <ServiceRateInput
+                                lineKey={lineKey}
+                                price={item.price}
+                                onRateChange={(key, rate) =>
+                                  updateItemMetadata(key, { price: rate, rate_edited: true })
+                                }
+                                isMobile={isMobile}
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                                UOM
+                              </label>
+                              <UOMSelectField
+                                item={item}
+                                onUOMChange={(_, uom, price, conversionFactor) =>
+                                  handleUOMChange(lineKey, uom, price, conversionFactor)
+                                }
+                                isMobile={isMobile}
+                                selectedCustomer={selectedCustomer}
+                              />
+                            </div>
+                          )}
                         </div>
 
                         {/* Row 2: Discount Amount | Discount (%) */}
@@ -3594,6 +3660,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         </div>
 
                         {/* Row 3: Batch | Serial No */}
+                        {!isServiceItem && (
                         <div className="grid grid-cols-2 gap-4 mb-4">
                           <div>
                             <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
@@ -3642,9 +3709,30 @@ const handleSetSerial = (event: CustomEvent) => {
                             />
                           </div>
                         </div>
+                        )}
+
+                        {/* Row 4a: Reference (pink medication order lines) */}
+                        {isHospitalPharmacy && (item as CartItem).is_pink && (
+                          <div className="grid grid-cols-2 gap-4 mb-4">
+                            <div>
+                              <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                                Reference
+                              </label>
+                              <input
+                                type="text"
+                                value={(item as CartItem).reference_no || ""}
+                                onChange={(e) =>
+                                  updateItemMetadata(lineKey, { reference_no: e.target.value })
+                                }
+                                placeholder="Enter reference..."
+                                className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                              />
+                            </div>
+                          </div>
+                        )}
 
                         {/* Row 4: Dosage | Prescription Frequency (Pharmacy only) */}
-                        {isPharmacy && (
+                        {isPharmacy && !isServiceItem && (
                           <div className="grid grid-cols-2 gap-4 mb-4">
                             <div>
                               <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
@@ -3672,11 +3760,19 @@ const handleSetSerial = (event: CustomEvent) => {
                           </div>
                         )}
 
-                        {/* Row 5: Item Tax Template | Additional Amount (side by side when allowed) */}
-                        {(isItemTaxTemplateMode || isAllowAdditionalAmounts) && (
-                          <div className="grid grid-cols-2 gap-4 mb-4">
+                        {/* Row 5: Item Tax Template | Add Service | Additional Amount */}
+                        {(isItemTaxTemplateMode || isAllowAdditionalAmounts || isHospitalPharmacy) && (
+                          <div
+                            className={`grid gap-4 mb-4 ${
+                              row5FieldCount >= 3
+                                ? "grid-cols-3"
+                                : row5FieldCount === 2
+                                  ? "grid-cols-2"
+                                  : "grid-cols-1"
+                            }`}
+                          >
                             {isItemTaxTemplateMode && (
-                              <div>
+                              <div className="min-w-0">
                                 <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
                                   Item Tax Template
                                 </label>
@@ -3694,6 +3790,20 @@ const handleSetSerial = (event: CustomEvent) => {
                                     </option>
                                   ))}
                                 </select>
+                              </div>
+                            )}
+                            {showAddService && (
+                              <div className="min-w-0">
+                                <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                                  Add Service
+                                </label>
+                                <button
+                                  type="button"
+                                  onClick={() => openPharmacyServiceModal(lineKey, item.name)}
+                                  className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 font-medium rounded-md border border-beveren-500 text-beveren-600 dark:text-beveren-400 hover:bg-beveren-50 dark:hover:bg-beveren-900/20 transition-colors`}
+                                >
+                                  Add Service
+                                </button>
                               </div>
                             )}
                             {isAllowAdditionalAmounts && (
@@ -3994,6 +4104,20 @@ const handleSetSerial = (event: CustomEvent) => {
           totalItemDiscount={totalItemDiscount}
           generalAdditionalAmount={generalAdditionalAmount}
           additionalRemark={additionalRemark}
+        />
+      )}
+
+      {/* Pharmacy Service Modal */}
+      {isHospitalPharmacy && (
+        <PharmacyServiceModal
+          isOpen={showPharmacyServiceModal}
+          onClose={() => {
+            setShowPharmacyServiceModal(false);
+            setPharmacyServiceParent(null);
+          }}
+          parentItemName={pharmacyServiceParent?.itemName}
+          currencySymbol={currency_symbol}
+          onSelectService={handleSelectPharmacyService}
         />
       )}
 

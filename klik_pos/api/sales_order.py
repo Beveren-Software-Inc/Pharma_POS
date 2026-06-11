@@ -51,6 +51,47 @@ def _normalize_batch_nos(batch_nos):
 	return [b for b in batch_nos if isinstance(b, str) and b.strip()]
 
 
+def _to_bool_flag(value):
+	return value in (1, "1", True, "true", "True")
+
+
+def _update_medication_order_references(items):
+	"""Write cart reference_no back to pink Patient Medication Order child rows on dispense."""
+	if not items:
+		return
+
+	updates_by_order = {}
+	for item in items:
+		if not _to_bool_flag(item.get("is_pink")):
+			continue
+
+		order_name = item.get("medication_order")
+		entry_name = item.get("medication_order_entry")
+		reference_no = (item.get("reference_no") or "").strip()
+		if not order_name or not entry_name or not reference_no:
+			continue
+		if not frappe.db.exists("Patient Medication Order", order_name):
+			continue
+
+		updates_by_order.setdefault(order_name, {})[entry_name] = reference_no
+
+	for order_name, entry_map in updates_by_order.items():
+		try:
+			doc = frappe.get_doc("Patient Medication Order", order_name)
+			updated = False
+			for row in doc.get("medication_orders") or []:
+				if row.name in entry_map and hasattr(row, "reference_no"):
+					row.reference_no = entry_map[row.name]
+					updated = True
+			if updated:
+				doc.save(ignore_permissions=True)
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"Failed to update reference_no on Medication Order {order_name}",
+			)
+
+
 def _mark_medication_orders_completed(order_names):
 	if not order_names:
 		return
@@ -272,6 +313,7 @@ def create_and_submit_hospital_sales_order(data):
 			doc.submit()
 
 			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(doc.name, pos_profile)
+			_update_medication_order_references(items)
 			_mark_medication_orders_completed(medication_orders)
 		except Exception:
 			frappe.db.rollback(save_point=savepoint)

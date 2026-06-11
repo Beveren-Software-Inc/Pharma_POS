@@ -4,6 +4,78 @@
 import frappe
 from klik_pos.util.api_utility import get_next_transaction_number
 
+
+def _medication_order_entry_to_dict(item):
+	"""Map a Patient Medication Order child row to the POS API payload."""
+	item_dict = {}
+
+	if hasattr(item, "name") and item.name:
+		item_dict["medication_order_entry"] = item.name
+
+	if hasattr(item, "drug"):
+		item_dict["drug"] = item.drug
+	elif hasattr(item, "item_code"):
+		item_dict["drug"] = item.item_code
+	elif hasattr(item, "drug_code"):
+		item_dict["drug"] = item.drug_code
+
+	if hasattr(item, "drug_name"):
+		item_dict["drug_name"] = item.drug_name
+	elif hasattr(item, "item_name"):
+		item_dict["drug_name"] = item.item_name
+
+	if hasattr(item, "dosage"):
+		item_dict["dosage"] = item.dosage
+
+	if hasattr(item, "patient_frequency") and item.patient_frequency:
+		item_dict["patient_frequency"] = item.patient_frequency
+	elif hasattr(item, "frequency") and item.frequency:
+		item_dict["patient_frequency"] = item.frequency
+	else:
+		item_dict["patient_frequency"] = None
+
+	item_dict["dosage_form"] = getattr(item, "dosage_form", None)
+	item_dict["period"] = getattr(item, "period", None)
+	item_dict["is_prn"] = getattr(item, "is_prn", 0)
+	item_dict["medication_type"] = getattr(item, "medication_type", None)
+	item_dict["quantity"] = getattr(item, "quantity", 1) or 1
+	item_dict["uom"] = getattr(item, "uom", None)
+	item_dict["is_pink"] = int(getattr(item, "is_pink", 0) or 0)
+	item_dict["reference_no"] = getattr(item, "reference_no", None) or ""
+
+	return item_dict
+
+
+def _extract_medication_order_items(order_doc):
+	"""Read child-table medication lines from a Patient Medication Order document."""
+	order_meta = frappe.get_meta("Patient Medication Order")
+	child_table_fields = [f.fieldname for f in order_meta.fields if f.fieldtype == "Table"]
+	if not child_table_fields:
+		child_table_fields = [
+			"drug_prescription",
+			"medication_orders",
+			"items",
+			"drugs",
+			"drug_prescription_detail",
+		]
+
+	items = []
+	for fieldname in child_table_fields:
+		if not hasattr(order_doc, fieldname):
+			continue
+		child_table = getattr(order_doc, fieldname)
+		if not child_table:
+			continue
+		for row in child_table:
+			item_dict = _medication_order_entry_to_dict(row)
+			if item_dict.get("drug"):
+				items.append(item_dict)
+		if items:
+			break
+
+	return items
+
+
 @frappe.whitelist()
 def search_patients(search_query: str):
 	"""
@@ -118,88 +190,7 @@ def get_pending_inpatient_medication_orders(patient: str):
 				elif getattr(order_doc, "inpatient_record", None):
 					order["custom_reference_type"] = "Inpatient Admission"
 					order["custom_reference_name"] = order_doc.inpatient_record
-			order["items"] = []
-			
-			# Get the doctype meta to find child tables
-			order_meta = frappe.get_meta("Patient Medication Order")
-			child_table_fields = []
-			
-			# Find all child table fields
-			for field in order_meta.fields:
-				if field.fieldtype == "Table":
-					child_table_fields.append(field.fieldname)
-			
-			# Common fieldnames in healthcare (fallback if meta doesn't work)
-			if not child_table_fields:
-				child_table_fields = ["drug_prescription", "medication_orders", "items", "drugs", "drug_prescription_detail"]
-			
-			for fieldname in child_table_fields:
-				if hasattr(order_doc, fieldname):
-					child_table = getattr(order_doc, fieldname)
-					if child_table and len(child_table) > 0:
-						for item in child_table:
-							# Get all available attributes
-							item_dict = {}
-							
-							# Try different field names for drug/item_code
-							if hasattr(item, "drug"):
-								item_dict["drug"] = item.drug
-							elif hasattr(item, "item_code"):
-								item_dict["drug"] = item.item_code
-							elif hasattr(item, "drug_code"):
-								item_dict["drug"] = item.drug_code
-							
-							# Try different field names for drug_name
-							if hasattr(item, "drug_name"):
-								item_dict["drug_name"] = item.drug_name
-							elif hasattr(item, "item_name"):
-								item_dict["drug_name"] = item.item_name
-							
-							# Get dosage if available
-							if hasattr(item, "dosage"):
-								item_dict["dosage"] = item.dosage
-							# Patient Frequency (Link to Prescription Frequency) - use for cart prescription frequency
-							if hasattr(item, "patient_frequency") and item.patient_frequency:
-								item_dict["patient_frequency"] = item.patient_frequency
-							elif hasattr(item, "frequency") and item.frequency:
-								item_dict["patient_frequency"] = item.frequency
-							else:
-								item_dict["patient_frequency"] = None
-							
-							# Get other optional fields
-							if hasattr(item, "dosage_form"):
-								item_dict["dosage_form"] = item.dosage_form
-							
-							if hasattr(item, "period"):
-								item_dict["period"] = item.period
-
-							if hasattr(item, "is_prn"):
-								item_dict["is_prn"] = item.is_prn
-							else:
-								item_dict["is_prn"] = 0
-
-							if hasattr(item, "medication_type"):
-								item_dict["medication_type"] = item.medication_type
-							else:
-								item_dict["medication_type"] = None
-							
-							if hasattr(item, "quantity"):
-								item_dict["quantity"] = item.quantity
-							else:
-								item_dict["quantity"] = 1
-							
-							# UOM from order entry (drug default/stock UOM)
-							if hasattr(item, "uom"):
-								item_dict["uom"] = item.uom
-							else:
-								item_dict["uom"] = None
-							
-							# Only add if we have a drug/item_code
-							if item_dict.get("drug"):
-								order["items"].append(item_dict)
-						
-						if order["items"]:
-							break  # Found items, no need to check other fields
+			order["items"] = _extract_medication_order_items(order_doc)
 		return orders
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching Patient Medication Orders")
@@ -266,45 +257,7 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 				elif getattr(order_doc, "inpatient_record", None):
 					order["custom_reference_type"] = "Inpatient Admission"
 					order["custom_reference_name"] = order_doc.inpatient_record
-			order["items"] = []
-
-			child_table_fields = [f.fieldname for f in order_meta.fields if f.fieldtype == "Table"]
-			if not child_table_fields:
-				child_table_fields = ["drug_prescription", "medication_orders", "items", "drugs", "drug_prescription_detail"]
-
-			for fieldname in child_table_fields:
-				if hasattr(order_doc, fieldname):
-					child_table = getattr(order_doc, fieldname)
-					if not child_table:
-						continue
-					for item in child_table:
-						item_dict = {}
-						if hasattr(item, "drug"):
-							item_dict["drug"] = item.drug
-						elif hasattr(item, "item_code"):
-							item_dict["drug"] = item.item_code
-						elif hasattr(item, "drug_code"):
-							item_dict["drug"] = item.drug_code
-
-						if hasattr(item, "drug_name"):
-							item_dict["drug_name"] = item.drug_name
-						elif hasattr(item, "item_name"):
-							item_dict["drug_name"] = item.item_name
-
-						if hasattr(item, "dosage"):
-							item_dict["dosage"] = item.dosage
-						item_dict["patient_frequency"] = getattr(item, "patient_frequency", None) or getattr(item, "frequency", None)
-						item_dict["dosage_form"] = getattr(item, "dosage_form", None)
-						item_dict["period"] = getattr(item, "period", None)
-						item_dict["is_prn"] = getattr(item, "is_prn", 0)
-						item_dict["medication_type"] = getattr(item, "medication_type", None)
-						item_dict["quantity"] = getattr(item, "quantity", 1) or 1
-						item_dict["uom"] = getattr(item, "uom", None)
-
-						if item_dict.get("drug"):
-							order["items"].append(item_dict)
-					if order["items"]:
-						break
+			order["items"] = _extract_medication_order_items(order_doc)
 
 		return orders
 	except Exception as e:

@@ -52,6 +52,10 @@ function preserveBatchAndSerial(merged: CartItem[], currentCart: CartItem[]): Ca
 function mergePricingResultsWithFreeItems(baseCartItems: CartItem[], pricingResults: any[]): CartItem[] {
   // Update base items with discounts / pricing rule info
   const updatedBaseItems: CartItem[] = baseCartItems.map((item) => {
+    if ((item as CartItem & { is_pharmacy_service?: boolean; rate_edited?: boolean }).is_pharmacy_service
+      && (item as CartItem & { rate_edited?: boolean }).rate_edited) {
+      return item
+    }
     const pricingRuleItem = pricingResults.find((pr) => pr.id === item.id)
     if (!pricingRuleItem) {
       return item
@@ -197,7 +201,9 @@ export const useCartStore = create<CartState>()(
             ...item,
             price: finalPrice,
             quantity: 1,
-            cartLineId: item.allowDuplicate ? crypto.randomUUID() : undefined,
+            cartLineId: item.allowDuplicate
+              ? ((item as { cartLineId?: string }).cartLineId || crypto.randomUUID())
+              : undefined,
           };
           const newCartItems = [...state.cartItems, newItem];
 
@@ -263,7 +269,9 @@ export const useCartStore = create<CartState>()(
             ...item,
             price: finalPrice,
             quantity,
-            cartLineId: item.allowDuplicate ? crypto.randomUUID() : undefined,
+            cartLineId: item.allowDuplicate
+              ? ((item as { cartLineId?: string }).cartLineId || crypto.randomUUID())
+              : undefined,
           };
           const newCartItems = [...state.cartItems, newItem];
 
@@ -443,6 +451,10 @@ export const useCartStore = create<CartState>()(
 
           // Update cart items with new base prices, but preserve existing price if UOM is set and price seems correct
           let updatedItems = baseCartItems.map(item => {
+            if ((item as CartItem & { is_pharmacy_service?: boolean; rate_edited?: boolean }).is_pharmacy_service
+              && (item as CartItem & { rate_edited?: boolean }).rate_edited) {
+              return item;
+            }
             const priceUpdate = priceUpdates[item.id];
             if (priceUpdate && priceUpdate.success && priceUpdate.price > 0) {
               const currentPrice = item.price || 0;
