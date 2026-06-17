@@ -20,6 +20,7 @@ type ExtendedCustomer = Customer & {
 import { useCustomerActions } from "../services/customerService";
 import { toast } from "react-toastify";
 import { usePOSDetails } from "../hooks/usePOSProfile";
+import { getPartyLabels } from "../utils/partyLabels";
 import PhoneInput from "react-phone-number-input";
 import "react-phone-number-input/style.css";
 import countryList from "react-select-country-list";
@@ -46,6 +47,10 @@ export default function AddCustomerModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { posDetails } = usePOSDetails();
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1";
+  const party = getPartyLabels(isHospitalPharmacy);
 
   const countryOptions: CountryOption[] = countryList().getData();
 
@@ -243,7 +248,7 @@ export default function AddCustomerModal({
     // Basic validation
     if (formData.customer_type === "company") {
       if (!formData.name.trim()) {
-        newErrors.name = "Customer name is required";
+        newErrors.name = `${party.singular} name is required`;
       }
       if (!formData.contactName.trim()) {
         newErrors.contactName = "Contact name is required";
@@ -378,7 +383,7 @@ export default function AddCustomerModal({
       setSubmitError(
         error instanceof Error
           ? error.message
-          : "Failed to save customer. Please try again."
+          : `Failed to save ${party.lower}. Please try again.`
       );
     } finally {
       setIsSubmitting(false);
@@ -489,7 +494,7 @@ export default function AddCustomerModal({
         {!isFullPage && (
           <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
             <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-              {isEditing ? "Edit Customer" : "Add New Customer"}
+              {isEditing ? party.edit : party.addNew}
             </h2>
             <button
               onClick={onClose}
@@ -521,7 +526,7 @@ export default function AddCustomerModal({
             {posDetails?.business_type === "B2B & B2C" ? (
               <div className="mb-6">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                  Customer Type
+                  {party.typeLabel}
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {availableCustomerTypes.map((type) => {
@@ -584,7 +589,7 @@ export default function AddCustomerModal({
               /* Show current customer type when automatically determined */
               <div className="mb-6">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                  Customer Type
+                  {party.typeLabel}
                 </h3>
                 <div className="bg-beveren-50 dark:bg-beveren-900/20 border-2 border-beveren-500 rounded-lg p-4">
                   <div className="flex items-center">
@@ -598,7 +603,7 @@ export default function AddCustomerModal({
                         {formData.customer_type === "company"
                           ? "Company"
                           : "Individual"}{" "}
-                        Customer
+                        {party.singular}
                       </span>
                       <p className="text-sm text-beveren-700 dark:text-beveren-300 mt-1">
                         {formData.customer_type === "company"
@@ -622,7 +627,7 @@ export default function AddCustomerModal({
                     htmlFor="name"
                     className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
                   >
-                    Customer Name
+                    {party.nameLabel}
                     {formData.customer_type === "company" && (
                       <span className="text-red-500">*</span>
                     )}
@@ -679,7 +684,7 @@ export default function AddCustomerModal({
                     htmlFor="customer_group"
                     className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
                   >
-                    Customer Group
+                    {party.groupLabel}
                   </label>
                   <select
                     id="customer_group"
@@ -1337,7 +1342,7 @@ export default function AddCustomerModal({
                   <>
                     <Save size={18} />
                     <span>
-                      {isEditing ? "Update Customer" : "Save Customer"}
+                      {isEditing ? party.update : party.save}
                     </span>
                   </>
                 )}

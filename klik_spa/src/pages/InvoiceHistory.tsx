@@ -30,9 +30,11 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { formatCurrency } from "../utils/currency";
 import type { SalesInvoice } from "../../types";
 import { useSalesInvoices } from "../hooks/useSalesInvoices";
+import { usePosDispenseHistory } from "../hooks/usePosDispenseHistory";
 import { useCustomers } from "../hooks/useCustomers";
 import { useUserInfo } from "../hooks/useUserInfo";
 import { usePOSDetails } from "../hooks/usePOSProfile";
+import { getPartyLabels } from "../utils/partyLabels";
 import { toast } from "react-toastify";
 import { extractErrorFromException } from "../utils/errorExtraction";
 import { createSalesReturn, deleteDraftInvoice, submitDraftInvoice } from "../services/salesInvoice";
@@ -76,11 +78,27 @@ export default function InvoiceHistoryPage() {
   const [selectedDraftInvoice, setSelectedDraftInvoice] = useState<SalesInvoice | null>(null);
 
   // Skip opening entry filter for Invoice History - show all invoices for cashier regardless of opening entry
-  // Pass cashier filter to API so it filters on server side (more efficient)
-  const { invoices, isLoading, isLoadingMore, error, hasMore, totalLoaded, totalCount, loadMore } = useSalesInvoices(searchTerm, true, cashierFilter);
+  const { posDetails } = usePOSDetails();
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1";
+  const party = getPartyLabels(isHospitalPharmacy);
+
+  const salesInvoiceQuery = useSalesInvoices(searchTerm, true, cashierFilter, !isHospitalPharmacy);
+  const dispenseQuery = usePosDispenseHistory(searchTerm, cashierFilter, isHospitalPharmacy);
+  const {
+    invoices,
+    isLoading,
+    isLoadingMore,
+    error,
+    hasMore,
+    totalLoaded,
+    totalCount,
+    loadMore,
+  } = isHospitalPharmacy ? dispenseQuery : salesInvoiceQuery;
+
   const { modes } = useAllPaymentModes();
   const { customers } = useCustomers();
-  const { posDetails } = usePOSDetails();
   const { userInfo, isLoading: userInfoLoading } = useUserInfo();
 
   // Role-based filtering
@@ -114,7 +132,9 @@ export default function InvoiceHistoryPage() {
     return () => document.removeEventListener('keydown', handleEscape);
   }, [showEditOptions, showCustomerSelection, showMultiReturn]);
 
-  const tabs = [
+  const tabs = isHospitalPharmacy
+    ? [{ id: "all", name: "Dispensed Medicine", icon: FileText, color: "text-green-600" }]
+    : [
     { id: "all", name: "All Invoices", icon: FileText, color: "text-gray-600" },
     { id: "Draft", name: "Draft", icon: FilePlus, color: "text-gray-500" },
     { id: "Unpaid", name: "Unpaid", icon: Clock, color: "text-yellow-600" },
@@ -165,6 +185,8 @@ const getStatusBadge = (status: string) => {
 
   switch (normalized) {
     // Payment statuses
+    case "dispensed medicine":
+      return `${baseClasses} bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400`;
     case "paid":
       return `${baseClasses} bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400`;
     case "unpaid":
@@ -209,7 +231,7 @@ const getStatusBadge = (status: string) => {
       const invoiceStatus = (invoice.status || "").trim();
       const tabStatus = (activeTab || "").trim();
       const matchesStatus = activeTab === "all" || invoiceStatus === tabStatus;
-      const matchesPayment = paymentFilter === "all" || invoice.paymentMethod === paymentFilter;
+      const matchesPayment = isHospitalPharmacy || paymentFilter === "all" || invoice.paymentMethod === paymentFilter;
       const matchesCashier = cashierFilter === "all" || invoice.cashier === cashierFilter;
       const matchesDate = filterInvoiceByDate(invoice.date);
 
@@ -259,7 +281,7 @@ const getStatusBadge = (status: string) => {
   const getStatusCount = (status: string) => {
     // First apply all filters except status
     const invoicesFilteredByOtherFilters = invoices.filter((invoice) => {
-      const matchesPayment = paymentFilter === "all" || invoice.paymentMethod === paymentFilter;
+      const matchesPayment = isHospitalPharmacy || paymentFilter === "all" || invoice.paymentMethod === paymentFilter;
       const matchesCashier = cashierFilter === "all" || invoice.cashier === cashierFilter;
       const matchesDate = filterInvoiceByDate(invoice.date);
       return matchesPayment && matchesCashier && matchesDate;
@@ -282,7 +304,9 @@ const getStatusBadge = (status: string) => {
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-beveren-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600 dark:text-gray-300">Loading invoices...</p>
+          <p className="mt-4 text-gray-600 dark:text-gray-300">
+            {isHospitalPharmacy ? "Loading dispense history..." : "Loading invoices..."}
+          </p>
         </div>
       </div>
     );
@@ -293,7 +317,9 @@ const getStatusBadge = (status: string) => {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-lg max-w-md">
-          <h3 className="text-lg font-medium text-red-800 dark:text-red-200">Error loading invoices</h3>
+          <h3 className="text-lg font-medium text-red-800 dark:text-red-200">
+            {isHospitalPharmacy ? "Error loading dispense history" : "Error loading invoices"}
+          </h3>
            {/* @ts-expect-error just ignore */}
           <p className="mt-2 text-sm text-red-700 dark:text-red-300">{error.message}</p>
           <button
@@ -315,7 +341,7 @@ const getStatusBadge = (status: string) => {
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
           <input
             type="text"
-            placeholder="Search invoices..."
+            placeholder={isHospitalPharmacy ? "Search sales orders..." : "Search invoices..."}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -356,6 +382,7 @@ const getStatusBadge = (status: string) => {
         {!isAdminUser && (
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Showing only your transactions</p>
         )}
+        {!isHospitalPharmacy && (
         <select
           value={paymentFilter}
           onChange={(e) => setPaymentFilter(e.target.value)}
@@ -368,6 +395,7 @@ const getStatusBadge = (status: string) => {
             </option>
           ))}
         </select>
+        )}
       </div>
         {hasMore && (
           <div className="mt-3 text-center">
@@ -380,11 +408,13 @@ const getStatusBadge = (status: string) => {
   );
 
   const renderSummaryCards = () => (
-    <div className="w-full max-w-none grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+    <div className={`w-full max-w-none grid grid-cols-1 ${isHospitalPharmacy ? "md:grid-cols-2" : "md:grid-cols-4"} gap-6 mb-6`}>
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm text-gray-600 dark:text-gray-400">Total Invoices</p>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {isHospitalPharmacy ? "Total Dispenses" : "Total Invoices"}
+            </p>
             <p className="text-2xl font-bold text-gray-900 dark:text-white">{filteredInvoices.length}</p>
             {hasMore && (
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
@@ -406,6 +436,8 @@ const getStatusBadge = (status: string) => {
           <DollarSign className="w-8 h-8 text-orange-600" />
         </div>
       </div>
+      {!isHospitalPharmacy && (
+      <>
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">
           <div>
@@ -438,6 +470,8 @@ const getStatusBadge = (status: string) => {
           <AlertTriangle className="w-8 h-8 text-orange-600" />
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 
@@ -445,8 +479,11 @@ const getStatusBadge = (status: string) => {
     <div className="w-full max-w-none bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
       <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-          {activeTab === "all" ? "All Invoices" : tabs.find(t => t.id === activeTab)?.name} ({filteredInvoices.length})
+          {isHospitalPharmacy
+            ? `Dispensed Medicine (${filteredInvoices.length})`
+            : `${activeTab === "all" ? "All Invoices" : tabs.find(t => t.id === activeTab)?.name} (${filteredInvoices.length})`}
         </h3>
+        {!isHospitalPharmacy && (
         <div className="flex items-center space-x-2 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
           <button
             onClick={() => setViewMode("list")}
@@ -469,6 +506,7 @@ const getStatusBadge = (status: string) => {
             <Grid3X3 className="w-4 h-4" />
           </button>
         </div>
+        )}
       </div>
 
       {viewMode === "list" ? (
@@ -477,31 +515,35 @@ const getStatusBadge = (status: string) => {
             <thead className="bg-gray-50 dark:bg-gray-700">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Invoice
+                  {isHospitalPharmacy ? "Sales Order" : "Invoice"}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Customer
+                  {party.singular}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Cashier
                 </th>
+                {!isHospitalPharmacy && (
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Payment
                 </th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Amount
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Status
                 </th>
-                {posDetails?.is_zatca_enabled && (
+                {posDetails?.is_zatca_enabled && !isHospitalPharmacy && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     Zatca Status
                   </th>
                 )}
+                {!isHospitalPharmacy && (
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Actions
                 </th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
@@ -522,9 +564,11 @@ const getStatusBadge = (status: string) => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                     {invoice.cashier}
                   </td>
+                  {!isHospitalPharmacy && (
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className="text-sm text-gray-900 dark:text-white">{invoice.paymentMethod}</span>
                   </td>
+                  )}
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900 dark:text-white">
                       {formatCurrency(invoice.totalAmount, invoice.currency)}
@@ -538,12 +582,13 @@ const getStatusBadge = (status: string) => {
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={getStatusBadge(invoice.status)}>{invoice.status}</span>
                   </td>
-                  {posDetails?.is_zatca_enabled && (
+                  {posDetails?.is_zatca_enabled && !isHospitalPharmacy && (
                     <td className="px-6 py-4 whitespace-nowrap">
                                   {/* @ts-expect-error just ignore */}
                       <span className={getStatusBadge(invoice.custom_zatca_submit_status)}>{invoice.custom_zatca_submit_status}</span>
                     </td>
                   )}
+                  {!isHospitalPharmacy && (
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="flex space-x-2">
                       <button
@@ -585,6 +630,7 @@ const getStatusBadge = (status: string) => {
                       )}
                     </div>
                   </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -603,7 +649,7 @@ const getStatusBadge = (status: string) => {
               </div>
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-600 dark:text-gray-400">Customer:</span>
+                  <span className="text-gray-600 dark:text-gray-400">{party.singular}:</span>
                   <span className="text-gray-900 dark:text-white">{invoice.customer}</span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -620,6 +666,8 @@ const getStatusBadge = (status: string) => {
                 </div>
               </div>
               <div className="mt-4 flex space-x-2">
+                {!isHospitalPharmacy && (
+                <>
                 <button
                   onClick={() => handleViewInvoice(invoice)}
                   className="flex-1 text-xs px-3 py-2 bg-beveren-600 text-white rounded hover:bg-beveren-700 transition-colors"
@@ -642,6 +690,8 @@ const getStatusBadge = (status: string) => {
                   >
                     Return
                   </button>
+                )}
+                </>
                 )}
               </div>
             </div>
@@ -678,8 +728,8 @@ const getStatusBadge = (status: string) => {
         <div className="text-center mt-8 py-4">
           <p className="text-gray-600 dark:text-gray-400">
             {filteredInvoices.length > 0
-              ? `Showing ${filteredInvoices.length} invoice${filteredInvoices.length !== 1 ? 's' : ''} (${totalLoaded} total loaded)`
-              : `All ${totalCount} invoices loaded`
+              ? `Showing ${filteredInvoices.length} ${isHospitalPharmacy ? "dispense" : "invoice"}${filteredInvoices.length !== 1 ? 's' : ''} (${totalLoaded} total loaded)`
+              : `All ${totalCount} ${isHospitalPharmacy ? "dispenses" : "invoices"} loaded`
             }
           </p>
         </div>
@@ -688,6 +738,7 @@ const getStatusBadge = (status: string) => {
   );
 
   const handleViewInvoice = (invoice: SalesInvoice) => {
+    if (invoice.isPosDispense) return;
     navigate(`/invoice/${invoice.id}`);
   };
 
@@ -938,7 +989,10 @@ const getStatusBadge = (status: string) => {
         <div className="sticky top-0 z-20 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
           <div className="px-4 py-3">
             <div className="flex items-center justify-between">
-              <h1 className="text-lg font-bold text-gray-900 dark:text-white">Invoice History</h1>
+              <h1 className="text-lg font-bold text-gray-900 dark:text-white">
+                {isHospitalPharmacy ? "Dispense History" : "Invoice History"}
+              </h1>
+              {!isHospitalPharmacy && (
               <div className="flex items-center space-x-2">
                                   <button
                     onClick={handleMultiReturnClick}
@@ -955,6 +1009,7 @@ const getStatusBadge = (status: string) => {
                   <span>Export</span>
                 </button>
               </div>
+              )}
             </div>
           </div>
         </div>
@@ -1008,7 +1063,7 @@ const getStatusBadge = (status: string) => {
             <div className="bg-white dark:bg-gray-800 rounded-xl w-full max-w-md max-h-[90vh] flex flex-col">
               <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Select Customer</h2>
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Select {party.singular}</h2>
                   <button
                     onClick={handleCloseCustomerSelection}
                     className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
@@ -1019,7 +1074,7 @@ const getStatusBadge = (status: string) => {
               </div>
               <div className="p-6 flex-1 overflow-hidden flex flex-col">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                  Choose a customer to process multi-invoice returns
+                  Choose a {party.lower} to process multi-invoice returns
                 </p>
 
                 {/* Search Bar */}
@@ -1027,7 +1082,7 @@ const getStatusBadge = (status: string) => {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
                   <input
                     type="text"
-                    placeholder="Search customers by name or ID..."
+                    placeholder={`Search ${party.plural.toLowerCase()} by name or ID...`}
                     value={customerSearchQuery}
                     onChange={(e) => setCustomerSearchQuery(e.target.value)}
                     className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -1045,7 +1100,7 @@ const getStatusBadge = (status: string) => {
                         className="w-full text-left p-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                       >
                         <div className="font-medium text-gray-900 dark:text-white">
-                          {customer.customer_name || customer.name || 'Unknown Customer'}
+                          {customer.customer_name || customer.name || `Unknown ${party.singular}`}
                         </div>
                         <div className="text-sm text-gray-500 dark:text-gray-400">
                           {customer.name || customer.customer_name || 'No ID'}
@@ -1054,11 +1109,11 @@ const getStatusBadge = (status: string) => {
                     ))
                   ) : customerSearchQuery.trim() ? (
                     <div className="text-center py-8">
-                      <div className="text-gray-500 dark:text-gray-400">No customers found matching "{customerSearchQuery}"</div>
+                      <div className="text-gray-500 dark:text-gray-400">No {party.plural.toLowerCase()} found matching "{customerSearchQuery}"</div>
                     </div>
                   ) : (
                     <div className="text-center py-8">
-                      <div className="text-gray-500 dark:text-gray-400">No customers found</div>
+                      <div className="text-gray-500 dark:text-gray-400">No {party.plural.toLowerCase()} found</div>
                     </div>
                   )}
                 </div>
@@ -1068,8 +1123,8 @@ const getStatusBadge = (status: string) => {
                   <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
                     <div className="text-xs text-gray-500 dark:text-gray-400 text-center">
                       {customerSearchQuery.trim()
-                        ? `${filteredCustomers.length} of ${customers?.length || 0} customers`
-                        : `${customers?.length || 0} customers total`
+                        ? `${filteredCustomers.length} of ${customers?.length || 0} ${party.plural.toLowerCase()}`
+                        : `${customers?.length || 0} ${party.plural.toLowerCase()} total`
                       }
                     </div>
                   </div>
@@ -1108,8 +1163,11 @@ const getStatusBadge = (status: string) => {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-4">
 
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Invoice History</h1>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+                  {isHospitalPharmacy ? "Dispense History" : "Invoice History"}
+                </h1>
               </div>
+              {!isHospitalPharmacy && (
               <div className="flex items-center space-x-3">
                 <button
                   onClick={handleMultiReturnClick}
@@ -1126,6 +1184,7 @@ const getStatusBadge = (status: string) => {
                   <span>Export</span>
                 </button>
               </div>
+              )}
             </div>
           </div>
         </div>
@@ -1183,7 +1242,7 @@ const getStatusBadge = (status: string) => {
             <div className="bg-white dark:bg-gray-800 rounded-xl w-full max-w-md max-h-[90vh] flex flex-col">
               <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Select Customer</h2>
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Select {party.singular}</h2>
                   <button
                     onClick={handleCloseCustomerSelection}
                     className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
@@ -1194,7 +1253,7 @@ const getStatusBadge = (status: string) => {
               </div>
               <div className="p-6 flex-1 overflow-hidden flex flex-col">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                  Choose a customer to process multi-invoice returns
+                  Choose a {party.lower} to process multi-invoice returns
                 </p>
 
                 {/* Search Bar */}
@@ -1202,7 +1261,7 @@ const getStatusBadge = (status: string) => {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
                   <input
                     type="text"
-                    placeholder="Search customers by name or ID..."
+                    placeholder={`Search ${party.plural.toLowerCase()} by name or ID...`}
                     value={customerSearchQuery}
                     onChange={(e) => setCustomerSearchQuery(e.target.value)}
                     className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -1219,7 +1278,7 @@ const getStatusBadge = (status: string) => {
                         className="w-full text-left p-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                       >
                         <div className="font-medium text-gray-900 dark:text-white">
-                          {customer.customer_name || customer.name || 'Unknown Customer'}
+                          {customer.customer_name || customer.name || `Unknown ${party.singular}`}
                         </div>
                         <div className="text-sm text-gray-500 dark:text-gray-400">
                           {customer.name || customer.customer_name || 'No ID'}
@@ -1228,11 +1287,11 @@ const getStatusBadge = (status: string) => {
                     ))
                   ) : customerSearchQuery.trim() ? (
                     <div className="text-center py-8">
-                      <div className="text-gray-500 dark:text-gray-400">No customers found matching "{customerSearchQuery}"</div>
+                      <div className="text-gray-500 dark:text-gray-400">No {party.plural.toLowerCase()} found matching "{customerSearchQuery}"</div>
                     </div>
                   ) : (
                     <div className="text-center py-8">
-                      <div className="text-gray-500 dark:text-gray-400">No customers found</div>
+                      <div className="text-gray-500 dark:text-gray-400">No {party.plural.toLowerCase()} found</div>
                     </div>
                   )}
                 </div>
@@ -1242,8 +1301,8 @@ const getStatusBadge = (status: string) => {
                   <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
                     <div className="text-xs text-gray-500 dark:text-gray-400 text-center">
                       {customerSearchQuery.trim()
-                        ? `${filteredCustomers.length} of ${customers?.length || 0} customers`
-                        : `${customers?.length || 0} customers total`
+                        ? `${filteredCustomers.length} of ${customers?.length || 0} ${party.plural.toLowerCase()}`
+                        : `${customers?.length || 0} ${party.plural.toLowerCase()} total`
                       }
                     </div>
                   </div>

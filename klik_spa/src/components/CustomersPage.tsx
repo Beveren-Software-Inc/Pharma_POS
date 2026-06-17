@@ -18,10 +18,17 @@ import type { Customer } from "../types/customer"
 
 import BottomNavigation from "./BottomNavigation"
 import { useMediaQuery } from "../hooks/useMediaQuery"
+import { usePOSDetails } from "../hooks/usePOSProfile"
+import { getPartyLabels } from "../utils/partyLabels"
 
 export default function CustomersPage() {
   const navigate = useNavigate()
   const isMobile = useMediaQuery("(max-width: 1024px)")
+  const { posDetails } = usePOSDetails()
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1"
+  const party = getPartyLabels(isHospitalPharmacy)
   const [searchQuery, setSearchQuery] = useState("")
   const [showAddModal, setShowAddModal] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
@@ -79,7 +86,7 @@ export default function CustomersPage() {
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-beveren-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600 dark:text-gray-300">Loading customers...</p>
+          <p className="mt-4 text-gray-600 dark:text-gray-300">Loading {party.plural.toLowerCase()}...</p>
         </div>
       </div>
     )
@@ -90,7 +97,7 @@ export default function CustomersPage() {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-lg max-w-md">
-          <h3 className="text-lg font-medium text-red-800 dark:text-red-200">Error loading customers</h3>
+          <h3 className="text-lg font-medium text-red-800 dark:text-red-200">Error loading {party.plural.toLowerCase()}</h3>
           <p className="mt-2 text-sm text-red-700 dark:text-red-300">{error.message}</p>
           <button
             onClick={() => window.location.reload()}
@@ -197,7 +204,7 @@ export default function CustomersPage() {
         <div className="sticky top-0 z-20 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
           <div className="px-4 py-3">
             <div className="flex items-center justify-between">
-              <h1 className="text-lg font-bold text-gray-900 dark:text-white">Customers</h1>
+              <h1 className="text-lg font-bold text-gray-900 dark:text-white">{party.plural}</h1>
               <button
                 onClick={() => setShowAddModal(true)}
                 className="bg-beveren-600 text-white px-4 py-2 rounded-lg hover:bg-beveren-700 transition-colors flex items-center space-x-2 text-sm"
@@ -218,7 +225,7 @@ export default function CustomersPage() {
                 <div className="flex items-center">
                   <Users className="text-orange-500" size={24} />
                   <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Customers</p>
+                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{party.totalLabel}</p>
                     <p className="text-2xl font-semibold text-gray-900 dark:text-white">{customers.length} of {globalTotals?.total_customers ?? totalCount ?? customers.length}</p>
                   </div>
                 </div>
@@ -245,7 +252,7 @@ export default function CustomersPage() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
                   <input
                     type="text"
-                    placeholder="Search customers... (Press Enter to add new customer)"
+                    placeholder={`Search ${party.plural.toLowerCase()}... (Press Enter to add new ${party.lower})`}
                     value={searchQuery}
                     onChange={handleSearchInput}
                     onKeyPress={handleSearchKeyPress}
@@ -269,7 +276,7 @@ export default function CustomersPage() {
                   <thead className="bg-gray-50 dark:bg-gray-700">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Customer
+                        {party.singular}
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Contact
@@ -380,11 +387,11 @@ export default function CustomersPage() {
               {filteredCustomers.length === 0 && (
                 <div className="text-center py-12">
                   <Users className="mx-auto h-12 w-12 text-gray-400" />
-                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-white">No customers found</h3>
+                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-white">No {party.plural.toLowerCase()} found</h3>
                   <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                     {searchQuery
                       ? "Try adjusting your search criteria."
-                      : "Get started by adding your first customer."}
+                      : `Get started by adding your first ${party.lower}.`}
                   </p>
                 </div>
               )}
@@ -447,13 +454,13 @@ export default function CustomersPage() {
       <div className="fixed top-0 left-20 right-0 z-50 bg-beveren-50 dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
         <div className="px-4 sm:px-6 py-4">
           <div className="flex items-center justify-between">
-            <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">Customers</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">{party.plural}</h1>
             <button
               onClick={() => setShowAddModal(true)}
               className="bg-beveren-600 text-white px-6 py-3 rounded-lg hover:bg-beveren-700 transition-colors flex items-center space-x-2"
             >
               <Plus size={20} />
-              <span>Add Customer</span>
+              <span>{party.addNew}</span>
             </button>
           </div>
         </div>
@@ -469,7 +476,7 @@ export default function CustomersPage() {
                 <div className="flex items-center">
                   <Users className="text-orange-500" size={24} />
                   <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Customers</p>
+                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{party.totalLabel}</p>
                     <p className="text-2xl font-semibold text-gray-900 dark:text-white">{customers.length} of {totalCount || customers.length}</p>
                   </div>
                 </div>
@@ -496,7 +503,7 @@ export default function CustomersPage() {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
                 <input
                   type="text"
-                  placeholder="Search customers... (Press Enter to add new customer)"
+                  placeholder={`Search ${party.plural.toLowerCase()}... (Press Enter to add new ${party.lower})`}
                   value={searchQuery}
                   onChange={handleSearchInput}
                   onKeyPress={handleSearchKeyPress}
@@ -528,7 +535,7 @@ export default function CustomersPage() {
                 <thead className="bg-gray-50 dark:bg-gray-700">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      Customer
+                      {party.singular}
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Contact

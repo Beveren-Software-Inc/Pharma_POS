@@ -35,6 +35,7 @@ import { toast } from "react-toastify";
 import { usePaymentModes } from "../hooks/usePaymentModes";
 import { useSalesTaxCharges } from "../hooks/useSalesTaxCharges";
 import { usePOSDetails } from "../hooks/usePOSProfile";
+import { getPartyLabels } from "../utils/partyLabels";
 import { createDraftSalesInvoice } from "../services/salesInvoice";
 import { createSalesInvoice } from "../services/salesInvoice";
 import { useNavigate } from "react-router-dom";
@@ -238,6 +239,11 @@ export default function PaymentDialog({
                                 posDetails?.custom_allow_item_tax_template === true ||
                                 posDetails?.custom_allow_item_tax_template === "1";
 
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1";
+  const party = getPartyLabels(isHospitalPharmacy);
+
   const itemTaxTemplateNames = cartItems
     .map((item) => (item as { item_tax_template?: string }).item_tax_template)
     .filter(Boolean) as string[];
@@ -419,8 +425,8 @@ export default function PaymentDialog({
   // Helper function to get processed email message
   const getProcessedEmailMessage = () => {
     const parameters: Record<string, string | null> = {
-      customer_name: sharingData.name || 'Customer',
-      customer: sharingData.name || 'Customer',
+      customer_name: sharingData.name || party.singular,
+      customer: sharingData.name || party.singular,
       first_name: sharingData.name?.split(' ')[0] || '',
       last_name: sharingData.name?.split(' ').slice(1).join(' ') || '',
       address: typeof selectedCustomer?.address === 'string' ? selectedCustomer.address : JSON.stringify(selectedCustomer?.address || {}),
@@ -1171,7 +1177,7 @@ const handleAutoFillPayment = (methodId: string) => {
     referenceNo: string | null = null
   ) => {
     if (!selectedCustomer || !selectedCustomer.name) {
-      toast.error("Kindly select a customer");
+      toast.error(`Kindly select a ${party.lower}`);
       return;
     }
     // Allow invoice completion with partial/zero payment only when
@@ -1553,7 +1559,7 @@ const handleAutoFillPayment = (methodId: string) => {
 
   const handleHoldOrder = async () => {
     if (!selectedCustomer) {
-      toast.error("Kindly select a customer");
+      toast.error(`Kindly select a ${party.lower}`);
       return;
     }
 
@@ -2224,7 +2230,7 @@ const handleAutoFillPayment = (methodId: string) => {
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        Customer Name
+                        {party.nameLabel}
                       </label>
                       <input
                         type="text"
@@ -2236,7 +2242,7 @@ const handleAutoFillPayment = (methodId: string) => {
                           }))
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                        placeholder="Customer name"
+                        placeholder={party.namePlaceholder}
                       />
                     </div>
                     <div>
@@ -2365,7 +2371,7 @@ const handleAutoFillPayment = (methodId: string) => {
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        Customer Name
+                        {party.nameLabel}
                       </label>
                       <input
                         type="text"
@@ -2377,7 +2383,7 @@ const handleAutoFillPayment = (methodId: string) => {
                           }))
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                        placeholder="Customer name"
+                        placeholder={party.namePlaceholder}
                       />
                     </div>
                     <div>
@@ -2502,7 +2508,7 @@ const handleAutoFillPayment = (methodId: string) => {
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        Customer Name
+                        {party.nameLabel}
                       </label>
                       <input
                         type="text"
@@ -2514,7 +2520,7 @@ const handleAutoFillPayment = (methodId: string) => {
                           }))
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                        placeholder="Customer name"
+                        placeholder={party.namePlaceholder}
                       />
                     </div>
                     <div>
@@ -2540,7 +2546,7 @@ const handleAutoFillPayment = (methodId: string) => {
                       </label>
                       <div className="bg-teal-50 dark:bg-teal-900/20 rounded-lg p-4 border border-teal-200 dark:border-teal-800">
                         <div className="text-sm text-gray-900 dark:text-white">
-                          <p>Hi {sharingData.name || "Customer"}!</p>
+                          <p>Hi {sharingData.name || party.singular}!</p>
                           <p className="mt-1">
                             Thank you for your purchase at KLiK PoS.
                           </p>
@@ -2987,7 +2993,7 @@ const handleAutoFillPayment = (methodId: string) => {
                           </div>
                           <div className="flex justify-between">
                             <span className="text-gray-600 dark:text-gray-400">
-                              Customer:
+                              {party.singular}:
                             </span>
                             <span className="font-medium text-gray-900 dark:text-white">
                               {externalInvoiceData?.customer ||

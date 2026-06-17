@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type { SalesInvoice, SalesInvoiceItem } from "../../types";
 
-export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter: boolean = false, cashierName?: string) {
+export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter: boolean = false, cashierName?: string, enabled = true) {
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -27,6 +27,8 @@ export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter
   }, [searchTerm]);
 
   const fetchInvoices = useCallback(async (page = 0, append = false) => {
+    if (!enabled) return;
+
     if (append) {
       setIsLoadingMore(true);
     } else {
@@ -160,33 +162,40 @@ export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [debouncedSearchTerm, skipOpeningEntryFilter, cashierName]);
+  }, [debouncedSearchTerm, skipOpeningEntryFilter, cashierName, enabled]);
 
   const loadMore = useCallback(() => {
+    if (!enabled) return;
     if (!isLoadingMore && hasMore) {
       fetchInvoices(currentPage + 1, true);
     }
-  }, [currentPage, isLoadingMore, hasMore, fetchInvoices]);
+  }, [currentPage, isLoadingMore, hasMore, fetchInvoices, enabled]);
 
   const refetch = useCallback(() => {
+    if (!enabled) return;
     setCurrentPage(0);
     setTotalLoaded(0);
     setHasMore(true);
     fetchInvoices(0, false);
-  }, [fetchInvoices]);
+  }, [fetchInvoices, enabled]);
 
   // Initial load and refetch when debounced search term changes
   useEffect(() => {
+    if (!enabled) {
+      setIsLoading(false);
+      return;
+    }
     setCurrentPage(0);
     setTotalLoaded(0);
     setHasMore(true);
     fetchInvoices(0, false);
-  }, [debouncedSearchTerm, fetchInvoices]);
+  }, [debouncedSearchTerm, fetchInvoices, enabled]);
 
   // Auto-load all invoices if total count is reasonable (for better client-side filtering)
   // This helps when client-side filtering reduces the visible count significantly
   // Auto-loads up to 10 pages (1000 invoices) to ensure users see all their filtered invoices
   useEffect(() => {
+    if (!enabled) return;
     if (!isLoading && !isLoadingMore && totalCount > 0 && totalCount <= 1000 && hasMore) {
       const remainingPages = Math.ceil((totalCount - totalLoaded) / LIMIT);
       if (remainingPages > 0 && remainingPages <= 10) {
@@ -200,7 +209,7 @@ export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter
         loadAllPages();
       }
     }
-  }, [totalCount, totalLoaded, hasMore, isLoading, isLoadingMore, currentPage, fetchInvoices]);
+  }, [totalCount, totalLoaded, hasMore, isLoading, isLoadingMore, currentPage, fetchInvoices, enabled]);
 
   return {
     invoices,

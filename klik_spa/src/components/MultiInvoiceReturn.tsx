@@ -27,6 +27,7 @@ interface InvoiceWithPaidAmount extends InvoiceForReturn {
 import { formatCurrency, getCurrencySymbol } from "../utils/currency";
 import { useCustomers } from "../hooks/useCustomers";
 import { usePOSDetails } from "../hooks/usePOSProfile";
+import { getPartyLabels } from "../utils/partyLabels";
 import { usePaymentModes } from "../hooks/usePaymentModes";
 
 interface MultiInvoiceReturnProps {
@@ -64,6 +65,10 @@ export default function MultiInvoiceReturn({
   // Use the customers hook with search to fetch from server when searching
   const { customers: searchableCustomers, isLoading: customersLoading } = useCustomers(customerSearchQuery);
   const { posDetails } = usePOSDetails();
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1";
+  const party = getPartyLabels(isHospitalPharmacy);
   const { modes: paymentModes } = usePaymentModes(typeof posDetails?.name === 'string' ? posDetails.name : '');
   const currency = posDetails?.currency || 'USD';
   const currencySymbol = getCurrencySymbol(currency);
@@ -507,7 +512,7 @@ export default function MultiInvoiceReturn({
                   Multi-Invoice Return
                 </h2>
                 <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">
-                  Customer: {selectedCustomer || 'Not selected'}
+                  {party.singular}: {selectedCustomer || 'Not selected'}
                 </p>
               </div>
             </div>
@@ -530,7 +535,7 @@ export default function MultiInvoiceReturn({
                 }`}>
                   1
                 </div>
-                <span className="text-xs sm:text-sm font-medium hidden sm:inline">Select Customer</span>
+                <span className="text-xs sm:text-sm font-medium hidden sm:inline">Select {party.singular}</span>
               </div>
               <div className="w-4 sm:w-8 h-1 bg-gray-300 dark:bg-gray-600"></div>
                 </>
@@ -575,10 +580,10 @@ export default function MultiInvoiceReturn({
           <div className="flex-1 flex flex-col overflow-y-auto sm:overflow-visible px-4 sm:px-6 py-4 bg-gray-50 dark:bg-gray-700">
             <div className="mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                Step 1: Select Customer
+                Step 1: Select {party.singular}
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Choose a customer to process multi-invoice returns
+                Choose a {party.lower} to process multi-invoice returns
               </p>
             </div>
 
@@ -588,7 +593,7 @@ export default function MultiInvoiceReturn({
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
                 <input
                   type="text"
-                  placeholder="Search customers by name or ID..."
+                  placeholder={`Search ${party.plural.toLowerCase()} by name or ID...`}
                   value={customerSearchQuery}
                   onChange={(e) => setCustomerSearchQuery(e.target.value)}
                   className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
@@ -601,7 +606,7 @@ export default function MultiInvoiceReturn({
               <div className="space-y-2 flex-1 overflow-y-auto max-h-60 sm:max-h-none">
                 {customersLoading ? (
                   <div className="text-center py-4">
-                    <div className="text-gray-500 dark:text-gray-400">Loading customers...</div>
+                    <div className="text-gray-500 dark:text-gray-400">Loading {party.plural.toLowerCase()}...</div>
                   </div>
                 ) : searchableCustomers && searchableCustomers.length > 0 ? (
                   searchableCustomers
@@ -637,7 +642,7 @@ export default function MultiInvoiceReturn({
                         className="w-full text-left p-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                       >
                         <div className="font-medium text-gray-900 dark:text-white">
-                          {customer.name || 'Unknown Customer'}
+                          {customer.name || `Unknown ${party.singular}`}
                         </div>
                         <div className="text-sm text-gray-500 dark:text-gray-400">
                           {customer.id || 'No ID'}
@@ -646,11 +651,11 @@ export default function MultiInvoiceReturn({
                     ))
                 ) : customerSearchQuery.trim() ? (
                   <div className="text-center py-8">
-                    <div className="text-gray-500 dark:text-gray-400">No customers found matching "{customerSearchQuery}"</div>
+                    <div className="text-gray-500 dark:text-gray-400">No {party.plural.toLowerCase()} found matching "{customerSearchQuery}"</div>
                   </div>
                 ) : (
                   <div className="text-center py-8">
-                    <div className="text-gray-500 dark:text-gray-400">No customers found</div>
+                    <div className="text-gray-500 dark:text-gray-400">No {party.plural.toLowerCase()} found</div>
                   </div>
                 )}
               </div>
@@ -660,8 +665,8 @@ export default function MultiInvoiceReturn({
                 <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
                   <div className="text-xs text-gray-500 dark:text-gray-400 text-center">
                     {customerSearchQuery.trim()
-                      ? `${searchableCustomers.length} customers found`
-                      : `${searchableCustomers.length} customers total`
+                      ? `${searchableCustomers.length} ${party.plural.toLowerCase()} found`
+                      : `${searchableCustomers.length} ${party.plural.toLowerCase()} total`
                     }
                   </div>
                 </div>
@@ -678,7 +683,7 @@ export default function MultiInvoiceReturn({
                 Step 1: Select Items to Return
               </h3>
               <p className="hidden sm:block text-sm text-gray-600 dark:text-gray-400">
-                Choose which items you want to return from customer invoices
+                Choose which items you want to return from {party.lower} invoices
               </p>
             </div>
 
@@ -912,7 +917,7 @@ export default function MultiInvoiceReturn({
                 <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                 <h4 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No Items Found</h4>
                 <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  No items found in customer invoices from the last {daysBack} days.
+                  No items found in {party.lower} invoices from the last {daysBack} days.
                 </p>
                 <button
                   onClick={loadAvailableItems}
