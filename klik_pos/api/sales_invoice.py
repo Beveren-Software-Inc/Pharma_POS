@@ -1110,6 +1110,7 @@ def build_sales_invoice_doc(
 	pos_profile = _get_active_pos_profile()
 	_set_pos_profile_fields(doc, pos_profile, customer, business_type)
 
+	items = _normalize_pos_items_for_dispensing(items, pos_profile)
 	_validate_and_autofetch_batch_and_serial(items, pos_profile)
 	# Set additional remark on invoice if field exists
 	if additional_remark and frappe.db.has_column("Sales Invoice", "custom_remark"):
@@ -1145,6 +1146,61 @@ def build_sales_invoice_doc(
 	return doc
 
 
+def _pos_item_row_for_lot_validation(item, item_code, lot, qty):
+	"""Build a pseudo Sales Invoice Item row for validate_dispensing_lot_for_sale."""
+	uom = item.get("uom") or lot.stock_uom or frappe.db.get_value("Item", item_code, "stock_uom")
+	conversion_factor = 1.0
+	stock_uom = lot.stock_uom or frappe.db.get_value("Item", item_code, "stock_uom")
+	if uom and stock_uom and uom != stock_uom:
+		conversion_factor = frappe.db.get_value(
+			"UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor"
+		) or 1.0
+
+	return frappe._dict(
+		item_code=item_code,
+		uom=uom,
+		qty=qty,
+		stock_qty=qty * flt(conversion_factor),
+	)
+
+
+def _validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot_name=None):
+	"""
+	Validate dispensing lot sale from POS cart line.
+	Multiple lots are stored on custom_dispensing_lot (Long Text), one pack per lot.
+	"""
+	from beveren_health.beveren_health.customize.dispensing_lot import validate_dispensing_lot_for_sale
+
+	stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
+	sell_uom = item.get("uom") or stock_uom
+	lot_names = _collect_dispensing_lot_names_for_pos_item(item)
+
+	if lot_names and sell_uom == stock_uom:
+		line_qty = flt(item.get("quantity"))
+		if line_qty and line_qty != len(lot_names):
+			frappe.throw(
+				_(
+					"Quantity {0} must match the number of dispensing lots selected ({1}) on item {2}."
+				).format(line_qty, len(lot_names), item_code)
+			)
+		for lot_name in lot_names:
+			lot = frappe.get_doc("Dispensing Lot", lot_name)
+			validate_dispensing_lot_for_sale(
+				_pos_item_row_for_lot_validation(item, item_code, lot, 1), lot
+			)
+		return
+
+	if not lot_names:
+		return
+
+	lot_name = lot_names[0]
+	lot = frappe.get_doc("Dispensing Lot", lot_name)
+	qty = flt(item.get("quantity"))
+	validate_dispensing_lot_for_sale(
+		_pos_item_row_for_lot_validation(item, item_code, lot, qty), lot
+	)
+
+
 def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 	"""
 	Validate that all batch/serial requirements are satisfied for POS items.
@@ -1178,6 +1234,36 @@ def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 
 		batch_number = item.get("batchNumber")
 		serial_number = item.get("serialNumber")
+		lot_names = _collect_dispensing_lot_names_for_pos_item(item)
+
+		from beveren_health.beveren_health.customize.dispensing_lot import item_requires_dispensing_lot
+
+		if item_requires_dispensing_lot(item_code):
+			if has_batch_no and not batch_number:
+				frappe.throw(
+					_("Batch is mandatory for Item {0}. Please select a batch before submitting.").format(
+						item_code
+					)
+				)
+			if not lot_names:
+				frappe.throw(
+					_(
+						"Dispensing Lot is mandatory for Item {0}. Please select a dispensing lot before submitting."
+					).format(item_code)
+				)
+			_validate_pos_dispensing_lot_sale(item, item_code)
+			continue
+
+		if _use_dispensing_lot_mode(pos_profile):
+			if has_batch_no and not batch_number:
+				frappe.throw(
+					_("Batch is mandatory for Item {0}. Please select a batch before submitting.").format(
+						item_code
+					)
+				)
+			if lot_names:
+				_validate_pos_dispensing_lot_sale(item, item_code)
+			continue
 
 		# Serial-number items: always require explicit selection from UI
 		if has_serial_no and not serial_number:
@@ -1352,10 +1438,9 @@ def _populate_invoice_items(doc, items, pos_profile):
 	item_data_map = _batch_fetch_item_data(item_codes)
 	_precache_item_accounts(item_codes, pos_profile.company)
 
-	# Add each item to the invoice
+	# Add each item to the invoice (one line per cart row; multiple lots go in serial_no like serials)
 	for item in items:
-		item_data = _prepare_item_data(item, item_data_map, pos_profile)
-		doc.append("items", item_data)
+		doc.append("items", _prepare_item_data(item, item_data_map, pos_profile))
 
 
 def _batch_fetch_item_data(item_codes):
@@ -1424,7 +1509,8 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 	# Add optional fields
 	_add_uom_to_item(item_data, item)
 	_add_batch_to_item(item_data, item, item_data_map.get(item_code, {}))
-	_add_serial_to_item(item_data, item)
+	_add_serial_to_item(item_data, item, pos_profile)
+	_add_dispensing_lot_to_item(item_data, item, pos_profile)
 	_add_dosage_to_item(item_data, item)
 	_add_item_tax_template_to_item(item_data, item, pos_profile)
 
@@ -1462,8 +1548,101 @@ def _add_batch_to_item(item_data, item, item_db_data):
 		item_data["batch_no"] = batch_number
 
 
-def _add_serial_to_item(item_data, item):
-	"""Add serial number if provided."""
+def _use_dispensing_lot_mode(pos_profile):
+	return bool(int(getattr(pos_profile, "custom_dispense_lot", 0) or 0))
+
+
+def _get_dispensing_lot_by_serial(serial_no):
+	if not serial_no:
+		return None
+	return frappe.db.get_value(
+		"Dispensing Lot",
+		{"serial_no": serial_no},
+		"name",
+		order_by="modified desc",
+	)
+
+
+def _resolve_dispensing_lot_name(item):
+	"""First Dispensing Lot docname on the POS line (full list goes to custom_dispensing_lot)."""
+	names = _collect_dispensing_lot_names_for_pos_item(item)
+	return names[0] if names else None
+
+
+def _normalize_pos_items_for_dispensing(items, pos_profile):
+	"""Ensure each POS line has dispensingLot set before invoice build."""
+	if not items or not _use_dispensing_lot_mode(pos_profile):
+		return items
+
+	normalized = []
+	for item in items:
+		row = dict(item)
+		lot_names = _collect_dispensing_lot_names_for_pos_item(row)
+		if lot_names:
+			row["dispensingLot"] = "\n".join(lot_names)
+			row["dispensing_lot"] = row["dispensingLot"]
+		normalized.append(row)
+	return normalized
+
+
+def _collect_dispensing_lot_names_for_pos_item(item):
+	"""Map POS line serial picks to Dispensing Lot docnames for custom_dispensing_lot."""
+	seen = set()
+	names = []
+
+	for serial in [s.strip() for s in (item.get("serialNumber") or "").split(",") if s.strip()]:
+		lot_name = _get_dispensing_lot_by_serial(serial)
+		if lot_name and lot_name not in seen:
+			names.append(lot_name)
+			seen.add(lot_name)
+
+	for key in ("dispensingLot", "dispensing_lot", "dispensingLots"):
+		raw = item.get(key)
+		if not raw:
+			continue
+		if isinstance(raw, list):
+			tokens = [str(t).strip() for t in raw if str(t).strip()]
+		else:
+			tokens = [t.strip() for t in str(raw).replace("\n", ",").split(",") if t.strip()]
+		for token in tokens:
+			if frappe.db.exists("Dispensing Lot", token):
+				if token not in seen:
+					names.append(token)
+					seen.add(token)
+			else:
+				lot_name = _get_dispensing_lot_by_serial(token)
+				if lot_name and lot_name not in seen:
+					names.append(lot_name)
+					seen.add(lot_name)
+
+	return names
+
+
+def _add_dispensing_lot_to_item(item_data, item, pos_profile):
+	"""Write all lots to Sales Invoice Item.custom_dispensing_lot (Long Text), not serial_no."""
+	if not _use_dispensing_lot_mode(pos_profile):
+		return
+
+	if not frappe.db.has_column("Sales Invoice Item", "custom_dispensing_lot"):
+		return
+
+	lot_names = _collect_dispensing_lot_names_for_pos_item(item)
+	if not lot_names:
+		return
+
+	item_data["custom_dispensing_lot"] = "\n".join(lot_names)
+	item_data["use_serial_batch_fields"] = 1
+	first_lot = lot_names[0]
+	lot_batch = frappe.db.get_value("Dispensing Lot", first_lot, "batch_no")
+	if lot_batch and not item_data.get("batch_no"):
+		item_data["batch_no"] = lot_batch
+
+
+def _add_serial_to_item(item_data, item, pos_profile=None):
+	"""Add serial number if provided (skipped when using dispensing lots)."""
+	if pos_profile and _use_dispensing_lot_mode(pos_profile):
+		return
+
 	serial_number = item.get("serialNumber")
 	if serial_number:
 		item_data["use_serial_batch_fields"] = 1

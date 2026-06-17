@@ -691,15 +691,41 @@ export default function PaymentDialog({
 
   // Auto-print when invoice is submitted and auto-print is enabled
   useEffect(() => {
-    if (invoiceSubmitted && invoiceData && print_receipt_on_order_complete) {
-      setIsAutoPrinting(true);
-      // Small delay to ensure the preview is rendered
-      setTimeout(() => {
+    if (!invoiceSubmitted || !invoiceData || !print_receipt_on_order_complete) {
+      return;
+    }
+
+    setIsAutoPrinting(true);
+    let attempts = 0;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const tryAutoPrint = () => {
+      const preview = document.querySelector(
+        ".print-preview-container .print-preview-content"
+      ) as HTMLElement | null;
+
+      if (preview?.innerHTML.trim()) {
         handlePrintInvoice(invoiceData);
         setIsAutoPrinting(false);
-      }, 500);
-    }
-  }, [invoiceSubmitted, invoiceData, print_receipt_on_order_complete]);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts >= 20) {
+        setIsAutoPrinting(false);
+        return;
+      }
+
+      timeoutId = setTimeout(tryAutoPrint, 300);
+    };
+
+    timeoutId = setTimeout(tryAutoPrint, 300);
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      setIsAutoPrinting(false);
+    };
+  }, [invoiceSubmitted, invoiceData?.name, print_receipt_on_order_complete]);
 
   // Determine if roundoff should be enabled
   const isRoundOffEnabled = () => {
@@ -1221,6 +1247,10 @@ const handleAutoFillPayment = (methodId: string) => {
           price: (item as any).discountedPrice || item.price, // Use discounted price
           batchNumber: (item as { batch_no?: string }).batch_no ?? discount?.batchNumber ?? null,
           serialNumber: (item as { serial_no?: string }).serial_no ?? discount?.serialNumber ?? null,
+          dispensingLot:
+            (item as { dispensing_lot?: string }).dispensing_lot
+            ?? (discount as { dispensingLot?: string })?.dispensingLot
+            ?? null,
           uom: item.uom || 'Nos', // Include selected UOM
           discountPercentage: discount?.discountPercentage || 0,
           discountAmount: discount?.discountAmount || 0,
@@ -1535,6 +1565,10 @@ const handleAutoFillPayment = (methodId: string) => {
           ...item,
           batchNumber: (item as { batch_no?: string }).batch_no ?? discount?.batchNumber ?? null,
           serialNumber: (item as { serial_no?: string }).serial_no ?? discount?.serialNumber ?? null,
+          dispensingLot:
+            (item as { dispensing_lot?: string }).dispensing_lot
+            ?? (discount as { dispensingLot?: string })?.dispensingLot
+            ?? null,
           dosage: discount?.dosage ?? item.dosage ?? null,
           prescriptionDosage: discount?.prescriptionDosage ?? item.prescriptionDosage ?? null,
           item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,

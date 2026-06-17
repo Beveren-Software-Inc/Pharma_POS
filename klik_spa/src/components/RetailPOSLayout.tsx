@@ -395,8 +395,14 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
 
   if (typeof result === 'object' && result.success && result.item_code) {
     const itemCode = result.item_code
-    const batchId  = result.gs1?.lotNumber    ?? (result.matched_type === 'batch'  ? result.matched_value : undefined)
-    const serialNo = result.gs1?.serialNumber ?? (result.matched_type === 'serial' ? result.matched_value : undefined)
+    const batchId  = result.gs1?.lotNumber
+      ?? result.batch_no
+      ?? (result.matched_type === 'batch' ? result.matched_value : undefined)
+    const serialNo = result.gs1?.serialNumber
+      ?? (result.matched_type === 'serial' || result.matched_type === 'dispensing_lot'
+        ? result.matched_value
+        : undefined)
+    const dispensingLot = result.dispensing_lot
 
     const currentCart = useCartStore.getState().cartItems
     const linesForItem = currentCart.filter(ci => (ci.item_code || ci.id) === itemCode)
@@ -448,7 +454,13 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
       }
       if (serialNo) {
         window.dispatchEvent(new CustomEvent('cart:setSerialForItem', {
-          detail: { itemCode, serialNo, forLastAdded: !reusingExistingLine, lineKey: targetLineKey },
+          detail: {
+            itemCode,
+            serialNo,
+            dispensingLot,
+            forLastAdded: !reusingExistingLine,
+            lineKey: targetLineKey,
+          },
         }))
       }
     }, 100) // slightly longer delay to let store settle after removeItem

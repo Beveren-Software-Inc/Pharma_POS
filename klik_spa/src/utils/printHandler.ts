@@ -15,9 +15,11 @@ export function handlePrintInvoice(invoiceData: Invoice | null) {
     return;
   }
 
-  const printElement = document.querySelector('.print-preview-container');
-  if (!printElement) {
-    toast.error("Print preview not found");
+  const printElement = document.querySelector(
+    ".print-preview-container .print-preview-content"
+  ) as HTMLElement | null;
+  if (!printElement || !printElement.innerHTML.trim()) {
+    toast.error("Print preview is still loading. Please try again in a moment.");
     return;
   }
 
@@ -36,7 +38,7 @@ export function handlePrintInvoice(invoiceData: Invoice | null) {
 
   // Create a temporary print overlay
   const printOverlay = document.createElement('div');
-  printOverlay.innerHTML = printElement.innerHTML;
+  printOverlay.innerHTML = printElement.parentElement?.innerHTML || printElement.innerHTML;
   printOverlay.style.cssText = `
     position: fixed;
     top: 0;
