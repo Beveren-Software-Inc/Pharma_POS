@@ -11,6 +11,7 @@ import {
   Building,
   Pill,
   Printer,
+  CopyPlus,
 } from "lucide-react";
 import type { CartItem, GiftCoupon } from "../../types";
 import type { Customer } from "../types/customer";
@@ -52,6 +53,7 @@ import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
 import { getCachedDraftInvoiceItems } from "../utils/draftInvoiceCache";
 import { getPartyLabels } from "../utils/partyLabels";
+import { shouldUseDuplicateCartLines } from "../utils/duplicateCartItems";
 
 
 interface OrderSummaryProps {
@@ -953,6 +955,7 @@ export default function OrderSummary({
     updateUOM,
     updatePricesForCustomer,
     addToCartWithQuantity,
+    addToCart,
     updateItemMetadata,
     generalAdditionalAmount,
     additionalRemark,
@@ -1051,6 +1054,41 @@ export default function OrderSummary({
     posDetails?.custom_dispense_lot === 1 ||
     posDetails?.custom_dispense_lot === true ||
     posDetails?.custom_dispense_lot === "1";
+
+  const handleAddDuplicateLine = useCallback(
+    async (item: CartItem) => {
+      const product = products.find((p) => p.id === item.id);
+      const has_serial_no =
+        (item as CartItem).has_serial_no ?? product?.has_serial_no;
+      const has_batch_no =
+        (item as CartItem).has_batch_no ?? product?.has_batch_no;
+      if (
+        !shouldUseDuplicateCartLines(posDetails, {
+          has_serial_no,
+          has_batch_no,
+          allowDuplicate: true,
+        })
+      ) {
+        return;
+      }
+      await addToCart({
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        price: item.price,
+        image: item.image,
+        available: item.available,
+        uom: item.uom,
+        item_code: item.item_code || item.id,
+        item_tax_template: (item as CartItem & { item_tax_template?: string })
+          .item_tax_template,
+        has_serial_no,
+        has_batch_no,
+        allowDuplicate: true,
+      });
+    },
+    [addToCart, products, posDetails]
+  );
 
   const getSoldLineItems = useCallback(() => {
     return cartItems
@@ -3615,6 +3653,16 @@ const handleSetSerial = (event: CustomEvent) => {
             cartItems.map((item) => {
               const lineKey = getLineKey(item);
               const isServiceItem = !!(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service;
+              const catalogItem = products.find((p) => p.id === item.id);
+              const duplicateLineEnabled =
+                !isServiceItem &&
+                shouldUseDuplicateCartLines(posDetails, {
+                  has_serial_no:
+                    (item as CartItem).has_serial_no ?? catalogItem?.has_serial_no,
+                  has_batch_no:
+                    (item as CartItem).has_batch_no ?? catalogItem?.has_batch_no,
+                  allowDuplicate: (item as CartItem).allowDuplicate,
+                });
               const showAddService = isHospitalPharmacy && !isServiceItem;
               const row5FieldCount = [
                 isItemTaxTemplateMode,
@@ -3810,6 +3858,24 @@ const handleSetSerial = (event: CustomEvent) => {
                         </p>
                       )}
                     </div>
+
+                    {duplicateLineEnabled && (
+                      <div className="flex-shrink-0 ml-1">
+                        <button
+                          type="button"
+                          onClick={() => void handleAddDuplicateLine(item)}
+                          className={`${
+                            isMobile ? "w-8 h-8" : "w-6 h-6"
+                          } rounded-full bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-colors`}
+                          title="Add line (separate batch/serial)"
+                        >
+                          <CopyPlus
+                            size={isMobile ? 16 : 12}
+                            className="text-emerald-600 dark:text-emerald-400"
+                          />
+                        </button>
+                      </div>
+                    )}
 
                     {/* Remove Button */}
                     <div className="flex-shrink-0 ml-2">
