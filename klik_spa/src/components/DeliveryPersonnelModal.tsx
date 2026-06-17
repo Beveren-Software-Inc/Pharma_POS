@@ -514,9 +514,16 @@ interface DeliveryPersonnelModalProps {
     distanceKm?: number | null;
     deliveryFee?: number | null;
     amountWithVAT?: number | null;
+    remarks?: string | null;
   }) => void;
   /** Current order grand total (before delivery). Used for amount-threshold check: if total >= threshold, delivery is free. */
   grandTotal?: number | null;
+  printPreview?: {
+    customerName?: string;
+    items: Array<{ name: string; qty: number; rate: number }>;
+    grandTotal?: number;
+    currencySymbol?: string;
+  };
 }
 
 type TabType = "personnel" | "channel";
@@ -526,6 +533,7 @@ export default function DeliveryPersonnelModal({
   onClose,
   onSelect,
   grandTotal,
+  printPreview,
 }: DeliveryPersonnelModalProps) {
   const { channels, loading: channelsLoading, error: channelsError } = useDeliveryChannels();
   const [activeTab, setActiveTab] = useState<TabType>("personnel");
@@ -546,6 +554,7 @@ export default function DeliveryPersonnelModal({
   const [channelReferenceNo, setChannelReferenceNo] = useState<string>("");
   const [channelSearchQuery, setChannelSearchQuery] = useState<string>("");
   const [isChannelDropdownOpen, setIsChannelDropdownOpen] = useState<boolean>(false);
+  const [remarks, setRemarks] = useState<string>("");
 
   const VAT_RATE = 0.10; // 10%
 
@@ -564,6 +573,7 @@ export default function DeliveryPersonnelModal({
       setSelectedDeliveryChannel("");
       setChannelReferenceNo("");
       setChannelSearchQuery("");
+      setRemarks("");
       
       // Reset UI state
       setIsPersonnelDropdownOpen(false);
@@ -669,7 +679,6 @@ export default function DeliveryPersonnelModal({
 
   const handleConfirm = () => {
     if (activeTab === "personnel") {
-      // Personnel tab: send personnel name, distance, delivery fee, amount with VAT
       if (selectedPersonnel) {
         onSelect({
           personnelName: selectedPersonnel || null,
@@ -680,11 +689,11 @@ export default function DeliveryPersonnelModal({
           amountWithVAT: amountWithVAT && !Number.isNaN(parseFloat(amountWithVAT))
             ? parseFloat(amountWithVAT)
             : null,
+          remarks: remarks.trim() || null,
         });
         onClose();
       }
     } else {
-      // Channel tab: send channel name and reference no only
       if (selectedDeliveryChannel) {
         onSelect({
           personnelName: null,
@@ -693,10 +702,35 @@ export default function DeliveryPersonnelModal({
           distanceKm: null,
           deliveryFee: null,
           amountWithVAT: null,
+          remarks: remarks.trim() || null,
         });
         onClose();
       }
     }
+  };
+
+  const handlePrintReceipt = () => {
+    if (!printPreview) return;
+    const symbol = printPreview.currencySymbol || "";
+    const rows = printPreview.items
+      .map((item) => `<tr><td>${item.name}</td><td>${item.qty}</td><td>${symbol}${item.rate.toFixed(3)}</td><td>${symbol}${(item.qty * item.rate).toFixed(3)}</td></tr>`)
+      .join("");
+    const win = window.open("", "_blank", "width=420,height=720");
+    if (!win) return;
+    win.document.write(`<!DOCTYPE html><html><head><title>Delivery Receipt Preview</title>
+      <style>body{font-family:Arial,sans-serif;padding:16px;font-size:12px} table{width:100%;border-collapse:collapse} td,th{border-bottom:1px solid #ddd;padding:6px 4px;text-align:left}</style>
+      </head><body>
+      <h2>Delivery Receipt (Preview)</h2>
+      <p><strong>Customer:</strong> ${printPreview.customerName || "—"}</p>
+      <p><strong>Personnel:</strong> ${personnel.find((p) => p.name === selectedPersonnel)?.delivery_personnel || selectedPersonnel || "—"}</p>
+      <p><strong>Channel:</strong> ${selectedDeliveryChannel || "—"}</p>
+      <p><strong>Reference:</strong> ${channelReferenceNo || "—"}</p>
+      <p><strong>Remarks:</strong> ${remarks || "—"}</p>
+      <table><thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>
+      <p><strong>Total:</strong> ${symbol}${(printPreview.grandTotal || 0).toFixed(3)}</p>
+      <script>window.onload=function(){window.print();}</script>
+      </body></html>`);
+    win.document.close();
   };
 
   const handlePersonnelInputChange = (value: string) => {
@@ -1007,10 +1041,31 @@ export default function DeliveryPersonnelModal({
               </div>
             </div>
           )}
+
+          <div className="mt-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Remarks</div>
+            <textarea
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              rows={2}
+              placeholder="Delivery notes or instructions..."
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+            />
+          </div>
         </div>
 
         {/* Footer - Fixed */}
-        <div className="flex-shrink-0 flex items-center justify-end gap-3 p-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex-shrink-0 flex items-center justify-between gap-3 p-4 border-t border-gray-200 dark:border-gray-700">
+          {printPreview ? (
+            <button
+              type="button"
+              onClick={handlePrintReceipt}
+              className="px-4 py-2 text-beveren-600 border border-beveren-600 rounded-lg hover:bg-beveren-50 transition-colors"
+            >
+              Print Receipt
+            </button>
+          ) : <span />}
+          <div className="flex items-center gap-3">
           <button
             onClick={onClose}
             className="px-4 py-2 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
@@ -1028,6 +1083,7 @@ export default function DeliveryPersonnelModal({
           >
             Confirm
           </button>
+          </div>
         </div>
       </div>
     </div>

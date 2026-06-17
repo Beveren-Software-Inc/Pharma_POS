@@ -158,6 +158,11 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
                     }`}>
                       {item.name}
                     </h3>
+                    <p className={`text-gray-400 dark:text-gray-500 ${isMobile ? "text-[10px] leading-tight" : "text-xs"} ${
+                      isMobile ? "break-words" : "truncate"
+                    }`}>
+                      {item.id}
+                    </p>
                     <p className={`text-gray-500 dark:text-gray-400 ${isMobile ? "text-xs leading-tight" : "text-sm"} ${
                       isMobile ? "break-words" : "truncate"
                     }`}>

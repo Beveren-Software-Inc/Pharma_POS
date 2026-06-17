@@ -1,27 +1,45 @@
 import { useCartStore } from '../stores/cartStore';
 import type { CartItem, Customer } from '../../types';
 
+export interface DraftLineDiscount {
+  discountPercentage: number;
+  discountAmount: number;
+  batchNumber: string;
+  serialNumber: string;
+  dispensingLot?: string;
+  availableQuantity: number;
+  prescriptionDosage?: string;
+  dosage?: string;
+  medicationOrder?: string;
+}
+
 interface DraftInvoiceCache {
   items: CartItem[];
   timestamp: number;
   invoiceId: string;
   customer: Customer | null;
-  originalDraftInvoiceId: string; // Track the original draft invoice to delete later
+  originalDraftInvoiceId: string;
+  lineDiscounts?: Record<string, DraftLineDiscount>;
 }
 
 const CACHE_KEY = 'draft-invoice-cache';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-export function cacheDraftInvoiceItems(invoiceId: string, items: CartItem[], customer: Customer | null): void {
+export function cacheDraftInvoiceItems(
+  invoiceId: string,
+  items: CartItem[],
+  customer: Customer | null,
+  lineDiscounts?: Record<string, DraftLineDiscount>
+): void {
   const cache: DraftInvoiceCache = {
     items,
     timestamp: Date.now(),
     invoiceId,
     customer,
-    originalDraftInvoiceId: invoiceId // Store the original draft invoice ID
+    originalDraftInvoiceId: invoiceId,
+    lineDiscounts,
   };
 
-  console.log("cacheDraftInvoiceItems - storing cache:", cache);
   localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
 }
 
@@ -34,9 +52,7 @@ export function getCachedDraftInvoiceItems(): DraftInvoiceCache | null {
     }
 
     const cache: DraftInvoiceCache = JSON.parse(cached);
-    // console.log("getCachedDraftInvoiceItems - parsed cache:", cache);
 
-    // Check if cache is expired
     const now = Date.now();
     const age = now - cache.timestamp;
 
@@ -65,12 +81,10 @@ export async function loadCachedItemsToCart(): Promise<boolean> {
 
   const { setSelectedCustomer, addToCartWithQuantity } = useCartStore.getState();
 
-  // Set customer if available
   if (cachedData.customer) {
     setSelectedCustomer(cachedData.customer);
   }
 
-  // Add cached items to cart with correct quantities
   for (const item of cachedData.items) {
     const cartItem = {
       id: item.id,
@@ -81,13 +95,22 @@ export async function loadCachedItemsToCart(): Promise<boolean> {
       available: item.available,
       uom: item.uom,
       item_code: item.id,
+      allowDuplicate: !!item.cartLineId,
+      cartLineId: item.cartLineId,
+      batch_no: item.batch_no,
+      serial_no: item.serial_no,
+      dispensing_lot: item.dispensing_lot,
     };
 
-    // Use the new method to add items with specific quantities
     await addToCartWithQuantity(cartItem, item.quantity);
   }
 
   return true;
+}
+
+export function getCachedDraftLineDiscounts(): Record<string, DraftLineDiscount> | null {
+  const cached = getCachedDraftInvoiceItems();
+  return cached?.lineDiscounts || null;
 }
 
 export function hasCachedDraftInvoiceItems(): boolean {

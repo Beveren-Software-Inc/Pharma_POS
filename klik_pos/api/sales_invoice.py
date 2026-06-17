@@ -400,14 +400,43 @@ def check_invoice_return_eligibility(invoice_id):
 		return {"can_return": False, "reason": f"Error checking eligibility: {str(e)}"}
 
 
+def _resolve_dispensing_lot_serials(lot_text):
+	"""Map stored Dispensing Lot docnames back to serial numbers for POS restore."""
+	if not lot_text:
+		return ""
+	if not frappe.db.exists("DocType", "Dispensing Lot"):
+		return str(lot_text).replace("\n", ",")
+
+	serials = []
+	seen = set()
+	tokens = [t.strip() for t in str(lot_text).replace("\n", ",").split(",") if t.strip()]
+	for token in tokens:
+		serial = None
+		if frappe.db.exists("Dispensing Lot", token):
+			serial = frappe.db.get_value("Dispensing Lot", token, "serial_no")
+		else:
+			serial = token
+		if serial and serial not in seen:
+			serials.append(serial)
+			seen.add(serial)
+	return ",".join(serials)
+
+
 def _get_invoice_items_with_returns(invoice_id, customer):
 	"""
 	Fetch invoice items and calculate returned/available quantities.
 	Includes item_group and custom_is_refrigerated_ for return validation.
 	"""
+	has_dispensing_lot_col = frappe.db.has_column("Sales Invoice Item", "custom_dispensing_lot")
+
 	# Batch fetch all items for this invoice with item_group
 	items_query = """
-		SELECT sii.item_code, sii.item_name, sii.qty, sii.rate, sii.amount, sii.description, sii.item_group
+		SELECT sii.item_code, sii.item_name, sii.qty, sii.rate, sii.amount, sii.description, sii.item_group,
+			sii.batch_no, sii.serial_no, sii.uom, sii.name as invoice_item_name
+	"""
+	if has_dispensing_lot_col:
+		items_query += ", sii.custom_dispensing_lot"
+	items_query += """
 		FROM `tabSales Invoice Item` sii
 		WHERE sii.parent = %s
 	"""
@@ -491,6 +520,18 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 
 	days_since_invoice = (today_date - invoice_date).days
 
+	def _line_extra(item_row):
+		lot_text = getattr(item_row, "custom_dispensing_lot", None) if has_dispensing_lot_col else None
+		extra = {
+			"batch_no": getattr(item_row, "batch_no", None),
+			"serial_no": getattr(item_row, "serial_no", None),
+			"uom": getattr(item_row, "uom", None),
+		}
+		if has_dispensing_lot_col:
+			extra["custom_dispensing_lot"] = lot_text
+			extra["dispensing_lot_serials"] = _resolve_dispensing_lot_serials(lot_text)
+		return extra
+
 	items = []
 	for item in items_data:
 		returned_qty_value = returned_qty_map.get(item.item_code, 0)
@@ -512,6 +553,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 					"item_group": item.item_group,
 					"is_non_returnable": True,
 					"is_refrigerated_overdue": False,
+					**_line_extra(item),
 				}
 			)
 			continue
@@ -538,6 +580,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 				"item_group": item.item_group,
 				"is_non_returnable": is_non_returnable,
 				"is_refrigerated_overdue": is_refrigerated,
+				**_line_extra(item),
 			}
 		)
 

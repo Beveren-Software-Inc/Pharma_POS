@@ -73,6 +73,7 @@ fixtures = [
 					"Sales Invoice-custom_remarks",
 					"Sales Invoice-custom_remark",
 					"Item-custom_is_additional_charges",
+					"Item-custom_is_pharmacy_service",
 					"POS Profile-custom_allow_duplicate_items_in_pos",
      "POS Profile-custom_autofetch_batchserial_",
      "Sales Invoice-custom_amount_to_be_covered",
@@ -80,6 +81,7 @@ fixtures = [
      "Sales Invoice-custom_health_insurance",
      "Sales Invoice-custom_insurance",
      "POS Profile-custom_is_hospital_pharmacy",
+     "Item-custom_is_pharmacy_service"
 				),
 			]
 		],

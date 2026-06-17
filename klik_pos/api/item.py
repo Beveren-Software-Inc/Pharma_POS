@@ -1224,6 +1224,55 @@ def get_items_with_balance_and_price(
 
 
 @frappe.whitelist(allow_guest=True)
+def get_pharmacy_service_items(search: str | None = None):
+	"""Return pharmacy service items (custom_is_pharmacy_service = 1) for hospital pharmacy POS."""
+	if not frappe.db.has_column("Item", "custom_is_pharmacy_service"):
+		return {"items": []}
+
+	pos_doc, _warehouse, price_list, _hide_unavailable = _get_pos_context()
+
+	filters = {"disabled": 0, "custom_is_pharmacy_service": 1}
+	fields = ["name", "item_name", "description", "item_group", "image", "stock_uom"]
+	items = frappe.get_all("Item", filters=filters, fields=fields, order_by="item_name asc")
+
+	if search and search.strip():
+		term = f"%{search.strip()}%"
+		items = [
+			item
+			for item in items
+			if term.lower().replace("%", "") in (item.get("item_name") or "").lower()
+			or term.lower().replace("%", "") in (item.get("name") or "").lower()
+		]
+
+	if not items:
+		return {"items": []}
+
+	item_codes = [item["name"] for item in items]
+	uom_map = {item["name"]: item.get("stock_uom", "Nos") for item in items}
+	price_map = _fetch_batch_prices(item_codes, price_list, uom_map)
+
+	item_tax_template_map = {}
+	if getattr(pos_doc, "custom_allow_item_tax_template", 0):
+		company = pos_doc.company or frappe.defaults.get_user_default("Company")
+		if company:
+			item_tax_template_map = _fetch_item_tax_templates(item_codes, company)
+
+	enriched = _build_enriched_items(
+		items,
+		{code: 999999 for code in item_codes},
+		price_map,
+		{},
+		False,
+		None,
+		item_tax_template_map,
+	)
+	for row in enriched:
+		row["is_pharmacy_service"] = 1
+
+	return {"items": enriched}
+
+
+@frappe.whitelist(allow_guest=True)
 def get_stock_updates():
 	"""Get only stock updates for all items - lightweight endpoint with early filtering."""
 	pos_doc = None

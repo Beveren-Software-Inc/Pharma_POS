@@ -60,6 +60,9 @@ export default function ClosingShiftPage() {
   const { modes, isLoading: modesLoading, error: modesError } = useAllPaymentModes()
   const { posDetails } = usePOSDetails();
 
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1";
 
   const hideExpectedAmount = posDetails?.custom_hide_expected_amount || false;
 
@@ -381,11 +384,12 @@ export default function ClosingShiftPage() {
   const handleFinalClose = async () => {
 
     try {
-      // Convert closingAmounts object to array format expected by the service
-      const closingBalanceArray = Object.entries(closingAmounts).map(([mode_of_payment, closing_amount]) => ({
-        mode_of_payment,
-        closing_amount: closing_amount || 0
-      }));
+      const closingBalanceArray = isHospitalPharmacy
+        ? []
+        : Object.entries(closingAmounts).map(([mode_of_payment, closing_amount]) => ({
+            mode_of_payment,
+            closing_amount: closing_amount || 0
+          }));
 
             // @ts-expect-error just ignore for now
       await createClosingEntry(closingBalanceArray);
@@ -415,6 +419,14 @@ export default function ClosingShiftPage() {
     }
   };
 
+  const openCloseFlow = () => {
+    if (isHospitalPharmacy) {
+      handleFinalClose();
+      return;
+    }
+    setShowCloseModal(true);
+  };
+
   // Mobile layout: full-width content and persistent bottom navigation
   if (isMobile) {
     return (
@@ -425,7 +437,7 @@ export default function ClosingShiftPage() {
             <div className="flex items-center justify-between">
               <h1 className="text-lg font-bold text-gray-900 dark:text-white">Closing Shift</h1>
               <button
-                onClick={() => setShowCloseModal(true)}
+                onClick={openCloseFlow}
                 className="flex items-center space-x-2 px-3 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors text-sm"
               >
                 <MonitorX className="w-4 h-4" />
@@ -791,7 +803,7 @@ export default function ClosingShiftPage() {
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Closing Shift</h1>
               </div>
               <button
-                onClick={() => setShowCloseModal(true)}
+                onClick={openCloseFlow}
                 className="flex items-center space-x-2 px-4 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
               >
                 <MonitorX className="w-4 h-4" />
