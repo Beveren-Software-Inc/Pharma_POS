@@ -46,6 +46,17 @@ def _medication_order_entry_to_dict(item):
 	return item_dict
 
 
+def _resolve_pharmacy_visit_type():
+	"""Prefer 'Pharmacy Visit' visit type when configured in Healthcare."""
+	for candidate in ("Pharmacy Visit", "Pharmacy"):
+		if frappe.db.exists("DocType", "Visit Type"):
+			if frappe.db.exists("Visit Type", candidate):
+				return candidate
+		# Some setups store visit_type as plain text without Visit Type master
+		return candidate
+	return "Pharmacy Visit"
+
+
 def _extract_medication_order_items(order_doc):
 	"""Read child-table medication lines from a Patient Medication Order document."""
 	order_meta = frappe.get_meta("Patient Medication Order")
@@ -266,6 +277,72 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 
 
 @frappe.whitelist()
+def get_patient_history_summary(patient: str, limit: int = 10):
+	"""
+	Patient details plus recent visits and medication orders for POS history tab.
+	"""
+	try:
+		if not patient:
+			frappe.throw("Patient is required")
+
+		try:
+			limit = max(1, min(int(limit), 25))
+		except Exception:
+			limit = 10
+
+		patient_details = {}
+		if frappe.db.exists("DocType", "Patient"):
+			patient_fields = ["name", "patient_name", "sex", "dob", "blood_group", "mobile", "email"]
+			patient_meta = frappe.get_meta("Patient")
+			available = {f.fieldname for f in patient_meta.fields}
+			fields = [f for f in patient_fields if f in available]
+			if "file_no" in available:
+				fields.append("file_no")
+			if fields:
+				patient_details = frappe.db.get_value("Patient", patient, fields, as_dict=True) or {}
+
+		visits = []
+		for doctype in ("Patient Visit", "Patient Encounter"):
+			if not frappe.db.exists("DocType", doctype):
+				continue
+			meta = frappe.get_meta(doctype)
+			fields = {f.fieldname for f in meta.fields}
+			fetch = ["name", "patient", "patient_name"]
+			date_field = None
+			for candidate in ("visit_date", "encounter_date", "posting_date", "creation"):
+				if candidate in fields:
+					date_field = candidate
+					fetch.append(candidate)
+					break
+			if "visit_type" in fields:
+				fetch.append("visit_type")
+			if "status" in fields:
+				fetch.append("status")
+			order_by = f"{date_field} desc" if date_field else "modified desc"
+			rows = frappe.get_all(
+				doctype,
+				fields=fetch,
+				filters={"patient": patient},
+				order_by=order_by,
+				limit=limit,
+			)
+			for row in rows:
+				row["doctype"] = doctype
+			visits.extend(rows)
+			break
+
+		medication_history = get_patient_medication_order_history(patient, limit=limit)
+		return {
+			"patient": patient_details or {"name": patient},
+			"visits": visits,
+			"medication_orders": medication_history,
+		}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Error fetching patient history summary")
+		frappe.throw(f"Failed to fetch patient history: {str(e)}")
+
+
+@frappe.whitelist()
 def create_patient_visit(patient: str):
 	"""
 	Create a patient visit-style document from POS.
@@ -306,7 +383,7 @@ def create_patient_visit(patient: str):
 			if default_company:
 				doc.company = default_company
 		if "visit_type" in fields:
-			doc.visit_type = "Pharmacy"
+			doc.visit_type = _resolve_pharmacy_visit_type()
 
 		doc.insert(ignore_permissions=True)
 		if hasattr(doc, "submit"):

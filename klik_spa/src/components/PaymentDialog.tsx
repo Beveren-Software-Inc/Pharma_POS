@@ -168,6 +168,7 @@ export default function PaymentDialog({
   const [isAutoPrinting, setIsAutoPrinting] = useState(false);
   const [insuranceCoveragePercent, setInsuranceCoveragePercent] = useState<number>(0);
   const [deliveryChargeWithVAT, setDeliveryChargeWithVAT] = useState<number | null>(null);
+  const [deliveryRemarks, setDeliveryRemarks] = useState<string | null>(null);
 
   const [sharingMode, setSharingMode] = useState<string | null>(
     initialSharingMode
@@ -1275,7 +1276,7 @@ const handleAutoFillPayment = (methodId: string) => {
       appliedCoupons,
       generalAdditionalAmount: generalAdditionalAmount || 0,
       // Remark from Additional Amounts modal -> Sales Invoice.custom_remark
-      additionalRemark: additionalRemark && additionalRemark.trim().length ? additionalRemark.trim() : null,
+      additionalRemark: [additionalRemark, deliveryRemarks].filter((r) => r && r.trim()).join(" | ") || null,
       businessType: posDetails?.business_type,
       deliveryPersonnel: deliveryPersonnel || null,
       deliveryVia: deliveryVia || null,
@@ -1434,6 +1435,7 @@ const handleAutoFillPayment = (methodId: string) => {
   distanceKm?: number | null;
   deliveryFee?: number | null;
   amountWithVAT?: number | null;
+  remarks?: string | null;
 }) => {
   // Called from the footer-triggered modal only; just store selection
   setSelectedDeliveryPersonnel(selection.personnelName || null);
@@ -1455,6 +1457,7 @@ const handleAutoFillPayment = (methodId: string) => {
       ? selection.amountWithVAT
       : null
   );
+  setDeliveryRemarks(selection.remarks ?? null);
   
   const hasPersonnel = !!selection.personnelName;
   const hasChannel = !!selection.deliveryVia;
@@ -1595,7 +1598,7 @@ const handleAutoFillPayment = (methodId: string) => {
       grandTotal: calculations.grandTotal,
       generalAdditionalAmount: generalAdditionalAmount || 0,
       // Remark from Additional Amounts modal -> Sales Invoice.custom_remark
-      additionalRemark: additionalRemark && additionalRemark.trim().length ? additionalRemark.trim() : null,
+      additionalRemark: [additionalRemark, deliveryRemarks].filter((r) => r && r.trim()).join(" | ") || null,
       appliedCoupons,
       status: "held",
       businessType: posDetails?.business_type,
@@ -1607,10 +1610,7 @@ const handleAutoFillPayment = (methodId: string) => {
     };
 
     try {
-      await createDraftSalesInvoice(orderData);
-      // toast.success("Order held successfully!");
-
-      // Clear draft invoice cache since order is held
+      // Delegate to parent handler (single draft invoice create)
       clearDraftInvoiceCache();
 
       onHoldOrder(orderData);
@@ -3332,6 +3332,16 @@ const handleAutoFillPayment = (methodId: string) => {
         onClose={() => setShowDeliveryPersonnelModal(false)}
         onSelect={handleDeliveryPersonnelSelect}
         grandTotal={effectiveGrandTotal}
+        printPreview={{
+          customerName: selectedCustomer?.name,
+          items: cartItems.map((item) => ({
+            name: item.name,
+            qty: item.quantity,
+            rate: item.price,
+          })),
+          grandTotal: calculations.grandTotal,
+          currencySymbol,
+        }}
       />
 
       {/* Insurance (Health Insurance) Modal */}

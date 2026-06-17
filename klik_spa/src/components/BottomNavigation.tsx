@@ -1,17 +1,22 @@
 import { Receipt, FileText, Grid3X3, BarChart3, Users } from "lucide-react"
 import { useNavigate, useLocation } from "react-router-dom"
+import { usePOSDetails } from "../hooks/usePOSProfile"
 
 export default function BottomNavigation() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { posDetails } = usePOSDetails()
 
-   const menuItems = [
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1"
+
+  const menuItems = [
     { icon: Grid3X3, path: "/pos", label: "POS" },
-     { icon: Receipt, path: "/invoice", label: "Invoice" },
-     { icon: Users, path: "/customers", label: "Customers" },
-    { icon: BarChart3, path: "/dashboard", label: "Dashboard" },
+    { icon: Receipt, path: "/invoice", label: "Invoice" },
+    { icon: Users, path: "/customers", label: "Customers" },
+    ...(!isHospitalPharmacy ? [{ icon: BarChart3, path: "/dashboard", label: "Dashboard" }] : []),
     { icon: FileText, path: "/closing_shift", label: "Closing" },
-
   ]
 
   const isActive = (path: string) => {

@@ -407,7 +407,8 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 	"""
 	# Batch fetch all items for this invoice with item_group
 	items_query = """
-		SELECT sii.item_code, sii.item_name, sii.qty, sii.rate, sii.amount, sii.description, sii.item_group
+		SELECT sii.item_code, sii.item_name, sii.qty, sii.rate, sii.amount, sii.description, sii.item_group,
+			sii.batch_no, sii.serial_no, sii.uom
 		FROM `tabSales Invoice Item` sii
 		WHERE sii.parent = %s
 	"""
@@ -491,6 +492,32 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 
 	days_since_invoice = (today_date - invoice_date).days
 
+	has_dispensing_lot_col = frappe.db.has_column("Sales Invoice Item", "custom_dispensing_lot")
+	dispensing_lot_map = {}
+	if has_dispensing_lot_col and item_codes:
+		lot_rows = frappe.db.sql(
+			"""
+			SELECT item_code, custom_dispensing_lot
+			FROM `tabSales Invoice Item`
+			WHERE parent = %s AND item_code IN ({})
+			""".format(",".join([f"'{code}'" for code in item_codes])),
+			(invoice_id,),
+			as_dict=True,
+		)
+		for row in lot_rows:
+			if row.custom_dispensing_lot:
+				dispensing_lot_map[row.item_code] = row.custom_dispensing_lot
+
+	def _line_extra(item_row):
+		extra = {
+			"batch_no": getattr(item_row, "batch_no", None),
+			"serial_no": getattr(item_row, "serial_no", None),
+			"uom": getattr(item_row, "uom", None),
+		}
+		if has_dispensing_lot_col:
+			extra["custom_dispensing_lot"] = dispensing_lot_map.get(item_row.item_code)
+		return extra
+
 	items = []
 	for item in items_data:
 		returned_qty_value = returned_qty_map.get(item.item_code, 0)
@@ -512,6 +539,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 					"item_group": item.item_group,
 					"is_non_returnable": True,
 					"is_refrigerated_overdue": False,
+					**_line_extra(item),
 				}
 			)
 			continue
@@ -538,6 +566,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 				"item_group": item.item_group,
 				"is_non_returnable": is_non_returnable,
 				"is_refrigerated_overdue": is_refrigerated,
+				**_line_extra(item),
 			}
 		)
 

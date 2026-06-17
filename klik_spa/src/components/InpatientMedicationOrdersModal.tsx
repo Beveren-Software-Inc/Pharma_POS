@@ -2,8 +2,8 @@
 
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle } from "lucide-react";
-import type { InpatientMedicationOrder } from "../services/patientService";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History } from "lucide-react";
+import type { InpatientMedicationOrder, PatientHistorySummary } from "../services/patientService";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -12,7 +12,7 @@ interface InpatientMedicationOrdersModalProps {
   historyOrders: InpatientMedicationOrder[];
   selectedOrders: Set<string>;
   onToggleOrder: (orderName: string) => void;
-  onAddToCart: () => void;
+  onAddToCart: (alternatives?: Record<string, string>) => void;
   selectedHistoryItems: Set<string>;
   onToggleHistoryItem: (itemKey: string) => void;
   onAddHistoryItemsToCart: () => void;
@@ -25,6 +25,8 @@ interface InpatientMedicationOrdersModalProps {
   lastCreatedVisit?: { doctype: string; name: string } | null;
   /** Incremented on each successful visit create — switches modal to Patient Visit tab. */
   patientVisitCreatedSignal?: number;
+  patientHistory?: PatientHistorySummary | null;
+  productAvailability?: Record<string, number>;
 }
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -66,12 +68,18 @@ function ItemsTable({
   selectedKeys,
   onToggle,
   orderName,
+  productAvailability,
+  alternativeDrugs,
+  onAlternativeChange,
 }: {
   items: ItemRow[];
   selectable?: boolean;
   selectedKeys?: Set<string>;
   onToggle?: (key: string) => void;
   orderName?: string;
+  productAvailability?: Record<string, number>;
+  alternativeDrugs?: Record<string, string>;
+  onAlternativeChange?: (key: string, value: string) => void;
 }) {
   if (!items.length) return null;
   const isPrn = (v: ItemRow["is_prn"]) => v === 1 || v === true || v === "1";
@@ -88,12 +96,16 @@ function ItemsTable({
             <th className="px-3 py-2 text-left">Frequency</th>
             <th className="px-3 py-2 text-left">Type</th>
             <th className="px-3 py-2 text-center">PRN</th>
+            {productAvailability && <th className="px-3 py-2 text-left">Stock</th>}
+            {onAlternativeChange && <th className="px-3 py-2 text-left">Alt. Drug</th>}
            </tr>
         </thead>
         <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
           {items.map((item, idx) => {
             const itemKey = `${orderName}::${idx}::${item.drug ?? ""}`;
             const checked = selectedKeys?.has(itemKey) ?? false;
+            const avail = item.drug ? productAvailability?.[item.drug] : undefined;
+            const lowStock = avail !== undefined && (avail <= 0 || avail < Number(item.quantity || 1));
             return (
               <tr
                 key={idx}
@@ -139,6 +151,22 @@ function ItemsTable({
                     : <span className="text-gray-300 dark:text-gray-600">—</span>
                   }
                  </td>
+                {productAvailability && (
+                  <td className={`px-3 py-2 whitespace-nowrap ${lowStock ? "text-red-600 font-semibold" : "text-gray-500"}`}>
+                    {avail === undefined ? "N/A" : avail}
+                  </td>
+                )}
+                {onAlternativeChange && (
+                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="text"
+                      value={alternativeDrugs?.[itemKey] || ""}
+                      onChange={(e) => onAlternativeChange(itemKey, e.target.value)}
+                      placeholder={lowStock ? "Alt. item code" : "Optional"}
+                      className="w-full min-w-[90px] px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                    />
+                  </td>
+                )}
               </tr>
             );
           })}
@@ -167,8 +195,11 @@ export default function InpatientMedicationOrdersModal({
   isHospitalMode = false,
   lastCreatedVisit = null,
   patientVisitCreatedSignal = 0,
+  patientHistory = null,
+  productAvailability = {},
 }: InpatientMedicationOrdersModalProps) {
-  const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit">("pending");
+  const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history">("pending");
+  const [alternativeDrugs, setAlternativeDrugs] = useState<Record<string, string>>({});
   const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
   const [openPrintMenuFor, setOpenPrintMenuFor] = useState<string | null>(null);
   const [printMenuPosition, setPrintMenuPosition] = useState<{ top: number; right: number } | null>(null);
@@ -180,6 +211,7 @@ export default function InpatientMedicationOrdersModal({
       setExpandedHistoryOrders(new Set());
       setOpenPrintMenuFor(null);
       setPrintMenuPosition(null);
+      setAlternativeDrugs({});
     }
   }, [isOpen]);
 
@@ -252,6 +284,7 @@ export default function InpatientMedicationOrdersModal({
   const tabs = [
     { id: "pending" as const, label: "Pending",       count: pendingOrders.length, icon: ClipboardList },
     { id: "history" as const, label: "History",       count: historyOrders.length, icon: Clock },
+    { id: "patient_history" as const, label: "Patient History", count: null, icon: History },
     { id: "visit"   as const, label: "Patient Visit", count: null,                 icon: UserPlus },
   ];
 
@@ -381,7 +414,15 @@ export default function InpatientMedicationOrdersModal({
                       {/* Items table */}
                       {order.items && order.items.length > 0 && (
                         <div className="mt-3 ml-8" onClick={(e) => e.stopPropagation()}>
-                          <ItemsTable items={order.items} />
+                          <ItemsTable
+                            items={order.items}
+                            orderName={order.name}
+                            productAvailability={productAvailability}
+                            alternativeDrugs={alternativeDrugs}
+                            onAlternativeChange={(key, value) =>
+                              setAlternativeDrugs((prev) => ({ ...prev, [key]: value }))
+                            }
+                          />
                         </div>
                       )}
                     </div>
@@ -473,6 +514,66 @@ export default function InpatientMedicationOrdersModal({
             )
           )}
 
+          {/* ── PATIENT HISTORY ── */}
+          {isHospitalMode && activeTab === "patient_history" && (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 bg-gray-50 dark:bg-gray-800/40">
+                <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-3">Patient Details</h3>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div><span className="text-gray-500">Name:</span> <span className="font-medium">{String(patientHistory?.patient?.patient_name || patientName || "—")}</span></div>
+                  <div><span className="text-gray-500">ID:</span> <span className="font-mono">{String(patientHistory?.patient?.name || patientId || "—")}</span></div>
+                  {patientHistory?.patient?.file_no ? <div><span className="text-gray-500">File No:</span> {String(patientHistory.patient.file_no)}</div> : null}
+                  {patientHistory?.patient?.sex ? <div><span className="text-gray-500">Sex:</span> {String(patientHistory.patient.sex)}</div> : null}
+                  {patientHistory?.patient?.blood_group ? <div><span className="text-gray-500">Blood:</span> {String(patientHistory.patient.blood_group)}</div> : null}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                  <h3 className="text-sm font-bold text-gray-900 dark:text-white">Recent Visits</h3>
+                </div>
+                {(patientHistory?.visits || []).length === 0 ? (
+                  <div className="p-4 text-sm text-gray-500">No recent visits.</div>
+                ) : (
+                  <div className="divide-y divide-gray-100 dark:divide-gray-700">
+                    {(patientHistory?.visits || []).slice(0, 5).map((visit, idx) => (
+                      <div key={`${visit.name}-${idx}`} className="px-4 py-3 text-sm flex justify-between gap-3">
+                        <div>
+                          <div className="font-medium text-gray-900 dark:text-white">{String(visit.name)}</div>
+                          <div className="text-xs text-gray-500">{String(visit.doctype || "Visit")} · {String(visit.visit_type || "—")}</div>
+                        </div>
+                        <div className="text-xs text-gray-500 tabular-nums">
+                          {String(visit.visit_date || visit.encounter_date || visit.posting_date || "")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                  <h3 className="text-sm font-bold text-gray-900 dark:text-white">Past Medication Orders</h3>
+                </div>
+                {(patientHistory?.medication_orders || []).length === 0 ? (
+                  <div className="p-4 text-sm text-gray-500">No past medication orders.</div>
+                ) : (
+                  <div className="divide-y divide-gray-100 dark:divide-gray-700">
+                    {(patientHistory?.medication_orders || []).slice(0, 5).map((order) => (
+                      <div key={order.name} className="px-4 py-3">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <span className="text-sm font-semibold text-gray-900 dark:text-white">{order.name}</span>
+                          <StatusBadge status={order.status} />
+                        </div>
+                        <ItemsTable items={order.items || []} orderName={order.name} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* ── VISIT ── */}
           {isHospitalMode && activeTab === "visit" && (
             <div className="max-w-lg mx-auto py-6 space-y-4">
@@ -559,6 +660,8 @@ export default function InpatientMedicationOrdersModal({
               ? `${selectedOrders.size} of ${pendingOrders.length} pending selected`
               : activeTab === "history"
               ? `${selectedHistoryItems.size} item(s) selected`
+              : activeTab === "patient_history"
+              ? "Patient details and past medication"
               : lastCreatedVisit?.name
               ? "Visit created — used when you dispense"
               : "Create a new encounter above"}
@@ -572,7 +675,7 @@ export default function InpatientMedicationOrdersModal({
             </button>
             {(activeTab === "pending" || !isHospitalMode) && (
               <button
-                onClick={onAddToCart}
+                onClick={() => onAddToCart(alternativeDrugs)}
                 disabled={selectedOrders.size === 0}
                 className="px-5 py-2 text-sm font-bold text-orange-600 bg-white border-2 border-orange-600 rounded-lg hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-[0.99]"
               >

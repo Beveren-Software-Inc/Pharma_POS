@@ -56,39 +56,59 @@ def _to_bool_flag(value):
 
 
 def _update_medication_order_references(items):
-	"""Write cart reference_no back to pink Patient Medication Order child rows on dispense."""
+	"""Write cart reference_no and alternative_drug back to Patient Medication Order child rows."""
 	if not items:
 		return
 
 	updates_by_order = {}
 	for item in items:
-		if not _to_bool_flag(item.get("is_pink")):
-			continue
-
 		order_name = item.get("medication_order")
 		entry_name = item.get("medication_order_entry")
-		reference_no = (item.get("reference_no") or "").strip()
-		if not order_name or not entry_name or not reference_no:
+		if not order_name or not entry_name:
 			continue
 		if not frappe.db.exists("Patient Medication Order", order_name):
 			continue
 
-		updates_by_order.setdefault(order_name, {})[entry_name] = reference_no
+		payload = updates_by_order.setdefault(order_name, {}).setdefault(entry_name, {})
+		if _to_bool_flag(item.get("is_pink")):
+			reference_no = (item.get("reference_no") or "").strip()
+			if reference_no:
+				payload["reference_no"] = reference_no
+		alternative_drug = (item.get("alternative_drug") or item.get("alternativeDrug") or "").strip()
+		if alternative_drug:
+			payload["alternative_drug"] = alternative_drug
+
+	if not updates_by_order:
+		return
+
+	child_tables = [
+		"medication_orders",
+		"drug_prescription",
+		"items",
+		"drugs",
+		"drug_prescription_detail",
+	]
 
 	for order_name, entry_map in updates_by_order.items():
 		try:
 			doc = frappe.get_doc("Patient Medication Order", order_name)
 			updated = False
-			for row in doc.get("medication_orders") or []:
-				if row.name in entry_map and hasattr(row, "reference_no"):
-					row.reference_no = entry_map[row.name]
-					updated = True
+			for table_field in child_tables:
+				if not doc.get(table_field):
+					continue
+				for row in doc.get(table_field):
+					if row.name not in entry_map:
+						continue
+					for fieldname, value in entry_map[row.name].items():
+						if hasattr(row, fieldname):
+							setattr(row, fieldname, value)
+							updated = True
 			if updated:
 				doc.save(ignore_permissions=True)
 		except Exception:
 			frappe.log_error(
 				frappe.get_traceback(),
-				f"Failed to update reference_no on Medication Order {order_name}",
+				f"Failed to update medication order entry fields on {order_name}",
 			)
 
 

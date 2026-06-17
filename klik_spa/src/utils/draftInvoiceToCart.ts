@@ -1,7 +1,7 @@
 import { getDraftInvoiceItems } from '../services/salesInvoice';
 import { toast } from 'react-toastify';
 import { extractErrorFromException } from './errorExtraction';
-import { cacheDraftInvoiceItems } from './draftInvoiceCache';
+import { cacheDraftInvoiceItems, type DraftLineDiscount } from './draftInvoiceCache';
 import type { Customer } from '../../types';
 
 export interface InvoiceItem {
@@ -11,6 +11,10 @@ export interface InvoiceItem {
   rate: number;
   amount: number;
   description?: string;
+  batch_no?: string;
+  serial_no?: string;
+  custom_dispensing_lot?: string;
+  uom?: string;
 }
 
 export interface CartItem {
@@ -20,20 +24,27 @@ export interface CartItem {
   price: number;
   image: string;
   quantity: number;
+  uom?: string;
+  available?: number;
+  batch_no?: string;
+  serial_no?: string;
+  dispensing_lot?: string;
+  cartLineId?: string;
 }
 
 export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean> {
   try {
-    // Fetch draft invoice items
     const invoiceData = await getDraftInvoiceItems(invoiceId);
 
     if (!invoiceData || !invoiceData.items || !Array.isArray(invoiceData.items)) {
       throw new Error('No items found in draft invoice');
     }
 
-    // Convert invoice items to cart items
     const cartItems: CartItem[] = [];
-    for (const item of invoiceData.items) {
+    const lineDiscounts: Record<string, DraftLineDiscount> = {};
+
+    for (const item of invoiceData.items as InvoiceItem[]) {
+      const lineKey = `${item.item_code}::${cartItems.length}`;
       const cartItem: CartItem = {
         id: item.item_code,
         name: item.item_name,
@@ -41,11 +52,26 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
         price: item.rate,
         image: '',
         quantity: item.qty,
+        uom: item.uom,
+        batch_no: item.batch_no || undefined,
+        serial_no: item.serial_no || undefined,
+        dispensing_lot: item.custom_dispensing_lot || undefined,
+        cartLineId: lineKey,
       };
       cartItems.push(cartItem);
+
+      if (item.batch_no || item.serial_no || item.custom_dispensing_lot) {
+        lineDiscounts[lineKey] = {
+          discountPercentage: 0,
+          discountAmount: 0,
+          batchNumber: item.batch_no || '',
+          serialNumber: item.serial_no || '',
+          dispensingLot: item.custom_dispensing_lot || '',
+          availableQuantity: 0,
+        };
+      }
     }
 
-    // Extract customer information from invoice data
     const customer: Customer | null = invoiceData.customer ? {
       id: invoiceData.customer,
       name: invoiceData.customer_name || invoiceData.customer,
@@ -75,8 +101,7 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
       createdAt: new Date().toISOString(),
     } : null;
 
-    // Cache the items and customer instead of adding directly to cart
-    cacheDraftInvoiceItems(invoiceId, cartItems, customer);
+    cacheDraftInvoiceItems(invoiceId, cartItems, customer, lineDiscounts);
 
     return true;
 

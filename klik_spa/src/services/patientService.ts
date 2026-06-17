@@ -112,6 +112,31 @@ export async function getPatientMedicationOrderHistory(patient: string, limit = 
   }
 }
 
+export interface PatientHistorySummary {
+  patient: Record<string, string | number | null | undefined>;
+  visits: Array<Record<string, string | number | null | undefined>>;
+  medication_orders: InpatientMedicationOrder[];
+}
+
+export async function getPatientHistorySummary(patient: string, limit = 10): Promise<PatientHistorySummary | null> {
+  try {
+    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_history_summary?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch patient history');
+    }
+    return data?.message || null;
+  } catch (error) {
+    console.error('Error fetching patient history summary:', error);
+    return null;
+  }
+}
+
 export async function createPatientVisit(patient: string): Promise<{ doctype: string; name: string; docstatus?: number } | null> {
   try {
     const csrfToken = window.csrf_token;

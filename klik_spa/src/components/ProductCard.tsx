@@ -71,6 +71,9 @@ return (
           <h3 className={`font-semibold text-gray-900 dark:text-white truncate ${isMobile ? "text-xs" : "text-sm"}`}>
             {item.name}
           </h3>
+          <p className={`text-gray-400 dark:text-gray-500 truncate ${isMobile ? "text-[10px]" : "text-xs"}`}>
+            {item.id}
+          </p>
         </div>
         <div className="flex items-center justify-between">
           <p className={`text-gray-500 dark:text-gray-400 capitalize ${isMobile ? "text-xs" : "text-xs"}`}>
