@@ -4,9 +4,16 @@ import { useNavigate } from "react-router-dom"
 import { ArrowLeft } from "lucide-react"
 import CustomersPage from "./CustomersPage"
 import BottomNavigation from "./BottomNavigation"
+import { usePOSDetails } from "../hooks/usePOSProfile"
+import { getPartyLabels } from "../utils/partyLabels"
 
 export default function MobileCustomersPage() {
   const navigate = useNavigate()
+  const { posDetails } = usePOSDetails()
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1"
+  const party = getPartyLabels(isHospitalPharmacy)
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
@@ -21,7 +28,7 @@ export default function MobileCustomersPage() {
               <ArrowLeft className="w-6 h-6 text-gray-600 dark:text-gray-400" />
             </button>
             <img src="/assets/klik_pos/images/ROSE_LOGO.png" alt="KLiK PoS" className="w-8 h-8 rounded-full object-cover" />
-            <span className="font-bold text-xl text-gray-900 dark:text-white">Customers</span>
+            <span className="font-bold text-xl text-gray-900 dark:text-white">{party.plural}</span>
           </div>
         </div>
       </div>

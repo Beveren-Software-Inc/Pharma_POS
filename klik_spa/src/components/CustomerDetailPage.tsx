@@ -23,12 +23,19 @@ import {
 import { useCustomerDetails } from "../hooks/useCustomers"
 import AddCustomerModal from "./AddCustomerModal"
 import type { Customer } from "../types/customer"
+import { usePOSDetails } from "../hooks/usePOSProfile"
+import { getPartyLabels } from "../utils/partyLabels"
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { customer, isLoading, error } = useCustomerDetails(id || null)
   const [showEditModal, setShowEditModal] = useState(false)
+  const { posDetails } = usePOSDetails()
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1"
+  const party = getPartyLabels(isHospitalPharmacy)
 
   const handleSaveCustomer = (updatedCustomer: Partial<Customer>) => {
     // In a real app, this would update the customer in the backend
@@ -53,13 +60,13 @@ export default function CustomerDetailPage() {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">Error Loading Customer</h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">Error Loading {party.singular}</h2>
           <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
           <button
             onClick={() => navigate('/customers')}
             className="bg-beveren-600 text-white px-6 py-3 rounded-lg hover:bg-beveren-700 transition-colors"
           >
-            Back to Customers
+            {party.backTo}
           </button>
         </div>
       </div>
@@ -70,13 +77,13 @@ export default function CustomerDetailPage() {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">Customer Not Found</h2>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">The customer you're looking for doesn't exist.</p>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">{party.singular} Not Found</h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-6">The {party.lower} you're looking for doesn't exist.</p>
           <button
             onClick={() => navigate('/customers')}
             className="bg-beveren-600 text-white px-6 py-3 rounded-lg hover:bg-beveren-700 transition-colors"
           >
-            Back to Customers
+            {party.backTo}
           </button>
         </div>
       </div>
@@ -189,7 +196,7 @@ export default function CustomerDetailPage() {
               <div className="p-2 rounded-lg bg-gray-100 group-hover:bg-beveren-50 dark:bg-gray-800 dark:group-hover:bg-beveren-900 transition-colors">
                 <ArrowLeft size={20} />
               </div>
-              <span className="font-medium">Back to Customers</span>
+              <span className="font-medium">{party.backTo}</span>
             </button>
           </div>
 
@@ -202,7 +209,7 @@ export default function CustomerDetailPage() {
                 </div>
                 <div>
                   <h1 className="text-3xl font-bold">{customer.name}</h1>
-                  <p className="text-beveren-100 text-lg">Customer ID: {customer.id}</p>
+                  <p className="text-beveren-100 text-lg">{party.singular} ID: {customer.id}</p>
                   <div className="flex items-center space-x-4 mt-2">
                     <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${customerTypeInfo.color}`}>
                       {customerTypeInfo.icon}
@@ -225,7 +232,7 @@ export default function CustomerDetailPage() {
                   className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors flex items-center space-x-2"
                 >
                   <Edit size={16} />
-                  <span>Edit Customer</span>
+                  <span>{party.edit}</span>
                 </button>
               </div>
             </div>

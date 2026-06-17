@@ -307,6 +307,9 @@ def create_and_submit_hospital_sales_order(data):
 		if patient_link and frappe.get_meta("Sales Order").has_field("patient"):
 			doc.patient = patient_link
 
+		if frappe.db.has_column("Sales Order", "custom_is_pos"):
+			doc.custom_is_pos = 1
+
 		for item in items:
 			item_code = item.get("id") or item.get("item_code")
 			if not item_code:
@@ -354,3 +357,109 @@ def create_and_submit_hospital_sales_order(data):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Hospital Sales Order Error")
 		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
+	"""List submitted Sales Orders created from POS hospital dispensing (custom_is_pos)."""
+	try:
+		if not frappe.db.has_column("Sales Order", "custom_is_pos"):
+			return {"success": True, "data": [], "total_count": 0}
+
+		limit = int(limit or 100)
+		start = int(start or 0)
+
+		filters = {"custom_is_pos": 1, "docstatus": 1}
+
+		if cashier_name and cashier_name != "all":
+			from klik_pos.api.sales_invoice import _get_user_ids_by_full_name
+
+			cashier_user_ids = _get_user_ids_by_full_name(cashier_name)
+			if not cashier_user_ids:
+				return {"success": True, "data": [], "total_count": 0}
+			filters["owner"] = cashier_user_ids[0] if len(cashier_user_ids) == 1 else ["in", cashier_user_ids]
+
+		or_filters = None
+		if search and str(search).strip():
+			search_term = str(search).strip()
+			or_filters = [
+				["name", "like", f"%{search_term}%"],
+				["customer_name", "like", f"%{search_term}%"],
+				["customer", "like", f"%{search_term}%"],
+			]
+
+		fields = [
+			"name",
+			"transaction_date",
+			"owner",
+			"customer",
+			"customer_name",
+			"grand_total",
+			"currency",
+			"status",
+			"modified",
+		]
+
+		orders = frappe.get_all(
+			"Sales Order",
+			filters=filters,
+			or_filters=or_filters,
+			fields=fields,
+			order_by="modified desc",
+			limit=limit,
+			start=start,
+		)
+
+		total_count = frappe.db.count("Sales Order", filters=filters)
+
+		order_names = [row.name for row in orders]
+		user_ids = list({row.owner for row in orders if row.owner})
+
+		cashier_names_map = {}
+		if user_ids:
+			users = frappe.get_all("User", filters={"name": ["in", user_ids]}, fields=["name", "full_name"])
+			cashier_names_map = {u.name: u.full_name or u.name for u in users}
+
+		items_map = {}
+		if order_names:
+			item_rows = frappe.get_all(
+				"Sales Order Item",
+				filters={"parent": ["in", order_names]},
+				fields=["parent", "item_code", "item_name", "qty", "rate", "amount"],
+			)
+			for row in item_rows:
+				items_map.setdefault(row.parent, []).append(
+					{
+						"item_code": row.item_code,
+						"item_name": row.item_name,
+						"qty": row.qty,
+						"rate": row.rate,
+						"amount": row.amount,
+					}
+				)
+
+		data = []
+		for order in orders:
+			data.append(
+				{
+					"name": order.name,
+					"posting_date": order.transaction_date,
+					"posting_time": "",
+					"owner": order.owner,
+					"cashier_name": cashier_names_map.get(order.owner, order.owner),
+					"customer": order.customer,
+					"customer_name": order.customer_name or order.customer,
+					"base_grand_total": order.grand_total,
+					"currency": order.currency,
+					"erp_status": order.status,
+					"status": "Dispensed medicine",
+					"is_pos_dispense": 1,
+					"mode_of_payment": "Dispensed medicine",
+					"items": items_map.get(order.name, []),
+				}
+			)
+
+		return {"success": True, "data": data, "total_count": total_count}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Error fetching POS dispense history")
+		return {"success": False, "error": str(e)}

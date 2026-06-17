@@ -51,6 +51,7 @@ import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
 import { getCachedDraftInvoiceItems } from "../utils/draftInvoiceCache";
+import { getPartyLabels } from "../utils/partyLabels";
 
 
 interface OrderSummaryProps {
@@ -1031,6 +1032,8 @@ export default function OrderSummary({
                              posDetails?.custom_is_hospital_pharmacy === true ||
                              posDetails?.custom_is_hospital_pharmacy === "1";
 
+  const party = getPartyLabels(isHospitalPharmacy);
+
   const pharmacyDefaultUom =
     typeof posDetails?.custom_pharmacy_default_uom === "string"
       ? posDetails.custom_pharmacy_default_uom.trim()
@@ -1109,9 +1112,9 @@ export default function OrderSummary({
     []
   );
 
-  // Search for patients when pharmacy mode is enabled and search query changes
+  // Search for patients when pharmacy or hospital pharmacy mode is enabled
   useEffect(() => {
-    if (isPharmacy && customerSearchQuery.trim().length >= 2) {
+    if ((isPharmacy || isHospitalPharmacy) && customerSearchQuery.trim().length >= 2) {
       const searchPatientsDebounced = setTimeout(() => {
         searchPatients(customerSearchQuery.trim())
           .then(setPatients)
@@ -1125,7 +1128,7 @@ export default function OrderSummary({
     } else {
       setPatients([]);
     }
-  }, [customerSearchQuery, isPharmacy]);
+  }, [customerSearchQuery, isPharmacy, isHospitalPharmacy]);
   
   // State for prescription frequencies (from Prescription Frequency doctype)
   const [prescriptionFrequencies, setPrescriptionFrequencies] = useState<PrescriptionFrequency[]>([]);
@@ -1746,7 +1749,7 @@ export default function OrderSummary({
 
   const validateCustomer = () => {
     if (!selectedCustomer) {
-      toast.error("Kindly choose customer");
+      toast.error(`Kindly choose ${party.lower}`);
       return false;
     }
     return true;
@@ -2551,7 +2554,7 @@ const pages = labels.map((label) => `
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleHoldOrder = async (orderData: any) => {
     if (!selectedCustomer) {
-      toast.error("Kindly select a customer");
+      toast.error(`Kindly select a ${party.lower}`);
       return;
     }
 
@@ -3178,7 +3181,13 @@ const handleSetSerial = (event: CustomEvent) => {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                 <input
                   type="text"
-                  placeholder={isPharmacy ? "Search customers or patients... (name, email, phone, patient ID, or file no)" : "Search customers... (name, email, or phone)"}
+                  placeholder={
+                    isHospitalPharmacy
+                      ? "Search patients... (name, patient ID, or file no)"
+                      : isPharmacy
+                      ? "Search customers or patients... (name, email, phone, patient ID, or file no)"
+                      : "Search customers... (name, email, or phone)"
+                  }
                   value={customerSearchQuery}
                   onChange={(e) => {
                     setCustomerSearchQuery(e.target.value);
@@ -3204,7 +3213,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 />
 
                 {/* Customer/Patient Dropdown */}
-                {showCustomerDropdown && (filteredCustomers.length > 0 || (isPharmacy && patients.length > 0)) && (
+                {showCustomerDropdown && (filteredCustomers.length > 0 || ((isPharmacy || isHospitalPharmacy) && patients.length > 0)) && (
                   <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
                     {/* Customers */}
                     {filteredCustomers.slice(0, 8).map((customer) => {
@@ -3234,7 +3243,12 @@ const handleSetSerial = (event: CustomEvent) => {
                                 <div className="font-medium text-gray-900 dark:text-white text-sm truncate">
                                   {customer.name}
                                 </div>
-                                {isAlsoPatient && (
+                                {isAlsoPatient && !isHospitalPharmacy && (
+                                  <span className="px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
+                                    Patient
+                                  </span>
+                                )}
+                                {isHospitalPharmacy && (
                                   <span className="px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
                                     Patient
                                   </span>
@@ -3249,12 +3263,17 @@ const handleSetSerial = (event: CustomEvent) => {
                       );
                     })}
                     
-                    {/* Patients (Pharmacy mode only) - Filter out duplicates with customers */}
-                    {isPharmacy && patients.length > 0 && (
+                    {/* Patients (pharmacy / hospital mode) */}
+                    {(isPharmacy || isHospitalPharmacy) && patients.length > 0 && (
                       <>
-                        {filteredCustomers.length > 0 && (
+                        {filteredCustomers.length > 0 && !isHospitalPharmacy && (
                           <div className="px-3 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
                             Patients (without customer record)
+                          </div>
+                        )}
+                        {filteredCustomers.length > 0 && isHospitalPharmacy && (
+                          <div className="px-3 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+                            More {party.plural.toLowerCase()}
                           </div>
                         )}
                         {patients
@@ -3297,7 +3316,7 @@ const handleSetSerial = (event: CustomEvent) => {
               <button
                 onClick={() => setShowAddCustomerModal(true)}
                 className="ml-2 p-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
-                title="Add New Customer"
+                title={`Add New ${party.singular}`}
               >
                 <UserPlus size={16} />
               </button>
@@ -3334,7 +3353,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   </div>
                   <div className="flex items-center space-x-2 flex-shrink-0">
                     {/* Pill: view medication orders - always show when customer/patient selected in pharmacy so it survives refresh */}
-                    {(selectedPatient || (selectedCustomer && isPharmacy)) ? (
+                    {(selectedPatient || (selectedCustomer && (isPharmacy || isHospitalPharmacy))) ? (
                       <button
                         onClick={openMedicationOrdersModal}
                         className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"
@@ -3377,7 +3396,7 @@ const handleSetSerial = (event: CustomEvent) => {
                     <span className="mx-2">•</span>
                   )}
                   {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
-                    <span>{customerStats?.total_orders || 0} orders</span>
+                    <span>{customerStats?.total_orders || 0} {party.historyLabel}</span>
                   )}
                   {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
                     <span className="text-gray-400 italic">No additional info</span>
@@ -3398,7 +3417,11 @@ const handleSetSerial = (event: CustomEvent) => {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
               <input
                 type="text"
-                placeholder="Search customers... (name, email, or phone)"
+                placeholder={
+                  isHospitalPharmacy
+                    ? "Search patients... (name, patient ID, or file no)"
+                    : "Search customers... (name, email, or phone)"
+                }
                 value={customerSearchQuery}
                 onChange={(e) => {
                   setCustomerSearchQuery(e.target.value);
@@ -3410,12 +3433,24 @@ const handleSetSerial = (event: CustomEvent) => {
               />
 
               {/* ADD THIS MISSING DROPDOWN - This was missing in mobile version */}
-              {showCustomerDropdown && filteredCustomers.length > 0 && (
+              {showCustomerDropdown && (filteredCustomers.length > 0 || ((isPharmacy || isHospitalPharmacy) && patients.length > 0)) && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
-                  {filteredCustomers.slice(0, 8).map((customer) => (
+                  {filteredCustomers.slice(0, 8).map((customer) => {
+                    const matchingPatient = (isPharmacy || isHospitalPharmacy) ? patients.find(
+                      p => (p.patient_name || p.name).toLowerCase() === customer.name.toLowerCase()
+                    ) : null;
+                    const isAlsoPatient = !!matchingPatient;
+
+                    return (
                     <button
                       key={customer.id}
-                      onClick={() => handleCustomerSelect(customer)}
+                      onClick={() => {
+                        if (isAlsoPatient && matchingPatient) {
+                          handlePatientSelect(matchingPatient);
+                        } else {
+                          handleCustomerSelect(customer);
+                        }
+                      }}
                       className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
                     >
                       <div className="flex items-center space-x-2">
@@ -3428,20 +3463,44 @@ const handleSetSerial = (event: CustomEvent) => {
                             {customer.email} • {customer.phone}
                           </div>
                         </div>
-                        {/* {customer.status === "vip" && (
-                          <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300 rounded">
-                            VIP
-                          </span>
-                        )} */}
                       </div>
                     </button>
-                  ))}
+                    );
+                  })}
+                  {(isPharmacy || isHospitalPharmacy) && patients.length > 0 && patients
+                    .filter(patient => {
+                      const patientName = (patient.patient_name || patient.name).toLowerCase();
+                      return !filteredCustomers.some(c => c.name.toLowerCase() === patientName);
+                    })
+                    .slice(0, 8)
+                    .map((patient) => (
+                      <button
+                        key={patient.name}
+                        onClick={() => handlePatientSelect(patient)}
+                        className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
+                      >
+                        <div className="flex items-center space-x-2">
+                          <User className="w-4 h-4 text-blue-500" />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-gray-900 dark:text-white text-sm truncate">
+                              {patient.patient_name || patient.name}
+                            </div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                              {patient.patient_id && `ID: ${patient.patient_id}`}
+                              {patient.patient_id && patient.file_no && " • "}
+                              {patient.file_no && `File: ${patient.file_no}`}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
                 </div>
               )}
             </div>
             <button
               onClick={() => setShowAddCustomerModal(true)}
               className="p-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
+              title={`Add New ${party.singular}`}
             >
               <UserPlus size={16} />
             </button>
@@ -3478,7 +3537,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 </div>
                 <div className="flex items-center space-x-2 flex-shrink-0">
                   {/* Pill: view medication orders - always show when customer/patient selected in pharmacy so it survives refresh */}
-                  {(selectedPatient || (selectedCustomer && isPharmacy)) ? (
+                  {(selectedPatient || (selectedCustomer && (isPharmacy || isHospitalPharmacy))) ? (
                     <button
                       onClick={openMedicationOrdersModal}
                       className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"

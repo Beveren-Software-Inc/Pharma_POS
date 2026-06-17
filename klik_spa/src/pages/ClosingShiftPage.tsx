@@ -225,8 +225,8 @@ export default function ClosingShiftPage() {
       // @ts-expect-error just ignore for now
   const total = Object.values(paymentStats).reduce((sum, stat) => sum + stat.amount, 0);
 
-  // Loading state
-  if (isLoading || modesLoading) {
+  // Loading state (retail/pharmacy only — hospital closes without invoice/payment data)
+  if (!isHospitalPharmacy && (isLoading || modesLoading)) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
@@ -238,7 +238,7 @@ export default function ClosingShiftPage() {
   }
 
   // Error state - but allow closing shift even without opening entry
-  if (error) {
+  if (!isHospitalPharmacy && error) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-lg max-w-md">
@@ -420,12 +420,58 @@ export default function ClosingShiftPage() {
   };
 
   const openCloseFlow = () => {
-    if (isHospitalPharmacy) {
-      handleFinalClose();
-      return;
-    }
     setShowCloseModal(true);
   };
+
+  if (isHospitalPharmacy) {
+    const closeButton = (
+      <button
+        onClick={handleFinalClose}
+        disabled={isCreating}
+        className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors text-sm ${
+          isCreating
+            ? "bg-gray-400 text-gray-200 cursor-not-allowed"
+            : "bg-beveren-600 text-white hover:bg-beveren-700"
+        }`}
+      >
+        <MonitorX className="w-4 h-4" />
+        <span>{isCreating ? "Closing..." : "Close"}</span>
+      </button>
+    );
+
+    if (isMobile) {
+      return (
+        <div className="flex flex-col min-h-screen bg-gray-50 dark:bg-gray-900">
+          <div className="sticky top-0 z-20 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+            <div className="px-4 py-3">
+              <div className="flex items-center justify-between">
+                <h1 className="text-lg font-bold text-gray-900 dark:text-white">Closing Shift</h1>
+                {closeButton}
+              </div>
+            </div>
+          </div>
+          <div className="flex-1" />
+          <BottomNavigation />
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex pb-12">
+        <div className="flex-1 flex flex-col overflow-hidden ml-20">
+          <div className="fixed top-0 left-20 right-0 z-50 bg-beveren-50 dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
+            <div className="px-4 py-4">
+              <div className="flex items-center justify-between">
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Closing Shift</h1>
+                {closeButton}
+              </div>
+            </div>
+          </div>
+          <div className="flex-1 mt-16" />
+        </div>
+      </div>
+    );
+  }
 
   // Mobile layout: full-width content and persistent bottom navigation
   if (isMobile) {

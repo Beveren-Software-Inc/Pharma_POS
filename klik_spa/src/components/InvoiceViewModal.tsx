@@ -15,6 +15,8 @@ import type { SalesInvoice } from "../../types";
 import { useInvoiceDetails } from "../hooks/useInvoiceDetails";
 import { createSalesReturn } from "../services/salesInvoice";
 import { toast } from "react-toastify";
+import { usePOSDetails } from "../hooks/usePOSProfile";
+import { getPartyLabels } from "../utils/partyLabels";
 
 interface InvoiceViewModalProps {
   invoice: SalesInvoice | null;
@@ -36,6 +38,11 @@ export default function InvoiceViewModal({
     isLoading,
     error,
   } = useInvoiceDetails(invoice?.id ?? null);
+  const { posDetails } = usePOSDetails();
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1";
+  const party = getPartyLabels(isHospitalPharmacy);
 
   if (!isOpen || !invoice) return null;
 
@@ -126,7 +133,7 @@ export default function InvoiceViewModal({
                     />
                     <InfoItem
                       icon={<User />}
-                      label="Customer"
+                      label={party.singular}
                       value={displayInvoice.customer}
                     />
                     <InfoItem

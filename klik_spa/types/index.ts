@@ -174,6 +174,8 @@ export interface SalesInvoice {
   posting_time: string;
   posProfile?: string;
   custom_pos_opening_entry?: string;
+  canReturn?: boolean;
+  isPosDispense?: boolean;
   invoice:[];
   cashier_name:string;
   customer_email:string;
