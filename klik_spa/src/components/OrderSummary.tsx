@@ -35,6 +35,7 @@ import {
   joinDispensingLotNames,
   getDispensingLotCacheKey,
   filterLotsByBatch,
+  resolveSerialNumbersFromLotNames,
   type DispensingLotOption,
 } from "../utils/dispensingLot";
 import { usePOSDetails } from "../hooks/usePOSProfile";
@@ -49,7 +50,7 @@ import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicati
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
-import { getCachedDraftLineDiscounts } from "../utils/draftInvoiceCache";
+import { getCachedDraftInvoiceItems } from "../utils/draftInvoiceCache";
 
 
 interface OrderSummaryProps {
@@ -1248,12 +1249,7 @@ export default function OrderSummary({
     serialLotMapsRef.current = serialLotMaps;
   }, [serialLotMaps]);
 
-  useEffect(() => {
-    const lineDiscounts = getCachedDraftLineDiscounts();
-    if (lineDiscounts && Object.keys(lineDiscounts).length > 0) {
-      setItemDiscounts((prev) => ({ ...prev, ...lineDiscounts }));
-    }
-  }, []);
+  const draftRestoreKeyRef = useRef<string | null>(null);
 
   const productAvailability = useCallback(() => {
     const map: Record<string, number> = {};
@@ -1266,6 +1262,94 @@ export default function OrderSummary({
 
   // Per-line key for batch/serial/discount (same item can appear in multiple lines when allow duplicate)
   const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
+
+  useEffect(() => {
+    const cached = getCachedDraftInvoiceItems();
+    if (!cached?.lineDiscounts || !cartItems.length) return;
+    if (draftRestoreKeyRef.current === cached.invoiceId) return;
+
+    const lineDiscounts = cached.lineDiscounts;
+    const restoreDraftLines = async () => {
+      setItemDiscounts((prev) => ({ ...prev, ...lineDiscounts }));
+
+      const serialUpdates: Record<string, string> = {};
+      const newDispensingLots: Record<string, DispensingLotOption[]> = {};
+      const newLotMaps: Record<string, Record<string, string>> = {};
+
+      for (const item of cartItems) {
+        const lineKey = getLineKey(item);
+        const cachedLine = lineDiscounts[lineKey];
+        if (!cachedLine) continue;
+
+        const itemCode = item.item_code || item.id;
+        const batchNo = cachedLine.batchNumber || (item as CartItem & { batch_no?: string }).batch_no || "";
+        const cacheKey = getDispensingLotCacheKey(itemCode, batchNo);
+
+        if (cachedLine.batchNumber) {
+          updateItemMetadata(lineKey, { batch_no: cachedLine.batchNumber });
+        }
+
+        const serialFromCache = cachedLine.serialNumber?.trim();
+        const lotText = cachedLine.dispensingLot?.trim();
+
+        if (useDispenseLot && lotText) {
+          let lots = newDispensingLots[cacheKey];
+          if (!lots?.length) {
+            try {
+              lots = await getDispensingLots(itemCode, batchNo || undefined);
+              newDispensingLots[cacheKey] = lots;
+              newLotMaps[cacheKey] = buildSerialLotMap(lots);
+            } catch (err) {
+              console.error("Error restoring dispensing lots for draft:", err);
+            }
+          }
+          const serialCsv =
+            serialFromCache ||
+            resolveSerialNumbersFromLotNames(lots || [], lotText);
+          if (serialCsv) {
+            serialUpdates[lineKey] = serialCsv;
+            updateItemMetadata(lineKey, {
+              serial_no: serialCsv,
+              dispensing_lot: lotText,
+            });
+          }
+        } else if (serialFromCache) {
+          serialUpdates[lineKey] = serialFromCache;
+          updateItemMetadata(lineKey, { serial_no: serialFromCache });
+        }
+      }
+
+      if (Object.keys(serialUpdates).length > 0) {
+        setItemDiscounts((prev) => {
+          const next = { ...prev, ...lineDiscounts };
+          for (const [lineKey, serialNumber] of Object.entries(serialUpdates)) {
+            next[lineKey] = {
+              ...(next[lineKey] || lineDiscounts[lineKey] || {
+                discountPercentage: 0,
+                discountAmount: 0,
+                batchNumber: "",
+                serialNumber: "",
+                availableQuantity: 0,
+              }),
+              serialNumber,
+            };
+          }
+          return next;
+        });
+      }
+
+      if (Object.keys(newDispensingLots).length > 0) {
+        setItemDispensingLots((prev) => ({ ...prev, ...newDispensingLots }));
+      }
+      if (Object.keys(newLotMaps).length > 0) {
+        setSerialLotMaps((prev) => ({ ...prev, ...newLotMaps }));
+      }
+
+      draftRestoreKeyRef.current = cached.invoiceId;
+    };
+
+    void restoreDraftLines();
+  }, [cartItems, useDispenseLot, updateItemMetadata]);
 
   const getLineBatchNo = useCallback(
     (item: CartItem, lineKey?: string) => {

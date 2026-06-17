@@ -14,6 +14,7 @@ export interface InvoiceItem {
   batch_no?: string;
   serial_no?: string;
   custom_dispensing_lot?: string;
+  dispensing_lot_serials?: string;
   uom?: string;
 }
 
@@ -45,6 +46,7 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
 
     for (const item of invoiceData.items as InvoiceItem[]) {
       const lineKey = `${item.item_code}::${cartItems.length}`;
+      const serialForLot = item.dispensing_lot_serials || item.serial_no || "";
       const cartItem: CartItem = {
         id: item.item_code,
         name: item.item_name,
@@ -54,18 +56,18 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
         quantity: item.qty,
         uom: item.uom,
         batch_no: item.batch_no || undefined,
-        serial_no: item.serial_no || undefined,
+        serial_no: serialForLot || undefined,
         dispensing_lot: item.custom_dispensing_lot || undefined,
         cartLineId: lineKey,
       };
       cartItems.push(cartItem);
 
-      if (item.batch_no || item.serial_no || item.custom_dispensing_lot) {
+      if (item.batch_no || serialForLot || item.custom_dispensing_lot) {
         lineDiscounts[lineKey] = {
           discountPercentage: 0,
           discountAmount: 0,
           batchNumber: item.batch_no || '',
-          serialNumber: item.serial_no || '',
+          serialNumber: serialForLot,
           dispensingLot: item.custom_dispensing_lot || '',
           availableQuantity: 0,
         };

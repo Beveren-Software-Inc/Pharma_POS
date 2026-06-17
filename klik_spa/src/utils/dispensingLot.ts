@@ -78,3 +78,25 @@ export function filterLotsByBatch(
   }
   return lots.filter((lot) => (lot.batch_no || "").trim() === batch);
 }
+
+/** Convert stored lot docnames (newline/comma) to serial numbers for POS SerialSelectField. */
+export function resolveSerialNumbersFromLotNames(
+  lots: DispensingLotOption[],
+  lotNamesText: string
+): string {
+  const names = lotNamesText
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const serials: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    const lot = lots.find((l) => l.name === name);
+    const serial = lot?.serial_no || name;
+    if (serial && !seen.has(serial)) {
+      serials.push(serial);
+      seen.add(serial);
+    }
+  }
+  return serials.join(",");
+}
