@@ -187,7 +187,7 @@ export default function BarcodeScannerModal({ onBarcodeDetected, onClose, isOpen
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 bg-black/60 bg-opacity-50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 lg:left-20 bg-black/60 bg-opacity-50 flex items-center justify-center z-50">
       {/* Hidden canvas for barcode detection */}
       <canvas
         ref={canvasRef}

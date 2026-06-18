@@ -37,6 +37,34 @@ export interface InpatientMedicationOrder {
   custom_reference_name?: string;
 }
 
+export interface ItemAlternativeOption {
+  item_code: string;
+  item_name: string;
+  available: number;
+}
+
+export async function getItemAlternatives(itemCode: string): Promise<ItemAlternativeOption[]> {
+  if (!itemCode?.trim()) return [];
+  try {
+    const response = await fetch(
+      `/api/method/klik_pos.api.item.get_item_alternatives?item_code=${encodeURIComponent(itemCode.trim())}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to fetch alternative items");
+    }
+    return Array.isArray(data?.message) ? data.message : [];
+  } catch (error) {
+    console.error("Error fetching item alternatives:", error);
+    return [];
+  }
+}
+
 export async function searchPatients(searchQuery: string): Promise<Patient[]> {
   try {
     const response = await fetch(`/api/method/klik_pos.api.patient.search_patients?search_query=${encodeURIComponent(searchQuery)}`, {
@@ -112,10 +140,34 @@ export async function getPatientMedicationOrderHistory(patient: string, limit = 
   }
 }
 
+export interface PatientDiagnosisEntry {
+  name: string;
+  diagnosis?: string;
+  diagnosis_name?: string;
+  details?: string;
+  posting_date?: string;
+  practitioner_name?: string;
+  visit_num?: string;
+  inpatient_admission?: string;
+}
+
+export interface PatientWarningMessage {
+  name: string;
+  trans_id?: string;
+  type_of_warning?: string;
+  warning?: string;
+  high_risk_text?: string;
+  posting_date?: string;
+  practitioner_name?: string;
+  warning_message_type?: string;
+}
+
 export interface PatientHistorySummary {
   patient: Record<string, string | number | null | undefined>;
   visits: Array<Record<string, string | number | null | undefined>>;
   medication_orders: InpatientMedicationOrder[];
+  diagnosis_entries?: PatientDiagnosisEntry[];
+  warning_messages?: PatientWarningMessage[];
 }
 
 export async function getPatientHistorySummary(patient: string, limit = 10): Promise<PatientHistorySummary | null> {

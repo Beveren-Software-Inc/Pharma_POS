@@ -26,6 +26,9 @@ export default function EmployeeDispenseModal({
   onSuccess,
 }: EmployeeDispenseModalProps) {
   const { posDetails } = usePOSDetails();
+  const createInvoiceOnDispense = Boolean(
+    Number(posDetails?.custom_create_invoice_on_internal_dispensing || 0)
+  );
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<EmployeeOption[]>([]);
   const [selected, setSelected] = useState<EmployeeOption | null>(null);
@@ -84,15 +87,27 @@ export default function EmployeeDispenseModal({
         };
       });
 
+      const employeeId = selected.name;
+      if (!employeeId) {
+        toast.error("Could not resolve employee ID. Please select the employee again.");
+        return;
+      }
+
       const result = await createEmployeeDispenseInvoice({
-        employee: selected.name,
+        employee: employeeId,
         items,
         company: posDetails?.company,
         cost_center: posDetails?.cost_center,
         patient: patientId || undefined,
       });
 
-      toast.success(`Employee dispense created: ${result.name}`);
+      toast.success(
+        `Dispensed to employee — Sales Order ${result.sales_order_name || result.name}${
+          result.delivery_note_name ? `, Delivery Note ${result.delivery_note_name}` : ''
+        }${
+          result.sales_invoice_name ? `, Invoice ${result.sales_invoice_name} (unpaid)` : ''
+        }`
+      );
       onSuccess?.();
       onClose();
     } catch (error) {
@@ -103,7 +118,7 @@ export default function EmployeeDispenseModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 lg:left-20 z-[10060] flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
         className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4"
         onClick={(e) => e.stopPropagation()}
@@ -120,7 +135,10 @@ export default function EmployeeDispenseModal({
 
         <div className="p-4 space-y-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Dispense {cartItems.length} cart item(s) as internal employee billing.
+            Dispense {cartItems.length} cart item(s) to employee. Stock is delivered now
+            {createInvoiceOnDispense
+              ? '; a draft unpaid invoice will also be created.'
+              : '; reception will create the internal employee invoice.'}
           </p>
 
           <div className="relative">

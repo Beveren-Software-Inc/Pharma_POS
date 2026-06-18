@@ -39,7 +39,7 @@ export default function AdditionalAmountModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 lg:left-20 z-[100] flex items-center justify-center bg-black/50">
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[80vh] overflow-hidden flex flex-col">
         {/* Header: primary (beveren) slightly lighter than Apply button */}
         <div className="flex items-center justify-between px-6 py-4 bg-beveren-500 text-white rounded-t-lg shrink-0">

@@ -1363,6 +1363,92 @@ def get_item_stock(item_code: str):
 		return {"item_code": item_code, "available": 0}
 
 
+def _get_pos_item_group_names(pos_doc):
+	if getattr(pos_doc, "item_groups", None):
+		return [d.item_group for d in pos_doc.item_groups if d.item_group]
+	return []
+
+
+@frappe.whitelist(allow_guest=True)
+def get_item_alternatives(item_code: str):
+	"""Return substitute items for hospital pharmacy (Item Alternative + in-stock POS items)."""
+	item_code = (item_code or "").strip()
+	if not item_code:
+		return []
+
+	pos_doc = get_current_pos_profile()
+	warehouse = getattr(pos_doc, "warehouse", None)
+	item_group_names = _get_pos_item_group_names(pos_doc)
+
+	ordered_codes: list[str] = []
+	seen: set[str] = set()
+
+	def add_code(code: str):
+		code = (code or "").strip()
+		if not code or code == item_code or code in seen:
+			return
+		if frappe.db.get_value("Item", code, "disabled"):
+			return
+		seen.add(code)
+		ordered_codes.append(code)
+
+	for row in frappe.get_all(
+		"Item Alternative",
+		filters={"item_code": item_code},
+		fields=["alternative_item_code"],
+	):
+		add_code(row.alternative_item_code)
+
+	for row in frappe.get_all(
+		"Item Alternative",
+		filters={"alternative_item_code": item_code, "two_way": 1},
+		fields=["item_code"],
+	):
+		add_code(row.item_code)
+
+	item_filters = {
+		"disabled": 0,
+		"is_stock_item": 1,
+		"name": ["!=", item_code],
+	}
+	if item_group_names:
+		item_filters["item_group"] = ["in", item_group_names]
+	else:
+		source_group = frappe.db.get_value("Item", item_code, "item_group")
+		if source_group:
+			item_filters["item_group"] = source_group
+
+	for row in frappe.get_all(
+		"Item",
+		filters=item_filters,
+		fields=["name"],
+		order_by="item_name asc",
+		limit=80,
+	):
+		add_code(row.name)
+
+	results = []
+	for code in ordered_codes:
+		item_name = frappe.db.get_value("Item", code, "item_name") or code
+		available = fetch_item_balance(code, warehouse) if warehouse else 0
+		results.append(
+			{
+				"item_code": code,
+				"item_name": item_name,
+				"available": flt(available),
+			}
+		)
+
+	results.sort(
+		key=lambda row: (
+			0 if row["available"] > 0 else 1,
+			-(row["available"] or 0),
+			(row["item_name"] or row["item_code"]).lower(),
+		)
+	)
+	return results
+
+
 @frappe.whitelist(allow_guest=True)
 def get_items_stock_batch(item_codes: str):
 	"""Get stock for multiple specific items - optimized batch update with early filtering."""

@@ -18,7 +18,6 @@ import type { Customer } from "../types/customer";
 import PaymentDialog from "./PaymentDialog";
 import AddCustomerModal from "./AddCustomerModal";
 import InpatientMedicationOrdersModal from "./InpatientMedicationOrdersModal";
-import EmployeeDispenseModal from "./EmployeeDispenseModal";
 import AdditionalAmountModal from "./AdditionalAmountModal";
 import PharmacyServiceModal from "./PharmacyServiceModal";
 import type { PharmacyServiceItem } from "../services/pharmacyService";
@@ -104,6 +103,20 @@ const MEDICATION_LABEL_CSS = `
   .detail-row { font-size: 7px; line-height: 1.25; margin-bottom: 1px; }
 `;
 
+/** Shared cart line field styles — inputs and select triggers use the same size/spacing */
+const cartFieldInputClass =
+  "w-full text-sm px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white";
+
+const cartFieldSelectTriggerClass = `${cartFieldInputClass} text-left flex items-center justify-between`;
+
+const cartFieldMultiSelectTriggerClass = `${cartFieldInputClass} min-h-[42px] text-left flex flex-wrap items-center gap-1`;
+
+const cartFieldDropdownFilterClass =
+  "w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white";
+
+const cartFieldDropdownItemClass =
+  "w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700";
+
 // Component to handle quantity input with local state
 interface QuantityInputProps {
   item: CartItem;
@@ -157,9 +170,7 @@ const QuantityInput = ({ item, onUpdateQuantity, isMobile }: QuantityInputProps)
       onChange={handleChange}
       onFocus={handleFocus}
       onBlur={handleBlur}
-      className={`w-full ${
-        isMobile ? "text-sm" : "text-sm"
-      } px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+      className={cartFieldInputClass}
     />
   );
 };
@@ -201,7 +212,7 @@ const ServiceRateInput = ({ lineKey, price, onRateChange, isMobile }: ServiceRat
       onChange={(e) => setInputValue(e.target.value)}
       onFocus={() => setIsEditing(true)}
       onBlur={handleBlur}
-      className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+      className={cartFieldInputClass}
     />
   );
 };
@@ -240,9 +251,7 @@ const DosageInput = ({ itemId, value, onChange, isMobile }: DosageInputProps) =>
       onFocus={() => setIsEditing(true)}
       onBlur={handleBlur}
       placeholder="e.g. 1 tablet"
-      className={`w-full ${
-        isMobile ? "text-sm" : "text-sm"
-      } px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+      className={cartFieldInputClass}
     />
   );
 };
@@ -383,9 +392,7 @@ const UOMSelectField = ({ item, onUOMChange, isMobile, selectedCustomer }: UOMSe
       <button
         type="button"
         onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-        className={`w-full ${
-          isMobile ? "text-sm" : "text-sm"
-        } px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-left flex items-center justify-between`}
+        className={cartFieldSelectTriggerClass}
       >
         <span>{selectedUOM}</span>
         <svg className={`w-4 h-4 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -403,7 +410,7 @@ const UOMSelectField = ({ item, onUOMChange, isMobile, selectedCustomer }: UOMSe
               placeholder="Search UOM..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className={cartFieldDropdownFilterClass}
               autoFocus
             />
           </div>
@@ -416,7 +423,7 @@ const UOMSelectField = ({ item, onUOMChange, isMobile, selectedCustomer }: UOMSe
                   key={uom}
                   type="button"
                   onClick={() => handleUOMSelect(uom)}
-                  className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                  className={`${cartFieldDropdownItemClass} ${
                     uom === selectedUOM ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400' : 'text-gray-900 dark:text-white'
                   }`}
                 >
@@ -449,7 +456,21 @@ interface BatchSelectFieldProps {
 const BatchSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value, onChange, isMobile }: BatchSelectFieldProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const filtered = options.filter(o => o.batch_id.toLowerCase().includes(query.toLowerCase()));
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+        setQuery("");
+      }
+    };
+    if (isOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen]);
 
   const handleSelect = (batchId: string) => {
     const selectedQty = options.find(b => b.batch_id === batchId)?.qty || 0;
@@ -459,25 +480,26 @@ const BatchSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value
   };
 
   return (
-    <div className="relative">
+    <div className="relative" ref={dropdownRef}>
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full ${isMobile ? "text-xs" : "text-xs"} px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-left flex items-center justify-between`}
+        className={cartFieldSelectTriggerClass}
       >
         <span className="truncate">{value || "Select Batch"}</span>
-        <svg className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+        <svg className={`w-4 h-4 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
       </button>
       {isOpen && (
         <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg max-h-44 overflow-hidden">
-          <div className="p-1 border-b border-gray-200 dark:border-gray-600">
+          <div className="p-2 border-b border-gray-200 dark:border-gray-600">
             <input
               type="text"
               placeholder="Filter batch..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className={cartFieldDropdownFilterClass}
               autoFocus
+              onClick={(e) => e.stopPropagation()}
             />
           </div>
           <div className="max-h-36 overflow-y-auto">
@@ -486,12 +508,12 @@ const BatchSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value
                 key={b.batch_id}
                 type="button"
                 onClick={() => handleSelect(b.batch_id)}
-                className={`w-full px-2 py-1 text-left text-xs hover:bg-gray-100 dark:hover:bg-gray-700 ${value === b.batch_id ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400' : 'text-gray-900 dark:text-white'}`}
+                className={`${cartFieldDropdownItemClass} ${value === b.batch_id ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400' : 'text-gray-900 dark:text-white'}`}
               >
                 {b.batch_id} - {b.qty}
               </button>
             )) : (
-              <div className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400">No matches</div>
+              <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matches</div>
             )}
           </div>
         </div>
@@ -751,7 +773,7 @@ const SerialSelectField = ({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full ${isMobile ? "text-xs" : "text-xs"} px-2 py-1 min-h-[30px] border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-left flex flex-wrap items-center gap-1`}
+        className={cartFieldMultiSelectTriggerClass}
       >
         {count === 0 ? (
           <span className="text-gray-400 dark:text-gray-500">{emptyLabel}</span>
@@ -783,7 +805,7 @@ const SerialSelectField = ({
           </>
         )}
         <svg
-          className={`w-3 h-3 ml-auto flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-4 h-4 ml-auto flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill="none" stroke="currentColor" viewBox="0 0 24 24"
         >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -794,13 +816,13 @@ const SerialSelectField = ({
       {isOpen && (
         <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg max-h-52 overflow-hidden">
           {/* Search */}
-          <div className="p-1 border-b border-gray-200 dark:border-gray-600">
+          <div className="p-2 border-b border-gray-200 dark:border-gray-600">
             <input
               type="text"
               placeholder="Filter serial..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className={cartFieldDropdownFilterClass}
               autoFocus
               onClick={(e) => e.stopPropagation()}
             />
@@ -830,7 +852,7 @@ const SerialSelectField = ({
                     key={opt.value}
                     type="button"
                     onClick={() => toggleSerial(opt.value)}
-                    className={`w-full px-2 py-1.5 text-left text-xs flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                    className={`${cartFieldDropdownItemClass} flex items-center gap-2 ${
                       isSelected
                         ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-700 dark:text-beveren-300'
                         : 'text-gray-900 dark:text-white'
@@ -876,10 +898,24 @@ interface DosageSelectFieldProps {
 const DosageSelectField = ({ itemId: _itemId, options, value, onChange, isMobile }: DosageSelectFieldProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const filtered = options.filter(freq =>
     (freq.name || "").toLowerCase().includes(query.toLowerCase()) ||
     (freq.frequency || freq.dosage || freq.prescription_frequency || "").toLowerCase().includes(query.toLowerCase())
   );
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+        setQuery("");
+      }
+    };
+    if (isOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen]);
 
   const handleSelect = (freqName: string) => {
     onChange(freqName);
@@ -891,26 +927,30 @@ const DosageSelectField = ({ itemId: _itemId, options, value, onChange, isMobile
     return freq.frequency || freq.prescription_frequency || freq.dosage || freq.name || "";
   };
 
+  const selectedLabel =
+    options.find((f) => f.name === value) ? getDisplayName(options.find((f) => f.name === value)!) : value;
+
   return (
-    <div className="relative">
+    <div className="relative" ref={dropdownRef}>
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full ${isMobile ? "text-xs" : "text-xs"} px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-left flex items-center justify-between`}
+        className={cartFieldSelectTriggerClass}
       >
-        <span className="truncate">{value || "Select frequency"}</span>
-        <svg className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+        <span className="truncate">{selectedLabel || "Select frequency"}</span>
+        <svg className={`w-4 h-4 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
       </button>
       {isOpen && (
         <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg max-h-44 overflow-hidden">
-          <div className="p-1 border-b border-gray-200 dark:border-gray-600">
+          <div className="p-2 border-b border-gray-200 dark:border-gray-600">
             <input
               type="text"
               placeholder="Filter frequency..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className={cartFieldDropdownFilterClass}
               autoFocus
+              onClick={(e) => e.stopPropagation()}
             />
           </div>
           <div className="max-h-36 overflow-y-auto">
@@ -921,13 +961,13 @@ const DosageSelectField = ({ itemId: _itemId, options, value, onChange, isMobile
                   key={freq.name}
                   type="button"
                   onClick={() => handleSelect(freq.name)}
-                  className={`w-full px-2 py-1 text-left text-xs hover:bg-gray-100 dark:hover:bg-gray-700 ${value === freq.name ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400' : 'text-gray-900 dark:text-white'}`}
+                  className={`${cartFieldDropdownItemClass} ${value === freq.name ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400' : 'text-gray-900 dark:text-white'}`}
                 >
                   {displayName}
                 </button>
               );
             }) : (
-              <div className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400">No matches</div>
+              <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matches</div>
             )}
           </div>
         </div>
@@ -992,10 +1032,10 @@ export default function OrderSummary({
   }, [selectedCustomer?.id, isInitialLoad, updatePricesForCustomer]);
   const [customerSearchQuery, setCustomerSearchQuery] = useState("");
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const customerSearchContainerRef = useRef<HTMLDivElement>(null);
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [showMedicationOrdersModal, setShowMedicationOrdersModal] = useState(false);
-  const [showEmployeeDispenseModal, setShowEmployeeDispenseModal] = useState(false);
   const [patientHistorySummary, setPatientHistorySummary] = useState<PatientHistorySummary | null>(null);
   const [showRedeemLoyaltyModal, setShowRedeemLoyaltyModal] = useState(false);
   const [showAdditionalAmountModal, setShowAdditionalAmountModal] = useState(false);
@@ -1167,6 +1207,25 @@ export default function OrderSummary({
       setPatients([]);
     }
   }, [customerSearchQuery, isPharmacy, isHospitalPharmacy]);
+
+  // Close patient/customer dropdown when clicking outside (without selecting)
+  useEffect(() => {
+    if (!showCustomerDropdown) return;
+
+    const handlePointerDownOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (customerSearchContainerRef.current?.contains(target)) return;
+      setShowCustomerDropdown(false);
+    };
+
+    document.addEventListener("mousedown", handlePointerDownOutside);
+    document.addEventListener("touchstart", handlePointerDownOutside);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDownOutside);
+      document.removeEventListener("touchstart", handlePointerDownOutside);
+    };
+  }, [showCustomerDropdown]);
   
   // State for prescription frequencies (from Prescription Frequency doctype)
   const [prescriptionFrequencies, setPrescriptionFrequencies] = useState<PrescriptionFrequency[]>([]);
@@ -1533,6 +1592,10 @@ export default function OrderSummary({
   const handleCustomerSearchKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>
   ) => {
+    if (e.key === "Escape") {
+      setShowCustomerDropdown(false);
+      return;
+    }
     if (e.key === "Enter" && customerSearchQuery.trim() !== "") {
       // Check if there are no matching customers
       if (filteredCustomers.length === 0) {
@@ -1587,7 +1650,12 @@ export default function OrderSummary({
         setPrefilledCustomerName(trimmedValue);
         setShowAddCustomerModal(true);
         setShowCustomerDropdown(false);
-      } else if (filteredCustomers.length === 1 && !userRemovedDefaultCustomer && filteredCustomers[0]) {
+      } else if (
+        !isHospitalPharmacy &&
+        filteredCustomers.length === 1 &&
+        !userRemovedDefaultCustomer &&
+        filteredCustomers[0]
+      ) {
         handleCustomerSelect(filteredCustomers[0]);
       }
     }
@@ -1953,7 +2021,7 @@ export default function OrderSummary({
         const qty = item.quantity ?? 1;
         if (avail <= 0 || avail < qty) {
           if (!alternativeCode) {
-            toast.error(`Insufficient stock for ${item.drug_name || item.drug}. Enter an alternative drug code.`);
+            toast.error(`Insufficient stock for ${item.drug_name || item.drug}. Select an alternative drug.`);
             validationFailed = true;
             break;
           }
@@ -2011,7 +2079,7 @@ export default function OrderSummary({
       toast.dismiss(loadingToast);
       
       if (noStockCount > 0) {
-        toast.error(`${noStockCount} item(s) have no stock. Use alternative drug codes where needed.`);
+        toast.error(`${noStockCount} item(s) have no stock. Select alternative drugs where needed.`);
         return;
       }
       
@@ -2136,7 +2204,7 @@ export default function OrderSummary({
       if (result?.name) {
         setCreatedVisitRef({ doctype: result.doctype, name: result.name });
         setPatientVisitCreatedSignal((s) => s + 1);
-        toast.success(`Created ${result.doctype}: ${result.name}`);
+        toast.success(`Created pharmacy visit: ${result.name}`);
       } else {
         toast.error("Failed to create patient visit.");
       }
@@ -2672,6 +2740,7 @@ const pages = labels.map((label) => `
   };
 
   useEffect(() => {
+    if (isHospitalPharmacy) return;
     if (customers.length === 1 && !selectedCustomer && !isLoading) {
       const singleCustomer = customers[0];
       if (singleCustomer) {
@@ -2682,10 +2751,11 @@ const pages = labels.map((label) => `
 
       // toast.info(`Automatically selected customer: ${singleCustomer.name}`);
     }
-  }, [customers, selectedCustomer, isLoading]);
+  }, [customers, selectedCustomer, isLoading, isHospitalPharmacy]);
 
-  // Set default customer from POS profile when available
+  // Set default customer from POS profile when available (not in hospital pharmacy — user must choose patient)
   useEffect(() => {
+    if (isHospitalPharmacy) return;
 
     if (posDetails?.default_customer && !selectedCustomer && !_posLoading && !userRemovedDefaultCustomer) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2732,7 +2802,7 @@ const pages = labels.map((label) => `
         // Don't set the default customer if there's an error checking permissions
       });
     }
-  }, [posDetails, selectedCustomer, _posLoading, userRemovedDefaultCustomer, checkCustomerPermission]);
+  }, [posDetails, selectedCustomer, _posLoading, userRemovedDefaultCustomer, checkCustomerPermission, isHospitalPharmacy]);
 
   useEffect(() => {
     const fetchAndSetInfo = async () => {
@@ -3215,7 +3285,7 @@ const handleSetSerial = (event: CustomEvent) => {
           {/* Customer Search */}
           <div className="relative">
             <div className="flex items-center">
-              <div className="relative flex-1">
+              <div className="relative flex-1" ref={customerSearchContainerRef}>
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                 <input
                   type="text"
@@ -3235,17 +3305,6 @@ const handleSetSerial = (event: CustomEvent) => {
                   onKeyDown={handleCustomerSearchKeyDown} // Add this line
                   onFocus={() => {
                     setShowCustomerDropdown(true);
-                  }}
-                  onBlur={(e) => {
-                    // Don't close dropdown immediately on blur - allow time for click
-                    // Check if the blur is due to clicking on dropdown
-                    setTimeout(() => {
-                      const activeElement = document.activeElement;
-                      const dropdown = e.currentTarget.closest('.relative')?.querySelector('.absolute');
-                      if (!dropdown?.contains(activeElement)) {
-                        setShowCustomerDropdown(false);
-                      }
-                    }, 200);
                   }}
                   className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
@@ -3400,15 +3459,6 @@ const handleSetSerial = (event: CustomEvent) => {
                         <Pill size={16} />
                     </button>
                   ) : null}
-                    {isPharmacy && cartItems.length > 0 && (
-                      <button
-                        onClick={() => setShowEmployeeDispenseModal(true)}
-                        className="p-1.5 rounded-md text-purple-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
-                        title="Dispense to employee"
-                      >
-                        <User size={16} />
-                      </button>
-                    )}
                     <button
                       onClick={() => {
                         setSelectedCustomer(null);
@@ -3451,7 +3501,7 @@ const handleSetSerial = (event: CustomEvent) => {
       {isMobile && (
         <div className="flex-shrink-0 p-4 border-b border-gray-100 dark:border-gray-700">
           <div className="flex items-center space-x-2">
-            <div className="relative flex-1">
+            <div className="relative flex-1" ref={customerSearchContainerRef}>
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
               <input
                 type="text"
@@ -3465,7 +3515,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   setCustomerSearchQuery(e.target.value);
                   setShowCustomerDropdown(e.target.value.length > 0);
                 }}
-                onKeyPress={handleCustomerSearchKeyDown}
+                onKeyDown={handleCustomerSearchKeyDown}
                 onFocus={() => setShowCustomerDropdown(true)}
                 className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               />
@@ -3584,15 +3634,6 @@ const handleSetSerial = (event: CustomEvent) => {
                       <Pill size={18} />
                     </button>
                   ) : null}
-                  {isPharmacy && cartItems.length > 0 && (
-                    <button
-                      onClick={() => setShowEmployeeDispenseModal(true)}
-                      className="p-1.5 rounded-md text-purple-500 hover:text-purple-600 hover:bg-purple-50 transition-colors"
-                      title="Dispense to employee"
-                    >
-                      <User size={18} />
-                    </button>
-                  )}
                   <button
                     onClick={() => {
                       setSelectedCustomer(null);
@@ -3665,9 +3706,9 @@ const handleSetSerial = (event: CustomEvent) => {
                 });
               const showAddService = isHospitalPharmacy && !isServiceItem;
               const row5FieldCount = [
-                isItemTaxTemplateMode,
+                isItemTaxTemplateMode && !isHospitalPharmacy,
                 showAddService,
-                isAllowAdditionalAmounts,
+                isAllowAdditionalAmounts && !isHospitalPharmacy,
               ].filter(Boolean).length;
               const discountedPrice = getDiscountedPrice(item);
               const originalTotal = item.price * item.quantity;
@@ -3774,6 +3815,7 @@ const handleSetSerial = (event: CustomEvent) => {
                       >
                         {item.category}
                       </p>
+                      {!isHospitalPharmacy && (
                       <div className={`${isMobile ? "text-base" : "text-sm"}`}>
                         {discountedPrice < item.price ? (
                           <div className="flex items-center space-x-2">
@@ -3794,6 +3836,7 @@ const handleSetSerial = (event: CustomEvent) => {
                           </div>
                         )}
                       </div>
+                      )}
                     </div>
 
                     {/* Quantity Controls - Fixed Width Container */}
@@ -3830,7 +3873,8 @@ const handleSetSerial = (event: CustomEvent) => {
                       </button>
                     </div>
 
-                    {/* Total Price - Fixed Width */}
+                    {/* Total Price - hidden in hospital pharmacy (amounts still calculated for dispense) */}
+                    {!isHospitalPharmacy && (
                     <div className="flex-shrink-0 text-right min-w-[80px] px-2">
                       {discountedTotal < originalTotal ? (
                         <div>
@@ -3858,6 +3902,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         </p>
                       )}
                     </div>
+                    )}
 
                     {duplicateLineEnabled && (
                       <div className="flex-shrink-0 ml-1">
@@ -3915,7 +3960,7 @@ const handleSetSerial = (event: CustomEvent) => {
                               isMobile={isMobile}
                             />
                           </div>
-                          {isServiceItem ? (
+                          {isServiceItem && !isHospitalPharmacy ? (
                             <div>
                               <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
                                 Rate
@@ -3929,6 +3974,8 @@ const handleSetSerial = (event: CustomEvent) => {
                                 isMobile={isMobile}
                               />
                             </div>
+                          ) : isServiceItem && isHospitalPharmacy ? (
+                            <div aria-hidden="true" />
                           ) : (
                             <div>
                               <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
@@ -3946,7 +3993,8 @@ const handleSetSerial = (event: CustomEvent) => {
                           )}
                         </div>
 
-                        {/* Row 2: Discount Amount | Discount (%) */}
+                        {/* Row 2: Discount Amount | Discount (%) — hidden in hospital pharmacy */}
+                        {!isHospitalPharmacy && (
                         <div className="grid grid-cols-2 gap-4 mb-4">
                           <div>
                             <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
@@ -3965,7 +4013,7 @@ const handleSetSerial = (event: CustomEvent) => {
                                 )
                               }
                               placeholder="0.00"
-                              className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                              className={cartFieldInputClass}
                             />
                           </div>
                           <div>
@@ -3986,10 +4034,11 @@ const handleSetSerial = (event: CustomEvent) => {
                                 )
                               }
                               placeholder="0.0"
-                              className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                              className={cartFieldInputClass}
                             />
                           </div>
                         </div>
+                        )}
 
                         {/* Row 3: Batch | Serial No */}
                         {!isServiceItem && (
@@ -4057,7 +4106,7 @@ const handleSetSerial = (event: CustomEvent) => {
                                   updateItemMetadata(lineKey, { reference_no: e.target.value })
                                 }
                                 placeholder="Enter reference..."
-                                className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                                className={cartFieldInputClass}
                               />
                             </div>
                           </div>
@@ -4093,7 +4142,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         )}
 
                         {/* Row 5: Item Tax Template | Add Service | Additional Amount */}
-                        {(isItemTaxTemplateMode || isAllowAdditionalAmounts || isHospitalPharmacy) && (
+                        {(showAddService || (isItemTaxTemplateMode && !isHospitalPharmacy) || (isAllowAdditionalAmounts && !isHospitalPharmacy)) && (
                           <div
                             className={`grid gap-4 mb-4 ${
                               row5FieldCount >= 3
@@ -4103,7 +4152,7 @@ const handleSetSerial = (event: CustomEvent) => {
                                   : "grid-cols-1"
                             }`}
                           >
-                            {isItemTaxTemplateMode && (
+                            {isItemTaxTemplateMode && !isHospitalPharmacy && (
                               <div className="min-w-0">
                                 <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
                                   Item Tax Template
@@ -4113,7 +4162,7 @@ const handleSetSerial = (event: CustomEvent) => {
                                   onChange={(e) =>
                                     updateItemMetadata(lineKey, { item_tax_template: e.target.value || null })
                                   }
-                                  className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                                  className={cartFieldInputClass}
                                 >
                                   <option value="">— None (0%) —</option>
                                   {itemTaxTemplates.map((t) => (
@@ -4138,7 +4187,7 @@ const handleSetSerial = (event: CustomEvent) => {
                                 </button>
                               </div>
                             )}
-                            {isAllowAdditionalAmounts && (
+                            {isAllowAdditionalAmounts && !isHospitalPharmacy && (
                               <div>
                                 <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
                                   Additional Amount
@@ -4154,7 +4203,7 @@ const handleSetSerial = (event: CustomEvent) => {
                                     })
                                   }
                                   placeholder="0.00"
-                                  className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+                                  className={cartFieldInputClass}
                                 />
                               </div>
                             )}
@@ -4162,8 +4211,9 @@ const handleSetSerial = (event: CustomEvent) => {
                         )}
                       </div>
 
-                      {/* Discount Summary */}
-                      {(itemDiscount.discountPercentage > 0 ||
+                      {/* Discount Summary — hidden in hospital pharmacy */}
+                      {!isHospitalPharmacy &&
+                      (itemDiscount.discountPercentage > 0 ||
                         itemDiscount.discountAmount > 0) && (
                         <div className="mt-3 p-2 bg-green-50 dark:bg-green-900/20 rounded-md border border-green-200 dark:border-green-800">
                           <div className="text-xs text-green-800 dark:text-green-300 font-medium">
@@ -4235,7 +4285,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 Clear Cart
               </button>
             )}
-            {isAllowAdditionalAmounts && (
+            {isAllowAdditionalAmounts && !isHospitalPharmacy && (
               <button
                 onClick={() => setShowAdditionalAmountModal(true)}
                 className="px-3 py-2 border border-beveren-500 text-beveren-600 dark:text-beveren-400 rounded-lg font-medium hover:bg-beveren-50 dark:hover:bg-beveren-900/20 transition-colors text-sm flex items-center justify-center min-w-[44px]"
@@ -4259,7 +4309,7 @@ const handleSetSerial = (event: CustomEvent) => {
             {isHospitalPharmacy
               ? (showPostDispenseActions
                 ? "New Order"
-                : `${isDispensing ? "Dispensing..." : "Dispense "} ${currency_symbol}${total.toFixed(3)}`)
+                : isDispensing ? "Dispensing..." : "Dispense")
               : `Checkout ${currency_symbol}${total.toFixed(3)}`}
           </button>
           {showPostDispenseActions && (
@@ -4303,7 +4353,7 @@ const handleSetSerial = (event: CustomEvent) => {
       {showRedeemLoyaltyModal && (() => {
         const maxPoints = Math.round(customerStats?.loyalty_points ?? selectedCustomer?.loyaltyPoints ?? 0);
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowRedeemLoyaltyModal(false)}>
+          <div className="fixed inset-0 lg:left-20 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowRedeemLoyaltyModal(false)}>
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-4 w-full max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
               <h3 className="font-medium text-gray-900 dark:text-white mb-2">Redeem loyalty points</h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">How many points to redeem? (max {maxPoints})</p>
@@ -4436,7 +4486,7 @@ const handleSetSerial = (event: CustomEvent) => {
       )}
 
       {/* Additional Amount Modal */}
-      {isAllowAdditionalAmounts && (
+      {isAllowAdditionalAmounts && !isHospitalPharmacy && (
         <AdditionalAmountModal
           isOpen={showAdditionalAmountModal}
           onClose={() => setShowAdditionalAmountModal(false)}
@@ -4495,17 +4545,6 @@ const handleSetSerial = (event: CustomEvent) => {
         patientHistory={patientHistorySummary}
         productAvailability={productAvailability()}
       />
-
-      {isPharmacy && (
-        <EmployeeDispenseModal
-          isOpen={showEmployeeDispenseModal}
-          onClose={() => setShowEmployeeDispenseModal(false)}
-          cartItems={cartItems}
-          itemDiscounts={itemDiscounts}
-          patientId={selectedPatient?.name}
-          onSuccess={handleClearCart}
-        />
-      )}
     </div>
   );
 }
