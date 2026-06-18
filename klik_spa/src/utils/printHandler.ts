@@ -113,6 +113,9 @@ export function handlePrintInvoice(invoiceData: Invoice | null) {
   const restorePage = () => {
     console.log('Restoring page...');
 
+    // Remove any leftover print overlays
+    document.querySelectorAll('.print-overlay').forEach((el) => el.remove());
+
     // Remove print overlay
     if (printOverlay.parentNode) {
       printOverlay.parentNode.removeChild(printOverlay);

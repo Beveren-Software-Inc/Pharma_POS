@@ -17,6 +17,10 @@ function App() {
   useEffect(() => {
     // Set up global error handling for API calls
     setupGlobalErrorHandling();
+
+    // Remove stale print overlays that can block clicks after printing
+    document.querySelectorAll(".print-overlay").forEach((el) => el.remove());
+    document.body.style.removeProperty("overflow");
   }, []);
 
   return (

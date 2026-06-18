@@ -25,6 +25,29 @@ const csrfToken = window.csrf_token;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function updateDraftSalesInvoice(data: any) {
+  const csrfToken = window.csrf_token;
+  const response = await fetch('/api/method/klik_pos.api.sales_invoice.update_draft_invoice', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Frappe-CSRF-Token': csrfToken
+    },
+    body: JSON.stringify({ data }),
+    credentials: 'include'
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.message || result.message.success === false) {
+    const errorMessage = extractErrorMessage(result, 'Failed to update draft invoice');
+    throw new Error(errorMessage);
+  }
+
+  return result.message;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function createSalesInvoice(data: any) {
   const csrfToken = window.csrf_token;
 
