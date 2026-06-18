@@ -126,6 +126,8 @@ export type POSDetails = {
   custom_print_delivery_receipt?: number | boolean | string;
   /** When set, POS serial picker uses Dispensing Lot instead of Serial No. */
   custom_dispense_lot?: number | boolean | string;
+  /** When set, employee dispense also creates a draft unpaid Sales Invoice at POS. */
+  custom_create_invoice_on_internal_dispensing?: number | boolean | string;
   // extend with any other server-provided fields as needed
   [key: string]: unknown;
 }

@@ -1,3 +1,5 @@
+import { extractErrorMessage } from "../utils/errorExtraction";
+
 export interface EmployeeOption {
   name: string;
   employee_name?: string;
@@ -28,7 +30,15 @@ export async function createEmployeeDispenseInvoice(payload: {
   company?: string;
   cost_center?: string;
   patient?: string;
-}): Promise<{ name: string; customer?: string; grand_total?: number }> {
+}): Promise<{
+  name: string;
+  customer?: string;
+  grand_total?: number;
+  sales_order_name?: string;
+  delivery_note_name?: string;
+  sales_invoice_name?: string;
+  invoice_created?: boolean;
+}> {
   const csrfToken = window.csrf_token;
   const response = await fetch('/api/method/klik_pos.api.employee_billing.create_employee_dispense_invoice', {
     method: 'POST',
@@ -36,12 +46,12 @@ export async function createEmployeeDispenseInvoice(payload: {
       'Content-Type': 'application/json',
       'X-Frappe-CSRF-Token': csrfToken,
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ data: payload }),
     credentials: 'include',
   });
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.message || 'Failed to create employee dispense invoice');
+    throw new Error(extractErrorMessage(data, 'Failed to dispense to employee'));
   }
   return data?.message || data;
 }

@@ -137,9 +137,10 @@ def get_pos_details():
 	business_type = pos.custom_business_type
 	print_format = pos.custom_pos_printformat
 
-	# Get default customer details if set
+	# Get default customer details if set (hospital pharmacy requires explicit patient selection)
 	default_customer = None
-	if pos.customer:
+	is_hospital_pharmacy = int(getattr(pos, "custom_is_hospital_pharmacy", 0) or 0)
+	if pos.customer and not is_hospital_pharmacy:
 		customer_doc = frappe.get_doc("Customer", pos.customer)
 		default_customer = {
 			"id": customer_doc.name,
@@ -188,6 +189,9 @@ def get_pos_details():
 			getattr(pos, "custom_print_delivery_receipt", 0) or 0
 		),
 		"custom_dispense_lot": int(getattr(pos, "custom_dispense_lot", 0) or 0),
+		"custom_create_invoice_on_internal_dispensing": int(
+			getattr(pos, "custom_create_invoice_on_internal_dispensing", 0) or 0
+		),
 		"cost_center": pos.cost_center or "",
 		"department": pos.department or "",
 		"project": pos.project or "",

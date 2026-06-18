@@ -10,6 +10,8 @@ import "react-toastify/dist/ReactToastify.css";
 import { setupGlobalErrorHandling } from "./utils/apiUtils";
 import Footer from "./components/Footer";
 import RetailSidebar from "./components/RetailSidebar";
+import EmployeeDispenseHost from "./components/EmployeeDispenseHost";
+import { cleanupStaleOverlays } from "./utils/cleanupOverlays";
 
 const queryClient = new QueryClient();
 
@@ -17,10 +19,7 @@ function App() {
   useEffect(() => {
     // Set up global error handling for API calls
     setupGlobalErrorHandling();
-
-    // Remove stale print overlays that can block clicks after printing
-    document.querySelectorAll(".print-overlay").forEach((el) => el.remove());
-    document.body.style.removeProperty("overflow");
+    cleanupStaleOverlays();
   }, []);
 
   return (
@@ -30,6 +29,7 @@ function App() {
           <I18nProvider>
             <ProductProvider>
               <RetailSidebar />
+              <EmployeeDispenseHost />
               <Outlet />
               <Footer />
               <ToastContainer position="top-center" autoClose={3000} aria-label="Notification" />

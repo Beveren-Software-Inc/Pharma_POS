@@ -2,8 +2,9 @@
 
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History } from "lucide-react";
-import type { InpatientMedicationOrder, PatientHistorySummary } from "../services/patientService";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope } from "lucide-react";
+import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption } from "../services/patientService";
+import { getItemAlternatives } from "../services/patientService";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -61,6 +62,47 @@ interface ItemRow {
   is_prn?: number | boolean | string;
 }
 
+// ── Alternative drug dropdown ─────────────────────────────────────────────────
+function AlternativeDrugSelect({
+  drugCode,
+  value,
+  lowStock,
+  options,
+  loading,
+  onChange,
+}: {
+  drugCode?: string;
+  value: string;
+  lowStock: boolean;
+  options: ItemAlternativeOption[];
+  loading?: boolean;
+  onChange: (value: string) => void;
+}) {
+  if (!drugCode) {
+    return <span className="text-gray-300">—</span>;
+  }
+
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={loading}
+      className={`w-full min-w-[140px] max-w-[220px] px-2 py-1 text-xs border rounded bg-white dark:bg-gray-800
+        ${lowStock ? "border-red-300 dark:border-red-700" : "border-gray-300 dark:border-gray-600"}
+        disabled:opacity-60`}
+    >
+      <option value="">
+        {loading ? "Loading items…" : lowStock ? "Select alternative" : "Optional"}
+      </option>
+      {options.map((opt) => (
+        <option key={opt.item_code} value={opt.item_code}>
+          {opt.item_name} ({opt.item_code}) · {opt.available}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 // ── Reusable items table ──────────────────────────────────────────────────────
 function ItemsTable({
   items,
@@ -71,6 +113,8 @@ function ItemsTable({
   productAvailability,
   alternativeDrugs,
   onAlternativeChange,
+  alternativeOptionsByDrug,
+  loadingAlternativeDrugs,
 }: {
   items: ItemRow[];
   selectable?: boolean;
@@ -80,6 +124,8 @@ function ItemsTable({
   productAvailability?: Record<string, number>;
   alternativeDrugs?: Record<string, string>;
   onAlternativeChange?: (key: string, value: string) => void;
+  alternativeOptionsByDrug?: Record<string, ItemAlternativeOption[]>;
+  loadingAlternativeDrugs?: Record<string, boolean>;
 }) {
   if (!items.length) return null;
   const isPrn = (v: ItemRow["is_prn"]) => v === 1 || v === true || v === "1";
@@ -158,12 +204,13 @@ function ItemsTable({
                 )}
                 {onAlternativeChange && (
                   <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="text"
+                    <AlternativeDrugSelect
+                      drugCode={item.drug}
                       value={alternativeDrugs?.[itemKey] || ""}
-                      onChange={(e) => onAlternativeChange(itemKey, e.target.value)}
-                      placeholder={lowStock ? "Alt. item code" : "Optional"}
-                      className="w-full min-w-[90px] px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                      lowStock={!!lowStock}
+                      options={item.drug ? alternativeOptionsByDrug?.[item.drug] || [] : []}
+                      loading={item.drug ? loadingAlternativeDrugs?.[item.drug] : false}
+                      onChange={(next) => onAlternativeChange(itemKey, next)}
                     />
                   </td>
                 )}
@@ -200,7 +247,12 @@ export default function InpatientMedicationOrdersModal({
 }: InpatientMedicationOrdersModalProps) {
   const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history">("pending");
   const [alternativeDrugs, setAlternativeDrugs] = useState<Record<string, string>>({});
+  const [alternativeOptionsByDrug, setAlternativeOptionsByDrug] = useState<Record<string, ItemAlternativeOption[]>>({});
+  const [loadingAlternativeDrugs, setLoadingAlternativeDrugs] = useState<Record<string, boolean>>({});
+  const fetchedAlternativeDrugsRef = useRef<Set<string>>(new Set());
   const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
+  const [expandedDiagnosisEntries, setExpandedDiagnosisEntries] = useState<Set<string>>(new Set());
+  const [expandedPatientHistoryOrders, setExpandedPatientHistoryOrders] = useState<Set<string>>(new Set());
   const [openPrintMenuFor, setOpenPrintMenuFor] = useState<string | null>(null);
   const [printMenuPosition, setPrintMenuPosition] = useState<{ top: number; right: number } | null>(null);
   const printButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -209,11 +261,38 @@ export default function InpatientMedicationOrdersModal({
     if (!isOpen) {
       setActiveTab("pending");
       setExpandedHistoryOrders(new Set());
+      setExpandedDiagnosisEntries(new Set());
+      setExpandedPatientHistoryOrders(new Set());
       setOpenPrintMenuFor(null);
       setPrintMenuPosition(null);
       setAlternativeDrugs({});
+      setAlternativeOptionsByDrug({});
+      setLoadingAlternativeDrugs({});
+      fetchedAlternativeDrugsRef.current = new Set();
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const drugCodes = new Set<string>();
+    pendingOrders.forEach((order) => {
+      (order.items || []).forEach((item) => {
+        if (item.drug) drugCodes.add(item.drug);
+      });
+    });
+
+    drugCodes.forEach((drugCode) => {
+      if (fetchedAlternativeDrugsRef.current.has(drugCode)) return;
+      fetchedAlternativeDrugsRef.current.add(drugCode);
+
+      setLoadingAlternativeDrugs((prev) => ({ ...prev, [drugCode]: true }));
+      void getItemAlternatives(drugCode).then((options) => {
+        setAlternativeOptionsByDrug((prev) => ({ ...prev, [drugCode]: options }));
+        setLoadingAlternativeDrugs((prev) => ({ ...prev, [drugCode]: false }));
+      });
+    });
+  }, [isOpen, pendingOrders]);
 
   useEffect(() => {
     if (isOpen && isHospitalMode && patientVisitCreatedSignal > 0) {
@@ -282,15 +361,15 @@ export default function InpatientMedicationOrdersModal({
   if (!isOpen) return null;
 
   const tabs = [
-    { id: "pending" as const, label: "Pending",       count: pendingOrders.length, icon: ClipboardList },
-    { id: "history" as const, label: "History",       count: historyOrders.length, icon: Clock },
+    { id: "pending" as const, label: "Pending", count: pendingOrders.length, icon: ClipboardList },
+    { id: "visit" as const, label: "Patient Visit", count: null, icon: UserPlus },
+    { id: "history" as const, label: "History", count: historyOrders.length, icon: Clock },
     { id: "patient_history" as const, label: "Patient History", count: null, icon: History },
-    { id: "visit"   as const, label: "Patient Visit", count: null,                 icon: UserPlus },
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm pointer-events-auto" onClick={onClose} />
+    <div className="fixed inset-0 lg:left-20 z-50 flex items-center justify-center pointer-events-none">
+      <div className="fixed inset-0 lg:left-20 bg-black/60 backdrop-blur-sm pointer-events-auto" onClick={onClose} />
 
       <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-5xl h-[92vh] pointer-events-auto flex flex-col overflow-hidden border border-gray-100 dark:border-gray-700">
 
@@ -419,6 +498,8 @@ export default function InpatientMedicationOrdersModal({
                             orderName={order.name}
                             productAvailability={productAvailability}
                             alternativeDrugs={alternativeDrugs}
+                            alternativeOptionsByDrug={alternativeOptionsByDrug}
+                            loadingAlternativeDrugs={loadingAlternativeDrugs}
                             onAlternativeChange={(key, value) =>
                               setAlternativeDrugs((prev) => ({ ...prev, [key]: value }))
                             }
@@ -529,6 +610,66 @@ export default function InpatientMedicationOrdersModal({
               </div>
 
               <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
+                  <Stethoscope size={15} className="text-gray-500" />
+                  <h3 className="text-sm font-bold text-gray-900 dark:text-white">Medical Diagnosis</h3>
+                </div>
+                {(patientHistory?.diagnosis_entries || []).length === 0 ? (
+                  <div className="p-4 text-sm text-gray-500">No diagnosis entries found.</div>
+                ) : (
+                  <div className="divide-y divide-gray-100 dark:divide-gray-700">
+                    {(patientHistory?.diagnosis_entries || []).map((entry) => {
+                      const isExpanded = expandedDiagnosisEntries.has(entry.name);
+                      const label = entry.diagnosis_name || entry.diagnosis || entry.name;
+                      return (
+                        <div key={entry.name} className="bg-white dark:bg-gray-900">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedDiagnosisEntries((prev) => {
+                                const next = new Set(prev);
+                                next.has(entry.name) ? next.delete(entry.name) : next.add(entry.name);
+                                return next;
+                              })
+                            }
+                            className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                          >
+                            <span className={`text-gray-400 transition-transform duration-150 flex-shrink-0 ${isExpanded ? "rotate-0" : "-rotate-90"}`}>
+                              <ChevronDown size={15} />
+                            </span>
+                            <span className="font-semibold text-sm text-gray-800 dark:text-white flex-1 truncate">{label}</span>
+                            {entry.posting_date ? (
+                              <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">
+                                {String(entry.posting_date).slice(0, 10)}
+                              </span>
+                            ) : null}
+                          </button>
+                          {isExpanded && (
+                            <div className="px-4 pb-4 pt-0 ml-7 space-y-2 text-sm border-t border-gray-100 dark:border-gray-800">
+                              {entry.practitioner_name ? (
+                                <div><span className="text-gray-500">Practitioner:</span> <span className="font-medium">{entry.practitioner_name}</span></div>
+                              ) : null}
+                              {entry.visit_num ? (
+                                <div><span className="text-gray-500">Visit:</span> <span className="font-mono text-xs">{entry.visit_num}</span></div>
+                              ) : null}
+                              {entry.inpatient_admission ? (
+                                <div><span className="text-gray-500">Admission:</span> <span className="font-mono text-xs">{entry.inpatient_admission}</span></div>
+                              ) : null}
+                              {entry.details ? (
+                                <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{entry.details}</div>
+                              ) : (
+                                <div className="text-gray-400">No additional details.</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                   <h3 className="text-sm font-bold text-gray-900 dark:text-white">Recent Visits</h3>
                 </div>
@@ -558,18 +699,106 @@ export default function InpatientMedicationOrdersModal({
                 {(patientHistory?.medication_orders || []).length === 0 ? (
                   <div className="p-4 text-sm text-gray-500">No past medication orders.</div>
                 ) : (
-                  <div className="divide-y divide-gray-100 dark:divide-gray-700">
-                    {(patientHistory?.medication_orders || []).slice(0, 5).map((order) => (
-                      <div key={order.name} className="px-4 py-3">
-                        <div className="flex items-center justify-between gap-2 mb-2">
-                          <span className="text-sm font-semibold text-gray-900 dark:text-white">{order.name}</span>
-                          <StatusBadge status={order.status} />
+                  <div className="space-y-2 p-2">
+                    {(patientHistory?.medication_orders || []).slice(0, 10).map((order) => {
+                      const isExpanded = expandedPatientHistoryOrders.has(order.name);
+                      return (
+                        <div
+                          key={order.name}
+                          className="border border-orange-200 dark:border-orange-800/60 rounded-xl overflow-hidden bg-orange-50/40 dark:bg-orange-900/10"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedPatientHistoryOrders((prev) => {
+                                const next = new Set(prev);
+                                next.has(order.name) ? next.delete(order.name) : next.add(order.name);
+                                return next;
+                              })
+                            }
+                            className="w-full flex items-center gap-2 px-4 py-3 bg-orange-100/70 dark:bg-orange-900/20 text-left"
+                          >
+                            <span className={`text-gray-400 transition-transform duration-150 flex-shrink-0 ${isExpanded ? "rotate-0" : "-rotate-90"}`}>
+                              <ChevronDown size={15} />
+                            </span>
+                            <span className="font-semibold text-sm text-gray-800 dark:text-white flex-1 truncate">{order.name}</span>
+                            {order.posting_date ? (
+                              <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">
+                                {new Date(order.posting_date).toLocaleDateString()}
+                              </span>
+                            ) : null}
+                            <StatusBadge status={order.status} />
+                          </button>
+                          {isExpanded && order.items && order.items.length > 0 && (
+                            <div className="px-4 py-3 border-t border-orange-200 dark:border-orange-800/40 bg-white/70 dark:bg-gray-900/20">
+                              <ItemsTable items={order.items} orderName={order.name} />
+                            </div>
+                          )}
+                          {isExpanded && (!order.items || order.items.length === 0) && (
+                            <div className="px-4 py-4 border-t border-orange-200 dark:border-orange-800/40 text-sm text-gray-400 text-center bg-white/70 dark:bg-gray-900/20">
+                              No items in this order.
+                            </div>
+                          )}
                         </div>
-                        <ItemsTable items={order.items || []} orderName={order.name} />
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
+              </div>
+
+              <div className="rounded-xl border border-amber-200 dark:border-amber-800/60 overflow-hidden">
+                <div className="px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/40 flex items-center gap-2">
+                  <AlertTriangle size={15} className="text-amber-600 dark:text-amber-400" />
+                  <h3 className="text-sm font-bold text-amber-900 dark:text-amber-100">Warnings &amp; Allergies</h3>
+                </div>
+                <div className="p-4 space-y-4 bg-white dark:bg-gray-900">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Allergies</h4>
+                    {patientHistory?.patient?.allergies ? (
+                      <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{String(patientHistory.patient.allergies)}</p>
+                    ) : (
+                      <p className="text-sm text-gray-400">No allergies recorded on patient file.</p>
+                    )}
+                  </div>
+                  {patientHistory?.patient?.medication ? (
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Current Medication</h4>
+                      <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{String(patientHistory.patient.medication)}</p>
+                    </div>
+                  ) : null}
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Warning Messages</h4>
+                    {(patientHistory?.warning_messages || []).length === 0 ? (
+                      <p className="text-sm text-gray-400">No warning messages on file.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {(patientHistory?.warning_messages || []).map((warning) => (
+                          <div
+                            key={warning.name}
+                            className="rounded-lg border border-amber-100 dark:border-amber-900/40 bg-amber-50/50 dark:bg-amber-900/10 px-3 py-2 text-sm"
+                          >
+                            <div className="flex flex-wrap items-center gap-2 mb-1">
+                              {warning.type_of_warning ? (
+                                <span className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-200/80 dark:bg-amber-800/50 text-amber-900 dark:text-amber-100">
+                                  {warning.type_of_warning}
+                                </span>
+                              ) : null}
+                              {warning.posting_date ? (
+                                <span className="text-xs text-gray-500 tabular-nums">{String(warning.posting_date).slice(0, 10)}</span>
+                              ) : null}
+                              {warning.practitioner_name ? (
+                                <span className="text-xs text-gray-500">Dr: {warning.practitioner_name}</span>
+                              ) : null}
+                            </div>
+                            <p className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
+                              {warning.high_risk_text || warning.warning || "—"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -621,7 +850,9 @@ export default function InpatientMedicationOrdersModal({
                       <h3 className="font-bold text-gray-900 dark:text-white text-base">
                         {lastCreatedVisit?.name ? "Create another visit" : "Create Patient Visit"}
                       </h3>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">New encounter from pharmacy</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        Non-charging pharmacy visit (no sales order)
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -661,7 +892,7 @@ export default function InpatientMedicationOrdersModal({
               : activeTab === "history"
               ? `${selectedHistoryItems.size} item(s) selected`
               : activeTab === "patient_history"
-              ? "Patient details and past medication"
+              ? "Diagnosis, visits, warnings and allergies"
               : lastCreatedVisit?.name
               ? "Visit created — used when you dispense"
               : "Create a new encounter above"}
