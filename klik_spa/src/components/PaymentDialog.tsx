@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
 
   subtractCurrency,
@@ -36,8 +36,7 @@ import { usePaymentModes } from "../hooks/usePaymentModes";
 import { useSalesTaxCharges } from "../hooks/useSalesTaxCharges";
 import { usePOSDetails } from "../hooks/usePOSProfile";
 import { getPartyLabels } from "../utils/partyLabels";
-import { createDraftSalesInvoice } from "../services/salesInvoice";
-import { createSalesInvoice } from "../services/salesInvoice";
+import { createDraftSalesInvoice, createSalesInvoice, updateDraftSalesInvoice, deleteDraftInvoice } from "../services/salesInvoice";
 import { useNavigate } from "react-router-dom";
 import DisplayPrintPreview from "../utils/invoicePrint";
 import { handlePrintInvoice } from "../utils/printHandler";
@@ -210,6 +209,13 @@ export default function PaymentDialog({
   const [deliveryChargeTaxAmount, setDeliveryChargeTaxAmount] = useState<number | null>(null);
   // When true, this is a company delivery via channel only (pay later, no POS payment now)
   const [isCompanyDelivery, setIsCompanyDelivery] = useState(false);
+  const [deliveryDraftInvoiceId, setDeliveryDraftInvoiceId] = useState<string | null>(null);
+  const [deliveryDraftInvoice, setDeliveryDraftInvoice] = useState<{ name: string; pos_profile?: string } | null>(null);
+  const [isSyncingDeliveryDraft, setIsSyncingDeliveryDraft] = useState(false);
+  const deliveryDraftSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deliveryDraftSyncInFlightRef = useRef(false);
+  const deliveryDraftIdRef = useRef<string | null>(null);
+  const invoiceSubmittedRef = useRef(false);
 
   // Insurance (Health Insurance): optional split of payment
   const [showInsuranceModal, setShowInsuranceModal] = useState(false);
@@ -235,6 +241,10 @@ export default function PaymentDialog({
   const isDeliveryRequired = deliveryRequiredValue === 1 ||
                              deliveryRequiredValue === true ||
                              deliveryRequiredValue === "1";
+  const isPrintDeliveryReceipt =
+    posDetails?.custom_print_delivery_receipt === 1 ||
+    posDetails?.custom_print_delivery_receipt === true ||
+    posDetails?.custom_print_delivery_receipt === "1";
   const isItemTaxTemplateMode = posDetails?.custom_allow_item_tax_template === 1 ||
                                 posDetails?.custom_allow_item_tax_template === true ||
                                 posDetails?.custom_allow_item_tax_template === "1";
@@ -859,6 +869,336 @@ export default function PaymentDialog({
     setPaymentInputValues(nextValues);
   }, [paymentAmounts, editingPaymentMethodId]);
 
+  type DeliveryFieldOverrides = {
+    deliveryPersonnel?: string | null;
+    deliveryVia?: string | null;
+    referenceNo?: string | null;
+    deliveryDistanceKm?: number | null;
+    deliveryChargeAmount?: number | null;
+    deliveryChargeWithVAT?: number | null;
+    deliveryRemarks?: string | null;
+  };
+
+  const buildInvoicePayload = useCallback((
+    deliveryOverrides?: DeliveryFieldOverrides,
+    draftId?: string | null
+  ) => {
+    const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
+    const personnel = deliveryOverrides?.deliveryPersonnel !== undefined
+      ? deliveryOverrides.deliveryPersonnel
+      : selectedDeliveryPersonnel;
+    const via = deliveryOverrides?.deliveryVia !== undefined
+      ? deliveryOverrides.deliveryVia
+      : selectedDeliveryVia;
+    const refNo = deliveryOverrides?.referenceNo !== undefined
+      ? deliveryOverrides.referenceNo
+      : selectedReferenceNo;
+    const distanceKm = deliveryOverrides?.deliveryDistanceKm !== undefined
+      ? deliveryOverrides.deliveryDistanceKm
+      : deliveryDistanceKm;
+    const chargeAmount = deliveryOverrides?.deliveryChargeAmount !== undefined
+      ? deliveryOverrides.deliveryChargeAmount
+      : deliveryChargeAmount;
+    const chargeWithVat = deliveryOverrides?.deliveryChargeWithVAT !== undefined
+      ? deliveryOverrides.deliveryChargeWithVAT
+      : deliveryChargeWithVAT;
+    const remarks = deliveryOverrides?.deliveryRemarks !== undefined
+      ? deliveryOverrides.deliveryRemarks
+      : deliveryRemarks;
+
+    const netAmountToSend = isB2B ? totalPaidAmount : effectiveGrandTotal;
+    const adjustedPaymentMethods = isB2B
+      ? Object.entries(paymentAmounts).filter(([, amount]) => amount > 0)
+      : (() => {
+          const validPayments = Object.entries(paymentAmounts).filter(([, amount]) => amount > 0);
+          if (validPayments.length === 0) return [];
+          const totalPaymentAmount = validPayments.reduce((sum, [, amount]) => sum + amount, 0);
+          if (totalPaymentAmount > effectiveGrandTotal) {
+            const excess = totalPaymentAmount - effectiveGrandTotal;
+            const lastPaymentIndex = validPayments.length - 1;
+            const lastPayment = validPayments[lastPaymentIndex];
+            if (!lastPayment) return [];
+            const adjustedLastAmount = parseFloat(
+              Math.max(0, lastPayment[1] - excess).toFixed(3)
+            );
+            return validPayments.map(([method, amount], index) =>
+              index === lastPaymentIndex ? [method, adjustedLastAmount] : [method, amount]
+            );
+          }
+          return validPayments;
+        })();
+
+    return {
+      items: cartItems.map((item) => {
+        const lineKey = getLineKey(item);
+        const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
+        const medOrder = (discount as { medicationOrder?: string } | undefined)?.medicationOrder
+          ?? (item as { medicationOrder?: string }).medicationOrder;
+        return {
+          ...item,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          price: (item as any).discountedPrice || item.price,
+          batchNumber: (item as { batch_no?: string }).batch_no ?? discount?.batchNumber ?? null,
+          serialNumber: (item as { serial_no?: string }).serial_no ?? discount?.serialNumber ?? null,
+          dispensingLot:
+            (item as { dispensing_lot?: string }).dispensing_lot
+            ?? (discount as { dispensingLot?: string })?.dispensingLot
+            ?? null,
+          uom: item.uom || "Nos",
+          discountPercentage: discount?.discountPercentage || 0,
+          discountAmount: discount?.discountAmount || 0,
+          dosage: discount?.dosage ?? item.dosage ?? null,
+          prescriptionDosage: discount?.prescriptionDosage ?? item.prescriptionDosage ?? null,
+          medicationOrder: medOrder || undefined,
+          item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
+          additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
+        };
+      }),
+      customer: selectedCustomer,
+      paymentMethods: (adjustedPaymentMethods ?? []).map(([method, amount]) => ({
+        method,
+        amount: parseFloat((Number(amount) || 0).toFixed(3)),
+      })),
+      subtotal: calculations.subtotal,
+      SalesTaxCharges: isItemTaxTemplateMode ? null : selectedSalesTaxCharges,
+      taxAmount: calculations.taxAmount,
+      taxType: calculations.isInclusive ? "inclusive" : "exclusive",
+      couponDiscount: calculations.couponDiscount,
+      roundOffAmount,
+      grandTotal: calculations.grandTotal,
+      amountPaid: netAmountToSend,
+      outstandingAmount,
+      appliedCoupons,
+      generalAdditionalAmount: generalAdditionalAmount || 0,
+      additionalRemark: [additionalRemark, remarks].filter((r) => r && r.trim()).join(" | ") || null,
+      businessType: posDetails?.business_type,
+      deliveryPersonnel: personnel || null,
+      deliveryVia: via || null,
+      referenceNo: refNo || null,
+      deliveryDistanceKm: distanceKm ?? null,
+      deliveryChargeAmount: chargeAmount ?? 0,
+      deliveryChargeWithVAT: chargeWithVat ?? null,
+      medicationOrder: (() => {
+        const orders = new Set<string>();
+        cartItems.forEach((item) => {
+          const lineKey = getLineKey(item);
+          const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
+          const orderName = (discount as { medicationOrder?: string } | undefined)?.medicationOrder
+            ?? (item as { medicationOrder?: string }).medicationOrder;
+          if (orderName) orders.add(orderName);
+          const orderNames = (item as { medicationOrders?: string[] }).medicationOrders;
+          if (Array.isArray(orderNames)) {
+            orderNames.forEach((o) => o && orders.add(o));
+          }
+        });
+        return Array.from(orders);
+      })(),
+      redeemLoyaltyPoints: !!(redeemLoyaltyPoints && redeemLoyaltyPoints > 0),
+      loyaltyPoints: redeemLoyaltyPoints ?? 0,
+      healthInsurance: selectedHealthInsurance?.name || null,
+      insuranceAmount: selectedHealthInsurance
+        ? roundCurrency((effectiveGrandTotal * (Number(selectedHealthInsurance.userCoverage) || 0)) / 100)
+        : 0,
+      insuranceIsCredit: selectedHealthInsurance?.isCredit !== false,
+      draftInvoiceId: draftId || deliveryDraftInvoiceId || undefined,
+    };
+  }, [
+    selectedCustomer,
+    cartItems,
+    itemDiscounts,
+    paymentAmounts,
+    calculations,
+    selectedSalesTaxCharges,
+    isItemTaxTemplateMode,
+    roundOffAmount,
+    outstandingAmount,
+    appliedCoupons,
+    generalAdditionalAmount,
+    additionalRemark,
+    posDetails?.business_type,
+    posDetails?.name,
+    selectedDeliveryPersonnel,
+    selectedDeliveryVia,
+    selectedReferenceNo,
+    deliveryDistanceKm,
+    deliveryChargeAmount,
+    deliveryChargeWithVAT,
+    deliveryRemarks,
+    redeemLoyaltyPoints,
+    selectedHealthInsurance,
+    effectiveGrandTotal,
+    totalPaidAmount,
+    isB2B,
+    deliveryDraftInvoiceId,
+  ]);
+
+  const syncDeliveryDraft = useCallback(async (
+    draftId?: string | null,
+    overrides?: DeliveryFieldOverrides,
+    options?: { silent?: boolean }
+  ) => {
+    if (!isPrintDeliveryReceipt || !selectedCustomer?.name) return null;
+    const personnel = overrides?.deliveryPersonnel ?? selectedDeliveryPersonnel;
+    if (!personnel) return null;
+
+    const currentDraftId = draftId ?? deliveryDraftInvoiceId;
+    if (deliveryDraftSyncInFlightRef.current) return currentDraftId;
+
+    try {
+      deliveryDraftSyncInFlightRef.current = true;
+      setIsSyncingDeliveryDraft(true);
+      const payload = buildInvoicePayload(overrides, currentDraftId);
+      const result = currentDraftId
+        ? await updateDraftSalesInvoice(payload)
+        : await createDraftSalesInvoice(payload);
+      const invoiceName = result.invoice_name || result.invoice?.name;
+      const invoicePreview = {
+        name: invoiceName,
+        pos_profile:
+          result.invoice?.pos_profile ||
+          (typeof posDetails?.name === "string" ? posDetails.name : undefined),
+      };
+      setDeliveryDraftInvoiceId(invoiceName);
+      setDeliveryDraftInvoice(invoicePreview);
+      return invoiceName;
+    } catch (err) {
+      if (!options?.silent) {
+        toast.error(
+          extractErrorFromException(err, "Failed to prepare delivery receipt")
+        );
+      }
+      return null;
+    } finally {
+      deliveryDraftSyncInFlightRef.current = false;
+      setIsSyncingDeliveryDraft(false);
+    }
+  }, [
+    isPrintDeliveryReceipt,
+    selectedCustomer?.name,
+    selectedDeliveryPersonnel,
+    deliveryDraftInvoiceId,
+    buildInvoicePayload,
+    posDetails?.name,
+  ]);
+
+  const handlePrintDeliveryDraft = useCallback(async () => {
+    if (!isPrintDeliveryReceipt || !deliveryDraftInvoice) {
+      toast.error("Delivery receipt is not available");
+      return;
+    }
+    await syncDeliveryDraft(deliveryDraftInvoiceId ?? undefined, undefined, { silent: true });
+    let attempts = 0;
+    const tryPrint = () => {
+      const preview = document.querySelector(
+        ".delivery-draft-print-preview .print-preview-content"
+      ) as HTMLElement | null;
+      if (preview?.innerHTML.trim()) {
+        handlePrintInvoice(deliveryDraftInvoice);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 20) {
+        setTimeout(tryPrint, 300);
+      } else {
+        toast.error("Receipt preview is still loading. Please try again.");
+      }
+    };
+    setTimeout(tryPrint, 300);
+  }, [
+    deliveryDraftInvoice,
+    deliveryDraftInvoiceId,
+    isPrintDeliveryReceipt,
+    syncDeliveryDraft,
+  ]);
+
+  useEffect(() => {
+    if (isOpen || !isPrintDeliveryReceipt || !deliveryDraftInvoiceId || invoiceSubmitted) {
+      return;
+    }
+    if (!selectedDeliveryPersonnel) return;
+
+    if (deliveryDraftSyncTimerRef.current) {
+      clearTimeout(deliveryDraftSyncTimerRef.current);
+    }
+    deliveryDraftSyncTimerRef.current = setTimeout(() => {
+      void syncDeliveryDraft(deliveryDraftInvoiceId, undefined, { silent: true });
+    }, 600);
+
+    return () => {
+      if (deliveryDraftSyncTimerRef.current) {
+        clearTimeout(deliveryDraftSyncTimerRef.current);
+      }
+    };
+  }, [
+    isOpen,
+    isPrintDeliveryReceipt,
+    deliveryDraftInvoiceId,
+    invoiceSubmitted,
+    selectedDeliveryPersonnel,
+    cartItems,
+    paymentAmounts,
+    roundOffAmount,
+    itemDiscounts,
+    selectedHealthInsurance,
+    redeemLoyaltyPoints,
+    generalAdditionalAmount,
+    additionalRemark,
+    deliveryChargeAmount,
+    deliveryChargeWithVAT,
+    deliveryDistanceKm,
+    deliveryRemarks,
+    selectedReferenceNo,
+    selectedDeliveryVia,
+    syncDeliveryDraft,
+  ]);
+
+  useEffect(() => {
+    deliveryDraftIdRef.current = deliveryDraftInvoiceId;
+  }, [deliveryDraftInvoiceId]);
+
+  useEffect(() => {
+    invoiceSubmittedRef.current = invoiceSubmitted;
+  }, [invoiceSubmitted]);
+
+  const deleteDeliveryDraftInvoice = useCallback(async () => {
+    if (invoiceSubmittedRef.current) return;
+    const draftToDelete = deliveryDraftIdRef.current;
+    if (!draftToDelete) return;
+
+    const heldDraftId = getOriginalDraftInvoiceId();
+    if (heldDraftId && heldDraftId === draftToDelete) return;
+
+    deliveryDraftIdRef.current = null;
+    setDeliveryDraftInvoiceId(null);
+    setDeliveryDraftInvoice(null);
+    try {
+      await deleteDraftInvoice(draftToDelete);
+    } catch {
+      // Ignore — draft may already be deleted.
+    }
+  }, []);
+
+  const handleCloseDialog = useCallback(
+    async (paymentCompleted?: boolean) => {
+      if (!paymentCompleted) {
+        await deleteDeliveryDraftInvoice();
+      }
+      onClose(paymentCompleted);
+    },
+    [deleteDeliveryDraftInvoice, onClose]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (invoiceSubmittedRef.current) return;
+      const draftToDelete = deliveryDraftIdRef.current;
+      if (!draftToDelete) return;
+      const heldDraftId = getOriginalDraftInvoiceId();
+      if (heldDraftId && heldDraftId === draftToDelete) return;
+      void deleteDraftInvoice(draftToDelete).catch(() => {});
+    };
+  }, []);
+
   if (!isOpen) return null;
   if (isLoading || posLoading) return <div className="p-6">Loading...</div>;
   if (error) return <div className="p-6 text-red-500">Error: {error}</div>;
@@ -1205,121 +1545,19 @@ const handleAutoFillPayment = (methodId: string) => {
     // For B2B, no payment validation required - can be partial or zero payment
     setIsProcessingPayment(true);
 
-    // Calculate net amount to send to backend (amount paid minus change for B2C)
-    const netAmountToSend = isB2B ? totalPaidAmount : effectiveGrandTotal;
-
-    // For B2C, adjust payment method amounts to reflect net payment (after change)
-    const adjustedPaymentMethods = isB2B
-      ? Object.entries(paymentAmounts).filter(([, amount]) => amount > 0)
-      : (() => {
-          const validPayments = Object.entries(paymentAmounts).filter(([, amount]) => amount > 0);
-
-          if (validPayments.length === 0) return [];
-
-          // Calculate total of all payment methods
-          const totalPaymentAmount = validPayments.reduce((sum, [, amount]) => sum + amount, 0);
-
-          // If total exceeds grand total, adjust the last payment method
-          if (totalPaymentAmount > effectiveGrandTotal) {
-            const excess = totalPaymentAmount - effectiveGrandTotal;
-            const lastPaymentIndex = validPayments.length - 1;
-            const lastPayment = validPayments[lastPaymentIndex];
-            if (!lastPayment) return;
-            const lastAmount = lastPayment[1];
-
-            // Reduce the last payment method by the excess amount
-            const adjustedLastAmount = parseFloat(Math.max(0, lastAmount - excess).toFixed(3));
-
-            return validPayments.map(([method, amount], index) => {
-              if (index === lastPaymentIndex) {
-                return [method, adjustedLastAmount];
-              }
-              return [method, amount];
-            });
-          }
-
-          return validPayments;
-        })();
-
-    const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
-    const paymentData = {
-      items: cartItems.map(item => {
-        const lineKey = getLineKey(item);
-        const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
-        const medOrder = (discount as { medicationOrder?: string } | undefined)?.medicationOrder
-          ?? (item as { medicationOrder?: string }).medicationOrder;
-        return {
-          ...item,
-          //eslint-disable-next-line @typescript-eslint/no-explicit-any
-          price: (item as any).discountedPrice || item.price, // Use discounted price
-          batchNumber: (item as { batch_no?: string }).batch_no ?? discount?.batchNumber ?? null,
-          serialNumber: (item as { serial_no?: string }).serial_no ?? discount?.serialNumber ?? null,
-          dispensingLot:
-            (item as { dispensing_lot?: string }).dispensing_lot
-            ?? (discount as { dispensingLot?: string })?.dispensingLot
-            ?? null,
-          uom: item.uom || 'Nos', // Include selected UOM
-          discountPercentage: discount?.discountPercentage || 0,
-          discountAmount: discount?.discountAmount || 0,
-          dosage: discount?.dosage ?? item.dosage ?? null,
-          prescriptionDosage: discount?.prescriptionDosage ?? item.prescriptionDosage ?? null,
-          medicationOrder: medOrder || undefined,
-          item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
-          additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
-        };
-      }),
-      customer: selectedCustomer,
-      paymentMethods: (adjustedPaymentMethods ?? []).map(([method, amount]) => ({ method, amount: parseFloat((Number(amount) || 0).toFixed(3)) })),
-      subtotal: calculations.subtotal,
-      SalesTaxCharges: isItemTaxTemplateMode ? null : selectedSalesTaxCharges,
-      taxAmount: calculations.taxAmount,
-      taxType: calculations.isInclusive ? "inclusive" : "exclusive",
-      couponDiscount: calculations.couponDiscount,
-      roundOffAmount,
-      grandTotal: calculations.grandTotal,
-      amountPaid: netAmountToSend, // Send net amount (effective total for B2C after loyalty, total paid for B2B)
-      outstandingAmount: outstandingAmount,
-      appliedCoupons,
-      generalAdditionalAmount: generalAdditionalAmount || 0,
-      // Remark from Additional Amounts modal -> Sales Invoice.custom_remark
-      additionalRemark: [additionalRemark, deliveryRemarks].filter((r) => r && r.trim()).join(" | ") || null,
-      businessType: posDetails?.business_type,
-      deliveryPersonnel: deliveryPersonnel || null,
-      deliveryVia: deliveryVia || null,
-      referenceNo: referenceNo || null,
-      deliveryDistanceKm: deliveryDistanceKm ?? null,
-      deliveryChargeAmount: deliveryChargeAmount ?? 0,
-      deliveryChargeWithVAT: deliveryChargeWithVAT ?? null,
-      // Patient Medication Orders - from itemDiscounts or cart item; backend also extracts from items
-      medicationOrder: (() => {
-        const orders = new Set<string>();
-        cartItems.forEach((item) => {
-          const lineKey = getLineKey(item);
-          const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
-          const orderName = (discount as { medicationOrder?: string } | undefined)?.medicationOrder
-            ?? (item as { medicationOrder?: string }).medicationOrder;
-          if (orderName) orders.add(orderName);
-          const orderNames = (item as { medicationOrders?: string[] }).medicationOrders;
-          if (Array.isArray(orderNames)) {
-            orderNames.forEach((o) => o && orders.add(o));
-          }
-        });
-        return Array.from(orders);
-      })(),
-      redeemLoyaltyPoints: !!(redeemLoyaltyPoints && redeemLoyaltyPoints > 0),
-      loyaltyPoints: redeemLoyaltyPoints ?? 0,
-      healthInsurance: selectedHealthInsurance?.name || null,
-      insuranceAmount: selectedHealthInsurance
-        ? roundCurrency((effectiveGrandTotal * (Number(selectedHealthInsurance.userCoverage) || 0)) / 100)
-        : 0,
-      insuranceIsCredit: selectedHealthInsurance?.isCredit !== false,
-    };
+    const paymentData = buildInvoicePayload({
+      deliveryPersonnel,
+      deliveryVia,
+      referenceNo,
+    });
 
     try {
       const response = await createSalesInvoice(paymentData);
       setInvoiceSubmitted(true);
       setSubmittedInvoice(response);
       setInvoiceData(response.invoice);
+      setDeliveryDraftInvoiceId(null);
+      setDeliveryDraftInvoice(null);
 
       const successMessage = isB2B
         ? "Invoice submitted successfully!"
@@ -1508,6 +1746,27 @@ const handleAutoFillPayment = (methodId: string) => {
   }
 
   setShowDeliveryPersonnelModal(false);
+
+  if (isPrintDeliveryReceipt && selection.personnelName && selectedCustomer?.name) {
+    void syncDeliveryDraft(null, {
+      deliveryPersonnel: selection.personnelName,
+      deliveryVia: selection.deliveryVia,
+      referenceNo: selection.referenceNo ?? null,
+      deliveryDistanceKm:
+        typeof selection.distanceKm === "number" && !Number.isNaN(selection.distanceKm)
+          ? selection.distanceKm
+          : null,
+      deliveryChargeAmount:
+        typeof selection.deliveryFee === "number" && !Number.isNaN(selection.deliveryFee)
+          ? selection.deliveryFee
+          : null,
+      deliveryChargeWithVAT:
+        typeof selection.amountWithVAT === "number" && !Number.isNaN(selection.amountWithVAT)
+          ? selection.amountWithVAT
+          : null,
+      deliveryRemarks: selection.remarks ?? null,
+    });
+  }
 };
   // Get display name for selected delivery personnel
   const getSelectedDeliveryPersonnelName = () => {
@@ -1516,8 +1775,18 @@ const handleAutoFillPayment = (methodId: string) => {
     return person?.delivery_personnel || selectedDeliveryPersonnel;
   };
 
-  const clearDeliverySelection = () => {
+  const clearDeliverySelection = async () => {
     if (invoiceSubmitted || isProcessingPayment) return;
+    if (deliveryDraftInvoiceId) {
+      const draftToDelete = deliveryDraftInvoiceId;
+      setDeliveryDraftInvoiceId(null);
+      setDeliveryDraftInvoice(null);
+      try {
+        await deleteDraftInvoice(draftToDelete);
+      } catch {
+        // Ignore delete failures; draft may already be gone.
+      }
+    }
     setSelectedDeliveryPersonnel(null);
     setSelectedDeliveryVia(null);
     setSelectedReferenceNo(null);
@@ -1617,6 +1886,7 @@ const handleAutoFillPayment = (methodId: string) => {
 
     try {
       // Delegate to parent handler (single draft invoice create)
+      await deleteDeliveryDraftInvoice();
       clearDraftInvoiceCache();
 
       onHoldOrder(orderData);
@@ -1810,7 +2080,7 @@ const handleAutoFillPayment = (methodId: string) => {
                   <button
                     onClick={() => {
                       // Simply close the modal - no navigation needed
-                      onClose(true);
+                      handleCloseDialog(true);
                     }}
                     className="w-full py-3 bg-beveren-600 text-white rounded-lg font-medium hover:bg-beveren-700 transition-colors"
                   >
@@ -2116,7 +2386,7 @@ const handleAutoFillPayment = (methodId: string) => {
 
   // Desktop view with similar modifications
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+    <div className="fixed inset-0 lg:left-20 bg-black/70 flex items-center justify-center p-4 z-50">
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-7xl h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
@@ -2196,13 +2466,30 @@ const handleAutoFillPayment = (methodId: string) => {
               </button>
             </div>
           ) : (
-            <button
-              onClick={() => onClose(invoiceSubmitted)}
-              disabled={isProcessingPayment || isHoldingOrder}
-              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <X size={24} />
-            </button>
+            <div className="flex items-center space-x-2">
+              {deliveryDraftInvoice && isPrintDeliveryReceipt && (
+                <button
+                  type="button"
+                  className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg disabled:opacity-50"
+                  title="Print delivery receipt"
+                  disabled={isSyncingDeliveryDraft}
+                  onClick={() => void handlePrintDeliveryDraft()}
+                >
+                  {isSyncingDeliveryDraft ? (
+                    <Loader2 size={20} className="animate-spin" />
+                  ) : (
+                    <Printer size={20} />
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => void handleCloseDialog(invoiceSubmitted)}
+                disabled={isProcessingPayment || isHoldingOrder}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <X size={24} />
+              </button>
+            </div>
           )}
         </div>
 
@@ -2911,6 +3198,16 @@ const handleAutoFillPayment = (methodId: string) => {
 
           {/* Right Section - Invoice Preview */}
           <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm border border-gray-200 dark:border-gray-600 flex-1 overflow-y-auto custom-scrollbar">
+            {deliveryDraftInvoice && isPrintDeliveryReceipt && !invoiceSubmitted && (
+              <div className="mb-4 delivery-draft-print-preview">
+                <h5 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 text-center">
+                  Delivery Receipt Preview:
+                </h5>
+                <div className="border border-gray-300 rounded p-2 bg-gray-50 dark:border-gray-300 dark:bg-gray-50">
+                  <DisplayPrintPreview invoice={deliveryDraftInvoice} />
+                </div>
+              </div>
+            )}
             {/* Show PrintPreview if invoice is submitted */}
             {invoiceSubmitted && invoiceData ? (
               <div className="mb-4">
@@ -3221,7 +3518,7 @@ const handleAutoFillPayment = (methodId: string) => {
               <div className={`flex justify-end space-x-4 ${isDeliveryRequired ? '' : 'w-full'}`}>
                 {invoiceSubmitted && (
                   <button
-                    onClick={() => onClose(true)}
+                    onClick={() => void handleCloseDialog(true)}
                     className="bg-beveren-500 px-6 py-2 border border-gray-300 dark:border-gray-600 text-white dark:text-gray-300 rounded-lg font-medium hover:bg-green-700 dark:hover:bg-gray-800 transition-colors"
                   >
                     New Order
@@ -3229,7 +3526,7 @@ const handleAutoFillPayment = (methodId: string) => {
                 )}
                 {externalInvoiceData && (
                   <button
-                    onClick={() => onClose()}
+                    onClick={() => void handleCloseDialog()}
                     className="px-6 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                   >
                     Close
@@ -3338,16 +3635,6 @@ const handleAutoFillPayment = (methodId: string) => {
         onClose={() => setShowDeliveryPersonnelModal(false)}
         onSelect={handleDeliveryPersonnelSelect}
         grandTotal={effectiveGrandTotal}
-        printPreview={{
-          customerName: selectedCustomer?.name,
-          items: cartItems.map((item) => ({
-            name: item.name,
-            qty: item.quantity,
-            rate: item.price,
-          })),
-          grandTotal: calculations.grandTotal,
-          currencySymbol,
-        }}
       />
 
       {/* Insurance (Health Insurance) Modal */}

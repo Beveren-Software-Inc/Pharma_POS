@@ -782,6 +782,11 @@ def create_and_submit_invoice(data):
         if not data:
             frappe.throw("No data provided for invoice creation")
 
+        if isinstance(data, str):
+            data = json.loads(data)
+
+        draft_invoice_id = data.get("draftInvoiceId") or data.get("draft_invoice_id")
+
         (
             customer,
             items,
@@ -809,6 +814,14 @@ def create_and_submit_invoice(data):
             frappe.throw("Customer is required")
         if not items or len(items) == 0:
             frappe.throw("At least one item is required")
+
+        existing_doc = None
+        if draft_invoice_id:
+            existing_doc = frappe.get_doc("Sales Invoice", draft_invoice_id)
+            if existing_doc.docstatus != 0:
+                frappe.throw(
+                    _("Draft invoice {0} is no longer editable").format(draft_invoice_id)
+                )
 
         # ── Wrap everything in a savepoint so ANY failure rolls back fully ──
         # frappe.db.savepoint() creates a SQL SAVEPOINT; rolling back to it
@@ -839,6 +852,7 @@ def create_and_submit_invoice(data):
                 health_insurance=health_insurance,
                 insurance_amount=insurance_amount,
                 insurance_is_credit=insurance_is_credit,
+                existing_doc=existing_doc,
             )
 
             doc.base_paid_amount = amount_paid
@@ -876,18 +890,7 @@ def create_and_submit_invoice(data):
                 "success": True,
                 "invoice_name": doc.name,
                 "invoice_id": doc.name,
-                "invoice": {
-                    "name": doc.name,
-                    "doctype": doc.doctype,
-                    "customer": doc.customer,
-                    "customer_name": doc.customer_name,
-                    "posting_date": doc.posting_date,
-                    "base_grand_total": doc.base_grand_total,
-                    "currency": doc.currency,
-                    "status": doc.status,
-                    "is_pos": doc.is_pos,
-                    "company": doc.company,
-                },
+                "invoice": _invoice_preview_payload(doc),
                 "payment_entry": payment_entry.name if payment_entry else None,
                 "processing_time": round(processing_time, 2),
             }
@@ -961,10 +964,89 @@ def create_draft_invoice(data):
 		)
 		doc.insert(ignore_permissions=True)
 
-		return {"success": True, "invoice_name": doc.name, "invoice": doc}
+		return {
+			"success": True,
+			"invoice_name": doc.name,
+			"invoice": _invoice_preview_payload(doc),
+		}
 
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Draft Invoice Error")
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def update_draft_invoice(data):
+	"""Update an existing draft Sales Invoice with the latest POS cart/payment data."""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+
+		invoice_id = data.get("draftInvoiceId") or data.get("invoice_id")
+		if not invoice_id:
+			frappe.throw(_("Draft invoice ID is required"))
+
+		invoice_doc = frappe.get_doc("Sales Invoice", invoice_id)
+		if invoice_doc.docstatus != 0:
+			frappe.throw(_("Only draft invoices can be updated"))
+
+		(
+			customer,
+			items,
+			amount_paid,
+			sales_and_tax_charges,
+			mode_of_payment,
+			business_type,
+			roundoff_amount,
+			delivery_personnel,
+			delivery_via,
+			reference_no,
+			medication_order,
+			redeem_loyalty_points,
+			loyalty_points,
+			general_additional_amount,
+			additional_remark,
+			delivery_distance_km,
+			delivery_charge_amount,
+			health_insurance,
+			insurance_amount,
+			insurance_is_credit,
+		) = parse_invoice_data(data)
+
+		doc = build_sales_invoice_doc(
+			customer,
+			items,
+			amount_paid,
+			sales_and_tax_charges,
+			mode_of_payment,
+			business_type,
+			roundoff_amount,
+			include_payments=True,
+			delivery_personnel=delivery_personnel,
+			delivery_via=delivery_via,
+			reference_no=reference_no,
+			medication_order=medication_order,
+			redeem_loyalty_points=redeem_loyalty_points,
+			loyalty_points=loyalty_points,
+			general_additional_amount=general_additional_amount,
+			additional_remark=additional_remark,
+			delivery_distance_km=delivery_distance_km,
+			delivery_charge_amount=delivery_charge_amount,
+			health_insurance=health_insurance,
+			insurance_amount=insurance_amount,
+			insurance_is_credit=insurance_is_credit,
+			existing_doc=invoice_doc,
+		)
+		doc.save(ignore_permissions=True)
+
+		return {
+			"success": True,
+			"invoice_name": doc.name,
+			"invoice": _invoice_preview_payload(doc),
+		}
+
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Update Draft Invoice Error")
 		return {"success": False, "message": str(e)}
 
 
@@ -1070,6 +1152,22 @@ def parse_invoice_data(data):
 	)
 
 
+def _invoice_preview_payload(doc):
+	return {
+		"name": doc.name,
+		"doctype": doc.doctype,
+		"pos_profile": doc.pos_profile,
+		"customer": doc.customer,
+		"customer_name": doc.customer_name,
+		"posting_date": doc.posting_date,
+		"base_grand_total": doc.base_grand_total,
+		"currency": doc.currency,
+		"status": doc.status,
+		"is_pos": doc.is_pos,
+		"company": doc.company,
+	}
+
+
 def build_sales_invoice_doc(
 	customer,
 	items,
@@ -1092,9 +1190,18 @@ def build_sales_invoice_doc(
 	health_insurance=None,
 	insurance_amount=0.0,
 	insurance_is_credit=0,
+	existing_doc=None,
 ):
 	"""Main function to build a sales invoice document."""
-	doc = frappe.new_doc("Sales Invoice")
+	if existing_doc:
+		doc = existing_doc
+		doc.set("items", [])
+		doc.set("taxes", [])
+		doc.set("payments", [])
+		if doc.meta.has_field("custom_medication_order"):
+			doc.set("custom_medication_order", [])
+	else:
+		doc = frappe.new_doc("Sales Invoice")
 	doc.customer = customer
 	doc.due_date = frappe.utils.nowdate()
 	doc.custom_delivery_date = frappe.utils.nowdate()
