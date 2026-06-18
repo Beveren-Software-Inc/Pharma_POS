@@ -43,11 +43,19 @@ export interface ItemAlternativeOption {
   available: number;
 }
 
-export async function getItemAlternatives(itemCode: string): Promise<ItemAlternativeOption[]> {
-  if (!itemCode?.trim()) return [];
+export async function searchPosStockItemsForAlternative(
+  search: string,
+  excludeItemCode?: string,
+  limit = 50
+): Promise<ItemAlternativeOption[]> {
   try {
+    const params = new URLSearchParams();
+    if (search.trim()) params.set("search", search.trim());
+    if (excludeItemCode?.trim()) params.set("exclude_item_code", excludeItemCode.trim());
+    params.set("limit", String(limit));
+
     const response = await fetch(
-      `/api/method/klik_pos.api.item.get_item_alternatives?item_code=${encodeURIComponent(itemCode.trim())}`,
+      `/api/method/klik_pos.api.item.search_pos_stock_items_for_alternative?${params.toString()}`,
       {
         method: "GET",
         headers: { "Content-Type": "application/json" },
@@ -56,11 +64,11 @@ export async function getItemAlternatives(itemCode: string): Promise<ItemAlterna
     );
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.message || "Failed to fetch alternative items");
+      throw new Error(data.message || "Failed to search POS items");
     }
     return Array.isArray(data?.message) ? data.message : [];
   } catch (error) {
-    console.error("Error fetching item alternatives:", error);
+    console.error("Error searching POS stock items:", error);
     return [];
   }
 }

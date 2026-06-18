@@ -2,9 +2,9 @@
 
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope } from "lucide-react";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search } from "lucide-react";
 import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption } from "../services/patientService";
-import { getItemAlternatives } from "../services/patientService";
+import { searchPosStockItemsForAlternative } from "../services/patientService";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -62,44 +62,222 @@ interface ItemRow {
   is_prn?: number | boolean | string;
 }
 
-// ── Alternative drug dropdown ─────────────────────────────────────────────────
+// ── Alternative drug search modal ─────────────────────────────────────────────
+function AlternativeDrugSearchModal({
+  isOpen,
+  onClose,
+  drugCode,
+  drugName,
+  value,
+  onChange,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  drugCode: string;
+  drugName?: string;
+  value: string;
+  onChange: (value: string, itemName?: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [options, setOptions] = useState<ItemAlternativeOption[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setQuery("");
+      setDebouncedQuery("");
+      setOptions([]);
+      setLoading(false);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(timer);
+  }, [isOpen, query]);
+
+  useEffect(() => {
+    if (!isOpen || !drugCode) return;
+
+    let cancelled = false;
+    setLoading(true);
+
+    void searchPosStockItemsForAlternative(debouncedQuery, drugCode).then((results) => {
+      if (cancelled) return;
+      setOptions(results);
+      setLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, drugCode, debouncedQuery]);
+
+  if (!isOpen) return null;
+
+  const handleSelect = (itemCode: string, itemName?: string) => {
+    onChange(itemCode, itemName);
+    onClose();
+  };
+
+  const modal = (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="relative bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col border border-gray-200 dark:border-gray-700"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-gray-900 dark:text-white">Select alternative drug</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
+              For: <span className="font-medium text-gray-700 dark:text-gray-300">{drugName || drugCode}</span>
+            </p>
+            <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1">
+              Showing in-stock items from this POS profile
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800"
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800">
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search by item name or code…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              autoFocus
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto min-h-0 px-2 py-2">
+          {loading ? (
+            <div className="py-12 text-center text-sm text-gray-500">Loading items…</div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => handleSelect("")}
+                className={`w-full text-left px-3 py-3 rounded-lg mb-1 transition-colors ${
+                  !value
+                    ? "bg-orange-50 dark:bg-orange-900/20 ring-1 ring-orange-200 dark:ring-orange-800"
+                    : "hover:bg-gray-50 dark:hover:bg-gray-800"
+                }`}
+              >
+                <div className="text-sm font-medium text-gray-700 dark:text-gray-300">No alternative</div>
+                <div className="text-xs text-gray-500 mt-0.5">Use the prescribed drug only</div>
+              </button>
+              {options.length > 0 ? (
+                options.map((opt) => (
+                  <button
+                    key={opt.item_code}
+                    type="button"
+                    onClick={() => handleSelect(opt.item_code, opt.item_name)}
+                    className={`w-full text-left px-3 py-3 rounded-lg mb-1 transition-colors ${
+                      value === opt.item_code
+                        ? "bg-orange-50 dark:bg-orange-900/20 ring-1 ring-orange-200 dark:ring-orange-800"
+                        : "hover:bg-gray-50 dark:hover:bg-gray-800"
+                    }`}
+                  >
+                    <div className="text-sm font-semibold text-gray-900 dark:text-white">{opt.item_name}</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-3">
+                      <span className="font-mono">{opt.item_code}</span>
+                      <span>Stock: {opt.available}</span>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="py-10 text-center text-sm text-gray-500">
+                  {debouncedQuery.trim() ? "No matching in-stock items" : "No in-stock items available"}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
+}
+
+// ── Alternative drug cell: compact label + search icon → modal ───────────────
 function AlternativeDrugSelect({
   drugCode,
+  drugName,
   value,
+  selectedLabel,
   lowStock,
-  options,
-  loading,
   onChange,
 }: {
   drugCode?: string;
+  drugName?: string;
   value: string;
+  selectedLabel?: string;
   lowStock: boolean;
-  options: ItemAlternativeOption[];
-  loading?: boolean;
-  onChange: (value: string) => void;
+  onChange: (value: string, itemName?: string) => void;
 }) {
+  const [modalOpen, setModalOpen] = useState(false);
+
   if (!drugCode) {
     return <span className="text-gray-300">—</span>;
   }
 
+  const displayLabel = value ? selectedLabel || value : "";
+
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={loading}
-      className={`w-full min-w-[140px] max-w-[220px] px-2 py-1 text-xs border rounded bg-white dark:bg-gray-800
-        ${lowStock ? "border-red-300 dark:border-red-700" : "border-gray-300 dark:border-gray-600"}
-        disabled:opacity-60`}
-    >
-      <option value="">
-        {loading ? "Loading items…" : lowStock ? "Select alternative" : "Optional"}
-      </option>
-      {options.map((opt) => (
-        <option key={opt.item_code} value={opt.item_code}>
-          {opt.item_name} ({opt.item_code}) · {opt.available}
-        </option>
-      ))}
-    </select>
+    <>
+      <div className="flex items-center gap-1.5 min-w-[100px] max-w-[200px]">
+        <span
+          className={`flex-1 truncate text-xs ${
+            value
+              ? "text-gray-800 dark:text-gray-200 font-medium"
+              : lowStock
+              ? "text-red-600 dark:text-red-400"
+              : "text-gray-400 dark:text-gray-500"
+          }`}
+          title={value ? `${displayLabel} (${value})` : undefined}
+        >
+          {value ? displayLabel : lowStock ? "Required" : "—"}
+        </span>
+        <button
+          type="button"
+          onClick={() => setModalOpen(true)}
+          title={value ? "Change alternative drug" : "Search alternative drug"}
+          className={`flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-md border transition-colors ${
+            lowStock && !value
+              ? "border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 text-red-600 hover:bg-red-100"
+              : value
+              ? "border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/20 text-orange-600 hover:bg-orange-100"
+              : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700"
+          }`}
+        >
+          <Search size={14} />
+        </button>
+      </div>
+
+      <AlternativeDrugSearchModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        drugCode={drugCode}
+        drugName={drugName}
+        value={value}
+        onChange={onChange}
+      />
+    </>
   );
 }
 
@@ -112,9 +290,8 @@ function ItemsTable({
   orderName,
   productAvailability,
   alternativeDrugs,
+  alternativeDrugLabels,
   onAlternativeChange,
-  alternativeOptionsByDrug,
-  loadingAlternativeDrugs,
 }: {
   items: ItemRow[];
   selectable?: boolean;
@@ -123,9 +300,8 @@ function ItemsTable({
   orderName?: string;
   productAvailability?: Record<string, number>;
   alternativeDrugs?: Record<string, string>;
-  onAlternativeChange?: (key: string, value: string) => void;
-  alternativeOptionsByDrug?: Record<string, ItemAlternativeOption[]>;
-  loadingAlternativeDrugs?: Record<string, boolean>;
+  alternativeDrugLabels?: Record<string, string>;
+  onAlternativeChange?: (key: string, value: string, itemName?: string) => void;
 }) {
   if (!items.length) return null;
   const isPrn = (v: ItemRow["is_prn"]) => v === 1 || v === true || v === "1";
@@ -206,11 +382,11 @@ function ItemsTable({
                   <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     <AlternativeDrugSelect
                       drugCode={item.drug}
+                      drugName={item.drug_name || item.drug}
                       value={alternativeDrugs?.[itemKey] || ""}
+                      selectedLabel={alternativeDrugLabels?.[itemKey]}
                       lowStock={!!lowStock}
-                      options={item.drug ? alternativeOptionsByDrug?.[item.drug] || [] : []}
-                      loading={item.drug ? loadingAlternativeDrugs?.[item.drug] : false}
-                      onChange={(next) => onAlternativeChange(itemKey, next)}
+                      onChange={(next, itemName) => onAlternativeChange?.(itemKey, next, itemName)}
                     />
                   </td>
                 )}
@@ -247,9 +423,7 @@ export default function InpatientMedicationOrdersModal({
 }: InpatientMedicationOrdersModalProps) {
   const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history">("pending");
   const [alternativeDrugs, setAlternativeDrugs] = useState<Record<string, string>>({});
-  const [alternativeOptionsByDrug, setAlternativeOptionsByDrug] = useState<Record<string, ItemAlternativeOption[]>>({});
-  const [loadingAlternativeDrugs, setLoadingAlternativeDrugs] = useState<Record<string, boolean>>({});
-  const fetchedAlternativeDrugsRef = useRef<Set<string>>(new Set());
+  const [alternativeDrugLabels, setAlternativeDrugLabels] = useState<Record<string, string>>({});
   const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
   const [expandedDiagnosisEntries, setExpandedDiagnosisEntries] = useState<Set<string>>(new Set());
   const [expandedPatientHistoryOrders, setExpandedPatientHistoryOrders] = useState<Set<string>>(new Set());
@@ -266,33 +440,9 @@ export default function InpatientMedicationOrdersModal({
       setOpenPrintMenuFor(null);
       setPrintMenuPosition(null);
       setAlternativeDrugs({});
-      setAlternativeOptionsByDrug({});
-      setLoadingAlternativeDrugs({});
-      fetchedAlternativeDrugsRef.current = new Set();
+      setAlternativeDrugLabels({});
     }
   }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const drugCodes = new Set<string>();
-    pendingOrders.forEach((order) => {
-      (order.items || []).forEach((item) => {
-        if (item.drug) drugCodes.add(item.drug);
-      });
-    });
-
-    drugCodes.forEach((drugCode) => {
-      if (fetchedAlternativeDrugsRef.current.has(drugCode)) return;
-      fetchedAlternativeDrugsRef.current.add(drugCode);
-
-      setLoadingAlternativeDrugs((prev) => ({ ...prev, [drugCode]: true }));
-      void getItemAlternatives(drugCode).then((options) => {
-        setAlternativeOptionsByDrug((prev) => ({ ...prev, [drugCode]: options }));
-        setLoadingAlternativeDrugs((prev) => ({ ...prev, [drugCode]: false }));
-      });
-    });
-  }, [isOpen, pendingOrders]);
 
   useEffect(() => {
     if (isOpen && isHospitalMode && patientVisitCreatedSignal > 0) {
@@ -498,11 +648,16 @@ export default function InpatientMedicationOrdersModal({
                             orderName={order.name}
                             productAvailability={productAvailability}
                             alternativeDrugs={alternativeDrugs}
-                            alternativeOptionsByDrug={alternativeOptionsByDrug}
-                            loadingAlternativeDrugs={loadingAlternativeDrugs}
-                            onAlternativeChange={(key, value) =>
-                              setAlternativeDrugs((prev) => ({ ...prev, [key]: value }))
-                            }
+                            alternativeDrugLabels={alternativeDrugLabels}
+                            onAlternativeChange={(key, value, itemName) => {
+                              setAlternativeDrugs((prev) => ({ ...prev, [key]: value }));
+                              setAlternativeDrugLabels((prev) => {
+                                const next = { ...prev };
+                                if (value && itemName) next[key] = itemName;
+                                else delete next[key];
+                                return next;
+                              });
+                            }}
                           />
                         </div>
                       )}

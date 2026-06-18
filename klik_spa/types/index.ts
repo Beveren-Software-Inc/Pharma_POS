@@ -55,6 +55,10 @@ export interface CartItem {
   medicationOrders?: string[]
   /** Reference written back to PMO child row on dispense. */
   reference_no?: string
+  /** Prescribed drug when an alternative item was dispensed instead. */
+  original_drug?: string
+  /** Alternative item code dispensed instead of prescribed drug. */
+  alternative_drug?: string
 }
 
 export interface MenuItem {

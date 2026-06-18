@@ -14,7 +14,7 @@ interface EmployeeDispenseModalProps {
   cartItems: CartItem[];
   itemDiscounts?: Record<string, { batchNumber?: string; serialNumber?: string; dispensingLot?: string }>;
   patientId?: string | null;
-  onSuccess?: () => void;
+  onSuccess?: () => void | Promise<void>;
 }
 
 export default function EmployeeDispenseModal({
@@ -108,7 +108,7 @@ export default function EmployeeDispenseModal({
           result.sales_invoice_name ? `, Invoice ${result.sales_invoice_name} (unpaid)` : ''
         }`
       );
-      onSuccess?.();
+      await onSuccess?.();
       onClose();
     } catch (error) {
       toast.error(extractErrorFromException(error, "Failed to dispense to employee"));

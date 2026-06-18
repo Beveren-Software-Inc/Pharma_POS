@@ -45,6 +45,7 @@ import { useFreeItemTaxAmount } from "../hooks/useFreeItemTaxAmount";
 import { useCustomerStatistics } from "../hooks/useCustomerStatistics";
 import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
+import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
 import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, type Patient, type InpatientMedicationOrder, type PatientHistorySummary } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
@@ -1065,6 +1066,7 @@ export default function OrderSummary({
   // const navigate = useNavigate();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { posDetails, loading: _posLoading } = usePOSDetails();
+  const setAfterPosSaleComplete = useUiStore((state) => state.setAfterPosSaleComplete);
   const { checkCustomerPermission } = useCustomerPermission();
   
   // Check if pharmacy mode is enabled
@@ -1754,15 +1756,15 @@ export default function OrderSummary({
           updateItemMetadata(lineKey, {
             medicationOrder: itemToAdd.medication_order,
             medicationOrders: Array.from(s),
+            ...(itemToAdd.medication_order_entry
+              ? { medication_order_entry: itemToAdd.medication_order_entry }
+              : {}),
           });
         }
         if (pink) {
           updateItemMetadata(lineKey, {
             is_pink: true,
             reference_no: itemToAdd.reference_no || "",
-            ...(itemToAdd.medication_order_entry
-              ? { medication_order_entry: itemToAdd.medication_order_entry }
-              : {}),
           });
         }
         if (itemToAdd.alternative_item_code) {
@@ -1804,8 +1806,10 @@ export default function OrderSummary({
             allowDuplicate: true,
             cartLineId: lineId,
             is_pink: true,
-            medication_order_entry: itemToAdd.medication_order_entry,
             reference_no: itemToAdd.reference_no || "",
+          }),
+          ...(itemToAdd.medication_order_entry && {
+            medication_order_entry: itemToAdd.medication_order_entry,
           }),
           ...(itemToAdd.medication_order && {
             medicationOrder: itemToAdd.medication_order,
@@ -2342,20 +2346,7 @@ export default function OrderSummary({
   };
 
   const handleStartNewOrder = async () => {
-    const soldItems = getSoldLineItems();
-    handleClearCart();
-    setLastDispensedSalesOrder(null);
-    setLastDispensedLabelItems([]);
-    setLastDispensedCartSignature(null);
-    setCreatedVisitRef(null);
-    try {
-      await refreshStockOnly();
-      if (soldItems.length > 0) {
-        await refreshSoldItemPickers(soldItems);
-      }
-    } catch (error) {
-      console.error("Failed to refresh stock for new order:", error);
-    }
+    await handlePostSaleComplete();
   };
 
   const printSalesOrder = (salesOrderName: string) => {
@@ -2520,11 +2511,12 @@ const pages = labels.map((label) => `
             serialNumber?: string;
             medicationOrder?: string;
           };
-          const cartLine = item as CartItem & {
-            alternative_drug?: string;
-            original_drug?: string;
-          };
+          const cartLine = item as CartItem;
           const effectiveItemCode = cartLine.alternative_drug || item.item_code || item.id;
+          const medicationOrderName =
+            cartLine.medicationOrder ||
+            lineDiscount.medicationOrder ||
+            (Array.isArray(cartLine.medicationOrders) ? cartLine.medicationOrders[0] : undefined);
           return {
             id: effectiveItemCode,
             item_code: effectiveItemCode,
@@ -2533,11 +2525,12 @@ const pages = labels.map((label) => `
             uom: item.uom,
             batchNumber: lineDiscount.batchNumber || cartLine.batch_no,
             serialNumber: lineDiscount.serialNumber || cartLine.serial_no,
-            medication_order: cartLine.medicationOrder || lineDiscount.medicationOrder,
+            medication_order: medicationOrderName,
             medication_order_entry: cartLine.medication_order_entry,
             reference_no: cartLine.reference_no,
             is_pink: cartLine.is_pink ? 1 : 0,
             alternative_drug: cartLine.alternative_drug || undefined,
+            alternative_medicine: cartLine.alternative_drug || undefined,
             original_drug: cartLine.original_drug || undefined,
           };
         }),
@@ -2717,6 +2710,31 @@ const pages = labels.map((label) => `
     setSelectedCustomer(null);
     setCustomerSearchQuery("");
   };
+
+  const handlePostSaleComplete = useCallback(
+    async (soldItems?: Array<{ itemCode: string; batchNo?: string }>) => {
+      const items = soldItems ?? getSoldLineItems();
+      handleClearCart();
+      setLastDispensedSalesOrder(null);
+      setLastDispensedLabelItems([]);
+      setLastDispensedCartSignature(null);
+      setCreatedVisitRef(null);
+      try {
+        await refreshStockOnly();
+        if (items.length > 0) {
+          await refreshSoldItemPickers(items);
+        }
+      } catch (error) {
+        console.error("Failed to refresh stock after sale:", error);
+      }
+    },
+    [getSoldLineItems, refreshStockOnly, refreshSoldItemPickers]
+  );
+
+  useEffect(() => {
+    setAfterPosSaleComplete(handlePostSaleComplete);
+    return () => setAfterPosSaleComplete(null);
+  }, [handlePostSaleComplete, setAfterPosSaleComplete]);
 
   const getCustomerTypeIcon = (customer: Customer) => {
     switch (customer.type) {
@@ -3705,8 +3723,10 @@ const handleSetSerial = (event: CustomEvent) => {
                   allowDuplicate: (item as CartItem).allowDuplicate,
                 });
               const showAddService = isHospitalPharmacy && !isServiceItem;
+              const showPinkReference = isHospitalPharmacy && !!(item as CartItem).is_pink;
               const row5FieldCount = [
                 isItemTaxTemplateMode && !isHospitalPharmacy,
+                showPinkReference,
                 showAddService,
                 isAllowAdditionalAmounts && !isHospitalPharmacy,
               ].filter(Boolean).length;
@@ -4092,26 +4112,6 @@ const handleSetSerial = (event: CustomEvent) => {
                         </div>
                         )}
 
-                        {/* Row 4a: Reference (pink medication order lines) */}
-                        {isHospitalPharmacy && (item as CartItem).is_pink && (
-                          <div className="grid grid-cols-2 gap-4 mb-4">
-                            <div>
-                              <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
-                                Reference
-                              </label>
-                              <input
-                                type="text"
-                                value={(item as CartItem).reference_no || ""}
-                                onChange={(e) =>
-                                  updateItemMetadata(lineKey, { reference_no: e.target.value })
-                                }
-                                placeholder="Enter reference..."
-                                className={cartFieldInputClass}
-                              />
-                            </div>
-                          </div>
-                        )}
-
                         {/* Row 4: Dosage | Prescription Frequency (Pharmacy only) */}
                         {isPharmacy && !isServiceItem && (
                           <div className="grid grid-cols-2 gap-4 mb-4">
@@ -4141,8 +4141,8 @@ const handleSetSerial = (event: CustomEvent) => {
                           </div>
                         )}
 
-                        {/* Row 5: Item Tax Template | Add Service | Additional Amount */}
-                        {(showAddService || (isItemTaxTemplateMode && !isHospitalPharmacy) || (isAllowAdditionalAmounts && !isHospitalPharmacy)) && (
+                        {/* Row 5: Reference (pink) | Item Tax Template | Add Service | Additional Amount */}
+                        {(showPinkReference || showAddService || (isItemTaxTemplateMode && !isHospitalPharmacy) || (isAllowAdditionalAmounts && !isHospitalPharmacy)) && (
                           <div
                             className={`grid gap-4 mb-4 ${
                               row5FieldCount >= 3
@@ -4152,6 +4152,22 @@ const handleSetSerial = (event: CustomEvent) => {
                                   : "grid-cols-1"
                             }`}
                           >
+                            {showPinkReference && (
+                              <div className="min-w-0">
+                                <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                                  Reference
+                                </label>
+                                <input
+                                  type="text"
+                                  value={(item as CartItem).reference_no || ""}
+                                  onChange={(e) =>
+                                    updateItemMetadata(lineKey, { reference_no: e.target.value })
+                                  }
+                                  placeholder="Enter reference..."
+                                  className={cartFieldInputClass}
+                                />
+                              </div>
+                            )}
                             {isItemTaxTemplateMode && !isHospitalPharmacy && (
                               <div className="min-w-0">
                                 <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
