@@ -53,7 +53,6 @@ import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
 import { getCachedDraftInvoiceItems } from "../utils/draftInvoiceCache";
 import { getPartyLabels } from "../utils/partyLabels";
-import { shouldUseDuplicateCartLines } from "../utils/duplicateCartItems";
 
 
 interface OrderSummaryProps {
@@ -1056,6 +1055,7 @@ export default function OrderSummary({
   const [createdVisitRef, setCreatedVisitRef] = useState<{ doctype: string; name: string } | null>(null);
   const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
   const [isDispensing, setIsDispensing] = useState(false);
+  const [showClinicalAppropriatenessConfirm, setShowClinicalAppropriatenessConfirm] = useState(false);
   const [lastDispensedSalesOrder, setLastDispensedSalesOrder] = useState<string | null>(null);
   const [lastDispensedLabelItems, setLastDispensedLabelItems] = useState<DispensedLabelItem[]>([]);
   const [lastDispensedCartSignature, setLastDispensedCartSignature] = useState<string | null>(null);
@@ -1104,15 +1104,6 @@ export default function OrderSummary({
         (item as CartItem).has_serial_no ?? product?.has_serial_no;
       const has_batch_no =
         (item as CartItem).has_batch_no ?? product?.has_batch_no;
-      if (
-        !shouldUseDuplicateCartLines(posDetails, {
-          has_serial_no,
-          has_batch_no,
-          allowDuplicate: true,
-        })
-      ) {
-        return;
-      }
       await addToCart({
         id: item.id,
         name: item.name,
@@ -1129,7 +1120,7 @@ export default function OrderSummary({
         allowDuplicate: true,
       });
     },
-    [addToCart, products, posDetails]
+    [addToCart, products]
   );
 
   const getSoldLineItems = useCallback(() => {
@@ -2443,18 +2434,15 @@ const pages = labels.map((label) => `
     }
   };
 
-  const handleDispense = async () => {
-    if (!validateCustomer()) return;
-    if (!selectedCustomer) return;
-    if (!isHospitalPharmacy) {
-      setShowPaymentDialog(true);
-      return;
-    }
+  const validateHospitalDispense = (): boolean => {
     const missingMedicationDetails = cartItems
       .filter((item) => !(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service)
       .map((item) => {
         const lineKey = getLineKey(item);
-        const lineDiscount = ((itemDiscounts[item.id] || itemDiscounts[lineKey]) || {}) as { dosage?: string; prescriptionDosage?: string };
+        const lineDiscount = ((itemDiscounts[item.id] || itemDiscounts[lineKey]) || {}) as {
+          dosage?: string;
+          prescriptionDosage?: string;
+        };
         const dosageRaw = lineDiscount.dosage;
         const frequencyRaw = lineDiscount.prescriptionDosage;
         const hasDosage = dosageRaw !== null && dosageRaw !== undefined && String(dosageRaw).trim() !== "";
@@ -2469,7 +2457,7 @@ const pages = labels.map((label) => `
       toast.error(
         `Missing dosage or prescription frequency for: ${uniqueItems.join(", ")}. Kindly update Patient Medication Order items before dispensing.`
       );
-      return;
+      return false;
     }
 
     const missingPinkReference = cartItems
@@ -2480,8 +2468,14 @@ const pages = labels.map((label) => `
     if (missingPinkReference.length > 0) {
       const uniqueItems = Array.from(new Set(missingPinkReference));
       toast.error(`Reference is required for: ${uniqueItems.join(", ")}.`);
-      return;
+      return false;
     }
+
+    return true;
+  };
+
+  const executeDispense = async () => {
+    if (!selectedCustomer) return;
 
     try {
       setIsDispensing(true);
@@ -2615,6 +2609,22 @@ const pages = labels.map((label) => `
     } finally {
       setIsDispensing(false);
     }
+  };
+
+  const handleDispense = () => {
+    if (!validateCustomer()) return;
+    if (!selectedCustomer) return;
+    if (!isHospitalPharmacy) {
+      setShowPaymentDialog(true);
+      return;
+    }
+    if (!validateHospitalDispense()) return;
+    setShowClinicalAppropriatenessConfirm(true);
+  };
+
+  const handleConfirmClinicalAppropriateness = () => {
+    setShowClinicalAppropriatenessConfirm(false);
+    void executeDispense();
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3722,16 +3732,7 @@ const handleSetSerial = (event: CustomEvent) => {
             cartItems.map((item) => {
               const lineKey = getLineKey(item);
               const isServiceItem = !!(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service;
-              const catalogItem = products.find((p) => p.id === item.id);
-              const duplicateLineEnabled =
-                !isServiceItem &&
-                shouldUseDuplicateCartLines(posDetails, {
-                  has_serial_no:
-                    (item as CartItem).has_serial_no ?? catalogItem?.has_serial_no,
-                  has_batch_no:
-                    (item as CartItem).has_batch_no ?? catalogItem?.has_batch_no,
-                  allowDuplicate: (item as CartItem).allowDuplicate,
-                });
+              const duplicateLineEnabled = !isServiceItem;
               const showAddService = isHospitalPharmacy && !isServiceItem;
               const showPinkReference = isHospitalPharmacy && !!(item as CartItem).is_pink;
               const row5FieldCount = [
@@ -4495,6 +4496,49 @@ const handleSetSerial = (event: CustomEvent) => {
           generalAdditionalAmount={generalAdditionalAmount}
           additionalRemark={additionalRemark}
         />
+      )}
+
+      {/* Clinical appropriateness confirmation (hospital dispense) */}
+      {showClinicalAppropriatenessConfirm && (
+        <div
+          className="fixed inset-0 lg:left-20 z-[100] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowClinicalAppropriatenessConfirm(false)}
+        >
+          <div
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-sm border border-gray-200 dark:border-gray-700"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-beveren-100 dark:bg-beveren-900/30 flex items-center justify-center flex-shrink-0">
+                <Pill size={20} className="text-beveren-600 dark:text-beveren-400" />
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+                Confirm dispense
+              </h3>
+            </div>
+            <p className="px-5 py-4 text-sm text-gray-600 dark:text-gray-300">
+              Medication checked for clinical appropriateness?
+            </p>
+            <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowClinicalAppropriatenessConfirm(false)}
+                disabled={isDispensing}
+                className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClinicalAppropriateness}
+                disabled={isDispensing}
+                className="px-4 py-2 text-sm font-semibold text-white bg-beveren-600 hover:bg-beveren-700 rounded-lg disabled:opacity-50"
+              >
+                {isDispensing ? "Dispensing..." : "OK"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Pharmacy Service Modal */}

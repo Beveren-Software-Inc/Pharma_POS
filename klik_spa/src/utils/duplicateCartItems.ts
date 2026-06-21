@@ -25,9 +25,8 @@ export function itemHasSerialOrBatch(item: SerialBatchFlags): boolean {
 }
 
 export function shouldUseDuplicateCartLines(
-  posDetails: { custom_allow_duplicate_items_in_pos?: unknown } | null | undefined,
-  item: SerialBatchFlags
+  _posDetails?: { custom_allow_duplicate_items_in_pos?: unknown } | null,
+  _item?: SerialBatchFlags
 ): boolean {
-  if (item.allowDuplicate) return true;
-  return isPosAllowDuplicateItems(posDetails) && itemHasSerialOrBatch(item);
+  return true;
 }
