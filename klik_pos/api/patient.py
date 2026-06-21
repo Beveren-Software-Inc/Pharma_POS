@@ -49,6 +49,14 @@ def _medication_order_entry_to_dict(item):
 	item_dict["uom"] = getattr(item, "uom", None)
 	item_dict["is_pink"] = int(getattr(item, "is_pink", 0) or 0)
 	item_dict["reference_no"] = getattr(item, "reference_no", None) or ""
+	item_dict["instructions"] = _strip_html_text(getattr(item, "instructions", None))
+	item_dict["no_of_days"] = getattr(item, "no_of_days", None)
+	item_dict["route_of_administration"] = getattr(item, "route_of_administration", None)
+	item_dict["date"] = getattr(item, "date", None)
+	item_dict["time"] = getattr(item, "time", None)
+	item_dict["end_date"] = getattr(item, "end_date", None)
+	item_dict["alternative_medicine"] = getattr(item, "alternative_medicine", None)
+	item_dict["alternative_medicine_name"] = getattr(item, "alternative_medicine_name", None)
 
 	return item_dict
 
@@ -133,6 +141,62 @@ def resolve_patient_for_customer(customer: str):
 		as_dict=True,
 	)
 	return row
+
+
+@frappe.whitelist()
+def get_print_formats_for_doctype(doctype: str):
+	"""Return available print formats for a DocType (for POS print menus)."""
+	doctype = (doctype or "").strip()
+	if not doctype:
+		frappe.throw("DocType is required")
+
+	default_format = "Standard"
+	if frappe.db.exists("DocType", doctype):
+		default_format = frappe.get_meta(doctype).default_print_format or "Standard"
+
+	property_default = frappe.db.get_value(
+		"Property Setter",
+		{
+			"doc_type": doctype,
+			"property": "default_print_format",
+			"doctype_or_field": "DocType",
+		},
+		"value",
+	)
+	if property_default:
+		default_format = property_default
+
+	filters = {"doc_type": doctype}
+	if frappe.db.has_column("Print Format", "disabled"):
+		filters["disabled"] = 0
+
+	rows = frappe.get_all(
+		"Print Format",
+		filters=filters,
+		fields=["name", "print_format_type", "raw_printing"],
+		order_by="name asc",
+	)
+
+	enable_raw_printing = frappe.db.get_single_value("Print Settings", "enable_raw_printing")
+
+	formats = ["Standard"]
+	for row in rows:
+		name = row.name
+		if name in formats:
+			continue
+		if row.get("print_format_type") == "JS":
+			continue
+		if row.get("raw_printing") and not enable_raw_printing:
+			continue
+		formats.append(name)
+
+	if default_format and default_format in formats:
+		formats.remove(default_format)
+		formats.insert(0, default_format)
+	elif default_format and default_format not in formats and default_format != "Standard":
+		formats.insert(0, default_format)
+
+	return {"formats": formats, "default": default_format or "Standard"}
 
 
 @frappe.whitelist()

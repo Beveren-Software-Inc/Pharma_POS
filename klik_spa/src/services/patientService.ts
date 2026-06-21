@@ -22,6 +22,14 @@ export interface InpatientMedicationOrderItem {
   medication_order_entry?: string;
   is_pink?: number | boolean | string;
   reference_no?: string;
+  instructions?: string;
+  no_of_days?: number | string | null;
+  route_of_administration?: string;
+  date?: string;
+  time?: string;
+  end_date?: string;
+  alternative_medicine?: string;
+  alternative_medicine_name?: string;
 }
 
 export interface InpatientMedicationOrder {
@@ -119,6 +127,37 @@ export async function resolvePatientForCustomer(customerId: string): Promise<Pat
   } catch (error) {
     console.error("Error resolving patient for customer:", error);
     return null;
+  }
+}
+
+export async function getPrintFormatsForDoctype(
+  doctype: string
+): Promise<{ formats: string[]; default: string }> {
+  if (!doctype?.trim()) return { formats: ["Standard"], default: "Standard" };
+  try {
+    const response = await fetch(
+      `/api/method/klik_pos.api.patient.get_print_formats_for_doctype?doctype=${encodeURIComponent(doctype.trim())}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to fetch print formats");
+    }
+    const message = data?.message;
+    if (message?.formats?.length) {
+      return {
+        formats: message.formats,
+        default: message.default || message.formats[0] || "Standard",
+      };
+    }
+    return { formats: ["Standard"], default: "Standard" };
+  } catch (error) {
+    console.error("Error fetching print formats:", error);
+    return { formats: ["Standard"], default: "Standard" };
   }
 }
 

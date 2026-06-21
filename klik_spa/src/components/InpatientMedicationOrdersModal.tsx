@@ -1,10 +1,10 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search } from "lucide-react";
 import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption } from "../services/patientService";
-import { searchPosStockItemsForAlternative } from "../services/patientService";
+import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype } from "../services/patientService";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -60,6 +60,185 @@ interface ItemRow {
   patient_frequency?: string;
   medication_type?: string;
   is_prn?: number | boolean | string;
+  dosage_form?: string;
+  period?: string;
+  instructions?: string;
+  no_of_days?: number | string | null;
+  route_of_administration?: string;
+  date?: string;
+  time?: string;
+  end_date?: string;
+  reference_no?: string;
+  alternative_medicine?: string;
+  alternative_medicine_name?: string;
+}
+
+function hasText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function formatMedicationSecondaryDetails(item: ItemRow): { label: string; value: string }[] {
+  const details: { label: string; value: string }[] = [];
+
+  if (hasText(item.instructions)) {
+    details.push({ label: "Instructions", value: item.instructions.trim() });
+  }
+  if (hasText(item.dosage_form)) {
+    details.push({ label: "Dosage form", value: item.dosage_form.trim() });
+  }
+  if (hasText(item.period)) {
+    details.push({ label: "Period", value: item.period.trim() });
+  }
+  if (item.no_of_days != null && item.no_of_days !== "") {
+    details.push({ label: "No. of days", value: String(item.no_of_days) });
+  }
+  if (hasText(item.route_of_administration)) {
+    details.push({ label: "Route", value: item.route_of_administration.trim() });
+  }
+  if (hasText(item.date)) {
+    details.push({ label: "Start date", value: item.date.trim() });
+  }
+  if (hasText(item.time)) {
+    details.push({ label: "Time", value: item.time.trim() });
+  }
+  if (hasText(item.end_date)) {
+    details.push({ label: "End date", value: item.end_date.trim() });
+  }
+  if (hasText(item.reference_no)) {
+    details.push({ label: "Reference no.", value: item.reference_no.trim() });
+  }
+  if (hasText(item.alternative_medicine)) {
+    const altLabel = hasText(item.alternative_medicine_name)
+      ? `${item.alternative_medicine_name.trim()} (${item.alternative_medicine.trim()})`
+      : item.alternative_medicine.trim();
+    details.push({ label: "Alternative", value: altLabel });
+  }
+
+  return details;
+}
+
+function MedicationDrugCell({ item }: { item: ItemRow }) {
+  const label = item.drug_name || item.drug || "—";
+  const details = useMemo(
+    () => formatMedicationSecondaryDetails(item),
+    [
+      item.instructions,
+      item.dosage_form,
+      item.period,
+      item.no_of_days,
+      item.route_of_administration,
+      item.date,
+      item.time,
+      item.end_date,
+      item.reference_no,
+      item.alternative_medicine,
+      item.alternative_medicine_name,
+    ]
+  );
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    const tooltip = tooltipRef.current;
+    if (!trigger || !tooltip) return;
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const gap = 8;
+    const margin = 8;
+
+    const spaceAbove = triggerRect.top - margin;
+    const spaceBelow = window.innerHeight - triggerRect.bottom - margin;
+
+    let top: number;
+    if (spaceBelow >= tooltipRect.height + gap || spaceBelow >= spaceAbove) {
+      top = triggerRect.bottom + gap;
+    } else {
+      top = triggerRect.top - tooltipRect.height - gap;
+    }
+
+    top = Math.max(margin, Math.min(top, window.innerHeight - tooltipRect.height - margin));
+
+    let left = triggerRect.left;
+    left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
+
+    setCoords((prev) => {
+      if (prev?.top === top && prev?.left === left) return prev;
+      return { top, left };
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!hovered) return;
+    updatePosition();
+  }, [hovered, details, updatePosition]);
+
+  useEffect(() => {
+    if (!hovered) return;
+    const onScrollOrResize = () => updatePosition();
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [hovered, updatePosition]);
+
+  if (!details.length) {
+    return <span>{label}</span>;
+  }
+
+  const tooltip =
+    hovered && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={tooltipRef}
+            role="tooltip"
+            className="fixed z-[10100] w-max min-w-[16rem] max-w-sm pointer-events-none"
+            style={{
+              top: coords?.top ?? 0,
+              left: coords?.left ?? 0,
+              visibility: coords ? "visible" : "hidden",
+            }}
+          >
+            <div className="rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 shadow-lg text-left">
+              <div className="space-y-1.5">
+                {details.map(({ label: detailLabel, value }) => (
+                  <div key={detailLabel}>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                      {detailLabel}
+                    </div>
+                    <div className="text-[11px] text-gray-700 dark:text-gray-200 whitespace-pre-wrap break-words">
+                      {value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
+
+  return (
+    <>
+      <span
+        ref={triggerRef}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => {
+          setHovered(false);
+          setCoords(null);
+        }}
+        className="cursor-help underline decoration-dotted decoration-gray-300 dark:decoration-gray-600 underline-offset-2"
+      >
+        {label}
+      </span>
+      {tooltip}
+    </>
+  );
 }
 
 // ── Alternative drug search modal ─────────────────────────────────────────────
@@ -292,6 +471,7 @@ function ItemsTable({
   alternativeDrugs,
   alternativeDrugLabels,
   onAlternativeChange,
+  showDetailsOnHover,
 }: {
   items: ItemRow[];
   selectable?: boolean;
@@ -302,12 +482,13 @@ function ItemsTable({
   alternativeDrugs?: Record<string, string>;
   alternativeDrugLabels?: Record<string, string>;
   onAlternativeChange?: (key: string, value: string, itemName?: string) => void;
+  showDetailsOnHover?: boolean;
 }) {
   if (!items.length) return null;
   const isPrn = (v: ItemRow["is_prn"]) => v === 1 || v === true || v === "1";
 
   return (
-    <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden text-xs">
+    <div className={`rounded-lg border border-gray-200 dark:border-gray-700 text-xs ${showDetailsOnHover ? "overflow-visible" : "overflow-hidden"}`}>
       <table className="w-full">
         <thead>
           <tr className="bg-gray-50 dark:bg-gray-800/70 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
@@ -353,7 +534,7 @@ function ItemsTable({
                    </td>
                 )}
                 <td className="px-3 py-2 font-semibold text-gray-800 dark:text-gray-200 whitespace-nowrap">
-                  {item.drug_name || item.drug || "—"}
+                  {showDetailsOnHover ? <MedicationDrugCell item={item} /> : (item.drug_name || item.drug || "—")}
                  </td>
                 <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                   {item.dosage || "—"}
@@ -429,7 +610,10 @@ export default function InpatientMedicationOrdersModal({
   const [expandedPatientHistoryOrders, setExpandedPatientHistoryOrders] = useState<Set<string>>(new Set());
   const [openPrintMenuFor, setOpenPrintMenuFor] = useState<string | null>(null);
   const [printMenuPosition, setPrintMenuPosition] = useState<{ top: number; right: number } | null>(null);
+  const [medicationOrderPrintFormats, setMedicationOrderPrintFormats] = useState<string[]>(["Standard"]);
   const printButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const MEDICATION_ORDER_DOCTYPE = "Patient Medication Order";
 
   useEffect(() => {
     if (!isOpen) {
@@ -450,11 +634,18 @@ export default function InpatientMedicationOrdersModal({
     }
   }, [isOpen, isHospitalMode, patientVisitCreatedSignal]);
 
-  const openDocPrint = (doctype: string, name: string) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    void getPrintFormatsForDoctype(MEDICATION_ORDER_DOCTYPE).then(({ formats }) => {
+      setMedicationOrderPrintFormats(formats.length ? formats : ["Standard"]);
+    });
+  }, [isOpen]);
+
+  const openDocPrint = (doctype: string, name: string, format = "Standard") => {
     const params = new URLSearchParams();
     params.set("doctype", doctype);
     params.set("name", name);
-    params.set("format", "Standard");
+    params.set("format", format);
     params.set("trigger_print", "1");
     params.set("no_letterhead", "0");
     const base = typeof window !== "undefined" ? window.location.origin : "";
@@ -490,19 +681,23 @@ export default function InpatientMedicationOrdersModal({
       ? createPortal(
           <div
             data-med-print-menu
-            className="fixed z-[9999] min-w-[160px] rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
+            className="fixed z-[9999] min-w-[180px] max-h-64 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
             style={{ top: printMenuPosition.top, right: printMenuPosition.right, left: "auto" }}
           >
-            <button
-              type="button"
-              className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-              onClick={() => {
-                openPrint("Patient Medication Order", openPrintMenuFor, "Standard");
-                setOpenPrintMenuFor(null);
-              }}
-            >
-              <Printer size={13} className="text-slate-400" /> Standard
-            </button>
+            {medicationOrderPrintFormats.map((format) => (
+              <button
+                key={format}
+                type="button"
+                className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                onClick={() => {
+                  openPrint(MEDICATION_ORDER_DOCTYPE, openPrintMenuFor, format);
+                  setOpenPrintMenuFor(null);
+                }}
+              >
+                <Printer size={13} className="text-slate-400 flex-shrink-0" />
+                <span className="truncate">{format}</span>
+              </button>
+            ))}
           </div>,
           document.body
         )
@@ -646,6 +841,7 @@ export default function InpatientMedicationOrdersModal({
                           <ItemsTable
                             items={order.items}
                             orderName={order.name}
+                            showDetailsOnHover
                             productAvailability={productAvailability}
                             alternativeDrugs={alternativeDrugs}
                             alternativeDrugLabels={alternativeDrugLabels}
