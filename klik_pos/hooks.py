@@ -83,7 +83,10 @@ fixtures = [
      "POS Profile-custom_is_hospital_pharmacy",
      "Item-custom_is_pharmacy_service",
      "Sales Order-custom_is_pos",
-     "POS Profile-custom_print_delivery_receipt"
+     "POS Profile-custom_print_delivery_receipt",
+     "Sales Order-custom_internal_employee_dispensing",
+     "Sales Invoice-custom_employee",
+     "Sales Invoice-custom_internal_employee_dispensing",
 				),
 			]
 		],
