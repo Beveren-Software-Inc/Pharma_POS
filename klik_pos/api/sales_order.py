@@ -3,6 +3,8 @@ import json
 import frappe
 from frappe.utils import flt, nowdate
 
+from klik_pos.api.patient import resolve_patient_from_customer
+
 
 def _to_bool(value):
 	return value in (1, "1", True, "true", "True")
@@ -55,81 +57,165 @@ def _to_bool_flag(value):
 	return value in (1, "1", True, "true", "True")
 
 
-def _update_medication_order_references(items):
-	"""Write cart reference_no and alternative_drug back to Patient Medication Order child rows."""
-	if not items:
-		return
+def _get_alternative_medicine_fieldname():
+	"""Child-row field for the dispensed alternative item (Healthcare: alternative_medicine)."""
+	cache_key = "_pmo_alternative_medicine_field"
+	cached = getattr(frappe.local, cache_key, None)
+	if cached is not None:
+		return cached or None
 
+	fieldname = None
+	try:
+		meta = frappe.get_meta("Inpatient Medication Order Entry")
+		if meta.has_field("alternative_medicine"):
+			fieldname = "alternative_medicine"
+		elif meta.has_field("alternative_drug"):
+			fieldname = "alternative_drug"
+	except Exception:
+		pass
+
+	setattr(frappe.local, cache_key, fieldname or "")
+	return fieldname
+
+
+def _resolve_medication_order_name(item):
+	order_name = (item.get("medication_order") or item.get("medicationOrder") or "").strip()
+	if order_name:
+		return order_name
+
+	for key in ("medication_orders", "medicationOrders"):
+		orders = item.get(key)
+		if isinstance(orders, list):
+			for entry in orders:
+				if isinstance(entry, str) and entry.strip():
+					return entry.strip()
+		elif isinstance(orders, str) and orders.strip():
+			return orders.strip()
+
+	return None
+
+
+def _extract_alternative_item_code(item):
+	alternative_item = (
+		item.get("alternative_medicine")
+		or item.get("alternative_drug")
+		or item.get("alternativeDrug")
+		or item.get("alternative_item_code")
+		or ""
+	).strip()
+	if alternative_item:
+		return alternative_item
+
+	original_drug = (item.get("original_drug") or item.get("originalDrug") or "").strip()
+	dispensed_item = (item.get("id") or item.get("item_code") or "").strip()
+	if original_drug and dispensed_item and original_drug != dispensed_item:
+		return dispensed_item
+
+	return ""
+
+
+def _build_medication_order_entry_updates(items):
+	"""Map PMO child row names to field updates for dispensed lines."""
+	if not items:
+		return {}
+
+	alternative_field = _get_alternative_medicine_fieldname()
+	child_meta = frappe.get_meta("Inpatient Medication Order Entry")
 	updates_by_order = {}
+
 	for item in items:
-		order_name = item.get("medication_order")
-		entry_name = item.get("medication_order_entry")
+		order_name = _resolve_medication_order_name(item)
+		entry_name = (item.get("medication_order_entry") or item.get("medicationOrderEntry") or "").strip()
 		if not order_name or not entry_name:
 			continue
 		if not frappe.db.exists("Patient Medication Order", order_name):
 			continue
 
 		payload = updates_by_order.setdefault(order_name, {}).setdefault(entry_name, {})
+
+		if child_meta.has_field("is_completed"):
+			payload["is_completed"] = 1
+
 		if _to_bool_flag(item.get("is_pink")):
 			reference_no = (item.get("reference_no") or "").strip()
 			if reference_no:
 				payload["reference_no"] = reference_no
-		alternative_drug = (item.get("alternative_drug") or item.get("alternativeDrug") or "").strip()
-		if alternative_drug:
-			payload["alternative_drug"] = alternative_drug
 
-	if not updates_by_order:
+		alternative_item = _extract_alternative_item_code(item)
+		if alternative_item and alternative_field:
+			payload[alternative_field] = alternative_item
+			if (
+				alternative_field == "alternative_medicine"
+				and child_meta.has_field("alternative_medicine_name")
+			):
+				payload["alternative_medicine_name"] = (
+					frappe.db.get_value("Item", alternative_item, "item_name") or alternative_item
+				)
+
+	return updates_by_order
+
+
+def _set_child_entry_fields(entry_name, payload):
+	if not entry_name or not payload:
 		return
 
-	child_tables = [
-		"medication_orders",
-		"drug_prescription",
-		"items",
-		"drugs",
-		"drug_prescription_detail",
-	]
+	child_meta = frappe.get_meta("Inpatient Medication Order Entry")
+	for fieldname, value in payload.items():
+		if not child_meta.has_field(fieldname):
+			continue
+		frappe.db.set_value(
+			"Inpatient Medication Order Entry",
+			entry_name,
+			fieldname,
+			value,
+			update_modified=True,
+		)
+
+
+def _sync_patient_medication_order_progress(order_name):
+	"""Recount completed child rows and refresh parent status (Healthcare set_status)."""
+	if not frappe.db.exists("Patient Medication Order", order_name):
+		return
+
+	try:
+		doc = frappe.get_doc("Patient Medication Order", order_name)
+		total_orders = len(doc.get("medication_orders") or [])
+		if doc.meta.has_field("total_orders"):
+			doc.db_set("total_orders", total_orders, update_modified=False)
+
+		completed_orders = frappe.db.count(
+			"Inpatient Medication Order Entry",
+			{"parent": order_name, "is_completed": 1},
+		)
+		doc.completed_orders = completed_orders
+		doc.db_set("completed_orders", completed_orders, update_modified=False)
+		doc.set_status()
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(),
+			f"Failed to sync completion progress on Patient Medication Order {order_name}",
+		)
+
+
+def _finalize_medication_orders_after_dispense(items, medication_orders):
+	"""Mark dispensed child rows complete and sync PMO completed_orders/status."""
+	updates_by_order = _build_medication_order_entry_updates(items)
 
 	for order_name, entry_map in updates_by_order.items():
-		try:
-			doc = frappe.get_doc("Patient Medication Order", order_name)
-			updated = False
-			for table_field in child_tables:
-				if not doc.get(table_field):
-					continue
-				for row in doc.get(table_field):
-					if row.name not in entry_map:
-						continue
-					for fieldname, value in entry_map[row.name].items():
-						if hasattr(row, fieldname):
-							setattr(row, fieldname, value)
-							updated = True
-			if updated:
-				doc.save(ignore_permissions=True)
-		except Exception:
-			frappe.log_error(
-				frappe.get_traceback(),
-				f"Failed to update medication order entry fields on {order_name}",
-			)
-
-
-def _mark_medication_orders_completed(order_names):
-	if not order_names:
-		return
-
-	for order_name in order_names:
-		if not frappe.db.exists("Patient Medication Order", order_name):
-			continue
-		try:
-			doc = frappe.get_doc("Patient Medication Order", order_name)
-			if hasattr(doc, "status"):
-				doc.status = "Completed"
-			doc.save(ignore_permissions=True)
-		except Exception:
-			# Fallback for stricter doctypes/workflows where save might fail
+		for entry_name, payload in entry_map.items():
 			try:
-				frappe.db.set_value("Patient Medication Order", order_name, "status", "Completed", update_modified=True)
+				_set_child_entry_fields(entry_name, payload)
 			except Exception:
-				frappe.log_error(frappe.get_traceback(), f"Failed to set Completed on Medication Order {order_name}")
+				frappe.log_error(
+					frappe.get_traceback(),
+					f"Failed to update PMO entry {entry_name} on {order_name}",
+				)
+
+	orders_to_sync = set(medication_orders or [])
+	orders_to_sync.update(updates_by_order.keys())
+
+	for order_name in orders_to_sync:
+		_sync_patient_medication_order_progress(order_name)
 
 
 def _derive_reference_from_medication_orders(reference_type, reference_name, medication_orders):
@@ -166,7 +252,7 @@ def _derive_reference_from_medication_orders(reference_type, reference_name, med
 def _resolve_patient_for_hospital_order(data, medication_orders):
 	"""
 	Link Sales Order to Patient (Healthcare) when field exists.
-	Order: explicit payload -> first medication order's patient.
+	Order: explicit payload -> medication order's patient -> customer link.
 	"""
 	patient = (data.get("patient") or data.get("patient_id") or "").strip()
 	if patient and frappe.db.exists("Patient", patient):
@@ -178,6 +264,13 @@ def _resolve_patient_for_hospital_order(data, medication_orders):
 			p = frappe.db.get_value("Patient Medication Order", first, "patient")
 			if p and frappe.db.exists("Patient", p):
 				return p
+
+	customer = data.get("customer")
+	if isinstance(customer, dict):
+		customer = customer.get("id") or customer.get("name")
+	customer = (customer or "").strip()
+	if customer:
+		return resolve_patient_from_customer(customer)
 
 	return None
 
@@ -336,8 +429,7 @@ def create_and_submit_hospital_sales_order(data):
 			doc.submit()
 
 			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(doc.name, pos_profile)
-			_update_medication_order_references(items)
-			_mark_medication_orders_completed(medication_orders)
+			_finalize_medication_orders_after_dispense(items, medication_orders)
 		except Exception:
 			frappe.db.rollback(save_point=savepoint)
 			raise

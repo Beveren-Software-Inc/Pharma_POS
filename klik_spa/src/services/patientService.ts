@@ -22,6 +22,14 @@ export interface InpatientMedicationOrderItem {
   medication_order_entry?: string;
   is_pink?: number | boolean | string;
   reference_no?: string;
+  instructions?: string;
+  no_of_days?: number | string | null;
+  route_of_administration?: string;
+  date?: string;
+  time?: string;
+  end_date?: string;
+  alternative_medicine?: string;
+  alternative_medicine_name?: string;
 }
 
 export interface InpatientMedicationOrder {
@@ -43,11 +51,19 @@ export interface ItemAlternativeOption {
   available: number;
 }
 
-export async function getItemAlternatives(itemCode: string): Promise<ItemAlternativeOption[]> {
-  if (!itemCode?.trim()) return [];
+export async function searchPosStockItemsForAlternative(
+  search: string,
+  excludeItemCode?: string,
+  limit = 50
+): Promise<ItemAlternativeOption[]> {
   try {
+    const params = new URLSearchParams();
+    if (search.trim()) params.set("search", search.trim());
+    if (excludeItemCode?.trim()) params.set("exclude_item_code", excludeItemCode.trim());
+    params.set("limit", String(limit));
+
     const response = await fetch(
-      `/api/method/klik_pos.api.item.get_item_alternatives?item_code=${encodeURIComponent(itemCode.trim())}`,
+      `/api/method/klik_pos.api.item.search_pos_stock_items_for_alternative?${params.toString()}`,
       {
         method: "GET",
         headers: { "Content-Type": "application/json" },
@@ -56,11 +72,11 @@ export async function getItemAlternatives(itemCode: string): Promise<ItemAlterna
     );
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.message || "Failed to fetch alternative items");
+      throw new Error(data.message || "Failed to search POS items");
     }
     return Array.isArray(data?.message) ? data.message : [];
   } catch (error) {
-    console.error("Error fetching item alternatives:", error);
+    console.error("Error searching POS stock items:", error);
     return [];
   }
 }
@@ -89,6 +105,59 @@ export async function searchPatients(searchQuery: string): Promise<Patient[]> {
   } catch (error) {
     console.error(`Error searching patients:`, error);
     return [];
+  }
+}
+
+export async function resolvePatientForCustomer(customerId: string): Promise<Patient | null> {
+  if (!customerId?.trim()) return null;
+  try {
+    const response = await fetch(
+      `/api/method/klik_pos.api.patient.resolve_patient_for_customer?customer=${encodeURIComponent(customerId.trim())}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to resolve patient for customer");
+    }
+    return data?.message || null;
+  } catch (error) {
+    console.error("Error resolving patient for customer:", error);
+    return null;
+  }
+}
+
+export async function getPrintFormatsForDoctype(
+  doctype: string
+): Promise<{ formats: string[]; default: string }> {
+  if (!doctype?.trim()) return { formats: ["Standard"], default: "Standard" };
+  try {
+    const response = await fetch(
+      `/api/method/klik_pos.api.patient.get_print_formats_for_doctype?doctype=${encodeURIComponent(doctype.trim())}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to fetch print formats");
+    }
+    const message = data?.message;
+    if (message?.formats?.length) {
+      return {
+        formats: message.formats,
+        default: message.default || message.formats[0] || "Standard",
+      };
+    }
+    return { formats: ["Standard"], default: "Standard" };
+  } catch (error) {
+    console.error("Error fetching print formats:", error);
+    return { formats: ["Standard"], default: "Standard" };
   }
 }
 

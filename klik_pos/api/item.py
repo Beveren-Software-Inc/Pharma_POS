@@ -1450,6 +1450,53 @@ def get_item_alternatives(item_code: str):
 
 
 @frappe.whitelist(allow_guest=True)
+def search_pos_stock_items_for_alternative(
+	search: str | None = None,
+	exclude_item_code: str | None = None,
+	limit: int = 50,
+):
+	"""Search in-stock POS catalog items for medication-order alternative picker."""
+	try:
+		limit = max(1, min(int(limit or 50), 100))
+	except (TypeError, ValueError):
+		limit = 50
+
+	exclude_item_code = (exclude_item_code or "").strip()
+	pos_doc, warehouse, _price_list, _hide_unavailable = _get_pos_context()
+	if not warehouse:
+		return []
+
+	base_query = [
+		"SELECT DISTINCT i.name as item_code, i.item_name, b.actual_qty as available",
+		"FROM `tabItem` i",
+		"INNER JOIN `tabBin` b ON i.name = b.item_code",
+		"WHERE i.disabled = 0",
+		"AND i.is_stock_item = 1",
+		"AND b.warehouse = %s",
+		"AND b.actual_qty > 0",
+	]
+	params: list[object] = [warehouse]
+
+	has_additional_flag = frappe.db.has_column("Item", "custom_is_additional_charges")
+	if has_additional_flag:
+		base_query.append("AND COALESCE(i.custom_is_additional_charges, 0) = 0")
+
+	_append_item_group_filters(base_query, [], params, [], pos_doc)
+
+	if exclude_item_code:
+		base_query.append("AND i.name != %s")
+		params.append(exclude_item_code)
+
+	_append_search_filter(base_query, params, search)
+
+	base_query.append("ORDER BY i.item_name ASC")
+	base_query.append("LIMIT %s")
+	params.append(limit)
+
+	return frappe.db.sql("\n".join(base_query), tuple(params), as_dict=True)
+
+
+@frappe.whitelist(allow_guest=True)
 def get_items_stock_batch(item_codes: str):
 	"""Get stock for multiple specific items - optimized batch update with early filtering."""
 	pos_doc = get_current_pos_profile()
