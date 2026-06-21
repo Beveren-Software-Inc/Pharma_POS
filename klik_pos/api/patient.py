@@ -93,6 +93,48 @@ def _extract_medication_order_items(order_doc):
 	return items
 
 
+def resolve_patient_from_customer(customer):
+	"""Map a POS Customer to the linked Healthcare Patient record."""
+	if not customer or not frappe.db.exists("DocType", "Patient"):
+		return None
+
+	customer = (customer or "").strip()
+	if not customer:
+		return None
+
+	linked = frappe.db.get_value("Patient", {"customer": customer}, "name")
+	if linked and frappe.db.exists("Patient", linked):
+		return linked
+
+	if frappe.db.exists("Patient", customer):
+		return customer
+
+	customer_name = frappe.db.get_value("Customer", customer, "customer_name")
+	if customer_name:
+		for filters in ({"patient_name": customer_name}, {"name": customer_name}):
+			linked = frappe.db.get_value("Patient", filters, "name")
+			if linked and frappe.db.exists("Patient", linked):
+				return linked
+
+	return None
+
+
+@frappe.whitelist()
+def resolve_patient_for_customer(customer: str):
+	"""Return Patient summary for a selected POS customer (hospital pharmacy)."""
+	patient_name = resolve_patient_from_customer(customer)
+	if not patient_name:
+		return None
+
+	row = frappe.db.get_value(
+		"Patient",
+		patient_name,
+		["name", "patient_name", "patient_id", "file_no"],
+		as_dict=True,
+	)
+	return row
+
+
 @frappe.whitelist()
 def search_patients(search_query: str):
 	"""

@@ -100,6 +100,28 @@ export async function searchPatients(searchQuery: string): Promise<Patient[]> {
   }
 }
 
+export async function resolvePatientForCustomer(customerId: string): Promise<Patient | null> {
+  if (!customerId?.trim()) return null;
+  try {
+    const response = await fetch(
+      `/api/method/klik_pos.api.patient.resolve_patient_for_customer?customer=${encodeURIComponent(customerId.trim())}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to resolve patient for customer");
+    }
+    return data?.message || null;
+  } catch (error) {
+    console.error("Error resolving patient for customer:", error);
+    return null;
+  }
+}
+
 export async function getPendingInpatientMedicationOrders(patient: string): Promise<InpatientMedicationOrder[]> {
   try {
     const apiUrl = `/api/method/klik_pos.api.patient.get_pending_inpatient_medication_orders?patient=${encodeURIComponent(patient)}`;

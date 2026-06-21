@@ -3,6 +3,8 @@ import json
 import frappe
 from frappe.utils import flt, nowdate
 
+from klik_pos.api.patient import resolve_patient_from_customer
+
 
 def _to_bool(value):
 	return value in (1, "1", True, "true", "True")
@@ -250,7 +252,7 @@ def _derive_reference_from_medication_orders(reference_type, reference_name, med
 def _resolve_patient_for_hospital_order(data, medication_orders):
 	"""
 	Link Sales Order to Patient (Healthcare) when field exists.
-	Order: explicit payload -> first medication order's patient.
+	Order: explicit payload -> medication order's patient -> customer link.
 	"""
 	patient = (data.get("patient") or data.get("patient_id") or "").strip()
 	if patient and frappe.db.exists("Patient", patient):
@@ -262,6 +264,13 @@ def _resolve_patient_for_hospital_order(data, medication_orders):
 			p = frappe.db.get_value("Patient Medication Order", first, "patient")
 			if p and frappe.db.exists("Patient", p):
 				return p
+
+	customer = data.get("customer")
+	if isinstance(customer, dict):
+		customer = customer.get("id") or customer.get("name")
+	customer = (customer or "").strip()
+	if customer:
+		return resolve_patient_from_customer(customer)
 
 	return None
 

@@ -47,7 +47,7 @@ import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, type Patient, type InpatientMedicationOrder, type PatientHistorySummary } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, type Patient, type InpatientMedicationOrder, type PatientHistorySummary } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
@@ -1870,6 +1870,12 @@ export default function OrderSummary({
     setCustomerSearchQuery(customer.name);
     setShowCustomerDropdown(false);
     setUserRemovedDefaultCustomer(false); // Reset flag when user explicitly selects a customer
+
+    if (isHospitalPharmacy) {
+      void resolvePatientForCustomer(customer.id).then((patient) => {
+        setSelectedPatient(patient);
+      });
+    }
   };
   
   const handlePatientSelect = async (patient: Patient) => {
@@ -2499,7 +2505,11 @@ const pages = labels.map((label) => `
                 (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
             )
           : null);
-      const patientIdForSo = patientToUse?.name;
+      const patientIdForSo =
+        patientToUse?.name ||
+        (selectedCustomer && isHospitalPharmacy
+          ? (await resolvePatientForCustomer(selectedCustomer.id))?.name
+          : undefined);
 
       const payload = {
         customer: { id: selectedCustomer.id },
