@@ -1947,25 +1947,24 @@ const handleAutoFillPayment = (methodId: string) => {
       <div
         className={
           isFullPage
-            ? "h-full bg-white dark:bg-gray-900 overflow-y-auto custom-scrollbar"
-            : "fixed inset-0 bg-white dark:bg-gray-900 z-50 overflow-y-auto custom-scrollbar"
+            ? "flex flex-col h-full min-h-0 bg-white dark:bg-gray-900"
+            : "fixed inset-0 bg-white dark:bg-gray-900 z-[100] flex flex-col min-h-0"
         }
       >
-        <div className="min-h-screen">
-          {!isFullPage && (
-            <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between">
-              <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
-                {invoiceSubmitted
-                  ? "Invoice Complete"
-                  : isB2B
-                  ? "Submit Invoice"
-                  : "Payment"}
-              </h1>
-              {/* ... rest of mobile header remains the same ... */}
-            </div>
-          )}
+        {!isFullPage && (
+          <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between flex-shrink-0">
+            <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {invoiceSubmitted
+                ? "Invoice Complete"
+                : isB2B
+                ? "Submit Invoice"
+                : "Payment"}
+            </h1>
+          </div>
+        )}
 
-          <div className="p-4 space-y-6">
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+          <div className="p-4 pb-8 space-y-6">
             {invoiceSubmitted ? (
               <div className="space-y-4">
                 {/* Action Buttons for Mobile */}
@@ -2090,14 +2089,55 @@ const handleAutoFillPayment = (methodId: string) => {
               </div>
             ) : (
               <>
+                {/* Delivery Personnel - mobile */}
+                {isDeliveryRequired && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Delivery Personnel
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowDeliveryPersonnelModal(true)}
+                        disabled={invoiceSubmitted || isProcessingPayment}
+                        className={`flex-1 min-w-0 px-4 py-2.5 text-left border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between ${
+                          invoiceSubmitted || isProcessingPayment
+                            ? "cursor-not-allowed opacity-50"
+                            : "cursor-pointer"
+                        }`}
+                      >
+                        <span className="truncate text-sm">
+                          {getSelectedDeliveryPersonnelName() || (
+                            <span className="text-gray-500 dark:text-gray-400">
+                              Select delivery personnel
+                            </span>
+                          )}
+                        </span>
+                        <ChevronDown size={16} className="text-gray-400 flex-shrink-0 ml-2" />
+                      </button>
+                      {(selectedDeliveryPersonnel || deliveryChargeAmount) && (
+                        <button
+                          type="button"
+                          onClick={clearDeliverySelection}
+                          disabled={invoiceSubmitted || isProcessingPayment}
+                          className="p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-400 hover:text-red-500 hover:border-red-400 transition-colors flex-shrink-0"
+                          title="Clear delivery selection"
+                        >
+                          <X size={16} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Payment Methods - Only show for B2C */}
                 {(isB2C || isB2B) && (
                   <div>
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center justify-between gap-3 mb-4">
                       <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                         Payment Methods
                       </h2>
-                      <label className="flex items-center gap-2 cursor-pointer">
+                      <label className="flex items-center gap-2 cursor-pointer flex-shrink-0">
                         <input
                           type="checkbox"
                           checked={!!selectedHealthInsurance}
@@ -2111,15 +2151,32 @@ const handleAutoFillPayment = (methodId: string) => {
                         <span className="text-sm text-gray-700 dark:text-gray-300">Insurance</span>
                       </label>
                     </div>
-                    <div className="flex space-x-3 overflow-x-auto pb-2">
+                    {selectedHealthInsurance && (
+                      <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-beveren-200 dark:border-beveren-800 bg-beveren-50 dark:bg-beveren-900/20 px-3 py-2">
+                        <span className="text-sm text-gray-800 dark:text-gray-200 truncate">
+                          {selectedHealthInsurance.name}
+                          {selectedHealthInsurance.insurance_company
+                            ? ` (${selectedHealthInsurance.insurance_company})`
+                            : ""}
+                          {selectedHealthInsurance.userCoverage != null
+                            ? ` — ${selectedHealthInsurance.userCoverage}%`
+                            : ""}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={clearInsuranceSelection}
+                          disabled={invoiceSubmitted || isProcessingPayment}
+                          className="text-xs text-red-600 dark:text-red-400 flex-shrink-0"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-3">
                       {paymentMethods.map((method) => (
                         <div
                           key={method.id}
-                          className={`${
-                            paymentMethods.length <= 3
-                              ? "flex-1 min-w-0"
-                              : "min-w-[280px] max-w-[280px] flex-shrink-0"
-                          } border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:border-beveren-300 transition-colors ${
+                          className={`w-full border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:border-beveren-300 transition-colors ${
                             invoiceSubmitted || isProcessingPayment
                               ? "bg-gray-50 dark:bg-gray-800"
                               : ""
@@ -2127,34 +2184,48 @@ const handleAutoFillPayment = (methodId: string) => {
                         >
                           <div className="flex items-center space-x-3 mb-3">
                             <div
-                              className={`w-10 h-10 rounded-lg ${method.color} text-white flex items-center justify-center`}
+                              className={`w-10 h-10 rounded-lg ${method.color} text-white flex items-center justify-center flex-shrink-0`}
                             >
                               <div className="scale-75">{method.icon}</div>
                             </div>
-                            <div className="flex-1">
-                              <p className="font-medium text-gray-900 dark:text-white text-sm">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-gray-900 dark:text-white text-sm truncate">
                                 {method.name}
                               </p>
                             </div>
                           </div>
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                              Amount
-                            </label>
+                            <div className="flex items-center justify-between mb-2">
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                Amount
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => handleAutoFillPayment(method.id)}
+                                disabled={invoiceSubmitted || isProcessingPayment}
+                                className={`p-1 rounded text-xs ${
+                                  invoiceSubmitted || isProcessingPayment
+                                    ? "cursor-not-allowed opacity-50"
+                                    : "hover:bg-beveren-100 text-beveren-600"
+                                }`}
+                                title="Auto-fill with amount due"
+                              >
+                                <CheckCircle size={16} />
+                              </button>
+                            </div>
                             <input
                               type="number"
+                              step="0.01"
                               value={getPaymentInputValue(method.id, method.amount)}
-                              onChange={(e) =>
-                                handlePaymentAmountChange(
-                                  method.id,
-                                  e.target.value
-                                )
-                              }
+                              onChange={(e) => {
+                                setActiveMethodId(method.id);
+                                handlePaymentAmountChange(method.id, e.target.value);
+                              }}
                               onFocus={() => setEditingPaymentMethodId(method.id)}
                               onBlur={() => handlePaymentInputBlur(method.id)}
-                              placeholder="0.000"
+                              placeholder="0.00"
                               disabled={invoiceSubmitted || isProcessingPayment}
-                              className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
+                              className={`w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-base ${
                                 invoiceSubmitted || isProcessingPayment
                                   ? "cursor-not-allowed opacity-50"
                                   : ""
@@ -2251,6 +2322,16 @@ const handleAutoFillPayment = (methodId: string) => {
                       </span>
                     </div>
                   )}
+                  {(deliveryChargeAmount ?? 0) > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">
+                        Delivery Charge
+                      </span>
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        {formatCurrency(deliveryChargeWithVAT ?? deliveryChargeAmount ?? 0)}
+                      </span>
+                    </div>
+                  )}
                   {roundOffAmount !== 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">
@@ -2267,7 +2348,7 @@ const handleAutoFillPayment = (methodId: string) => {
                         Grand Total
                       </span>
                       <span className="text-lg font-bold text-gray-900 dark:text-white">
-                        {formatCurrency(calculations.grandTotal)}
+                        {formatCurrency(effectiveGrandTotal)}
                       </span>
                     </div>
                   </div>
@@ -2330,7 +2411,7 @@ const handleAutoFillPayment = (methodId: string) => {
                 </div>
 
                 {/* Action Buttons */}
-                <div className="space-y-3 pt-6">
+                <div className="flex flex-col gap-3 pt-2">
                   <button
                     onClick={handleCompletePayment}
                     disabled={isActionButtonDisabled()}
@@ -2349,37 +2430,51 @@ const handleAutoFillPayment = (methodId: string) => {
                       <span>{getActionButtonText()}</span>
                     )}
                   </button>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={handleHoldOrder}
-                      disabled={
-                        invoiceSubmitted ||
-                        isProcessingPayment ||
-                        isHoldingOrder
-                      }
-                      className={`py-3 px-4 border border-orange-500 text-orange-600 dark:text-orange-400 rounded-lg font-medium hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors flex items-center justify-center space-x-2 ${
-                        invoiceSubmitted ||
-                        isProcessingPayment ||
-                        isHoldingOrder
-                          ? "cursor-not-allowed opacity-50"
-                          : ""
-                      }`}
-                    >
-                      {isHoldingOrder ? (
-                        <>
-                          <Loader2 size={16} className="animate-spin" />
-                          <span>Holding...</span>
-                        </>
-                      ) : (
-                        <span>Hold Order</span>
-                      )}
-                    </button>
-                  </div>
+                  <button
+                    onClick={handleHoldOrder}
+                    disabled={
+                      invoiceSubmitted ||
+                      isProcessingPayment ||
+                      isHoldingOrder
+                    }
+                    className={`w-full py-3 px-4 border border-orange-500 text-orange-600 dark:text-orange-400 rounded-lg font-medium hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors flex items-center justify-center space-x-2 ${
+                      invoiceSubmitted ||
+                      isProcessingPayment ||
+                      isHoldingOrder
+                        ? "cursor-not-allowed opacity-50"
+                        : ""
+                    }`}
+                  >
+                    {isHoldingOrder ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>Holding...</span>
+                      </>
+                    ) : (
+                      <span>Hold Order</span>
+                    )}
+                  </button>
                 </div>
               </>
             )}
           </div>
         </div>
+
+        {/* Delivery Personnel Modal */}
+        <DeliveryPersonnelModal
+          isOpen={showDeliveryPersonnelModal}
+          onClose={() => setShowDeliveryPersonnelModal(false)}
+          onSelect={handleDeliveryPersonnelSelect}
+          grandTotal={effectiveGrandTotal}
+        />
+
+        {/* Insurance (Health Insurance) Modal */}
+        <InsuranceModal
+          isOpen={showInsuranceModal}
+          onClose={() => setShowInsuranceModal(false)}
+          onSelect={handleInsuranceSelect}
+          selectedInsurance={selectedHealthInsurance}
+        />
       </div>
     );
   }
