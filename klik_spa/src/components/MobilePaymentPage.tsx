@@ -3,7 +3,6 @@
 import { useNavigate } from "react-router-dom"
 import { ArrowLeft } from "lucide-react"
 import PaymentDialog from "./PaymentDialog"
-import BottomNavigation from "./BottomNavigation"
 import { useCartStore } from "../stores/cartStore"
 import { useProducts } from "../hooks/useProducts"
 import { clearDraftInvoiceCache } from "../utils/draftInvoiceCache"
@@ -78,7 +77,7 @@ export default function MobilePaymentPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 pb-20">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
         <PaymentDialog
           isOpen={true}
           onClose={handleClose}
@@ -91,9 +90,6 @@ export default function MobilePaymentPage() {
           isFullPage={true}
         />
       </div>
-
-      {/* Bottom Navigation */}
-      <BottomNavigation />
     </div>
   )
 }

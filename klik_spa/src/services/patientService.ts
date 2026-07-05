@@ -5,6 +5,14 @@ export interface Patient {
   file_no?: string;
 }
 
+export function getPatientFileNo(patient: Patient): string {
+  return (patient.file_no || patient.patient_id || patient.name || "").trim();
+}
+
+export function getPatientDisplayName(patient: Patient): string {
+  return (patient.patient_name || patient.name || "").trim();
+}
+
 export interface InpatientMedicationOrderItem {
   drug: string;
   drug_name?: string;
@@ -30,6 +38,30 @@ export interface InpatientMedicationOrderItem {
   end_date?: string;
   alternative_medicine?: string;
   alternative_medicine_name?: string;
+  /** Migrated legacy fields from Inpatient Medication Order Entry */
+  old_medicine_code?: string;
+  old_medicine_name?: string;
+  medication?: string;
+}
+
+export function resolveMedicationItemCode(item: InpatientMedicationOrderItem): string {
+  return (
+    item.drug?.trim() ||
+    item.alternative_medicine?.trim() ||
+    item.old_medicine_code?.trim() ||
+    ""
+  );
+}
+
+export function resolveMedicationDisplayName(item: InpatientMedicationOrderItem): string {
+  return (
+    item.drug_name?.trim() ||
+    item.alternative_medicine_name?.trim() ||
+    item.old_medicine_name?.trim() ||
+    item.medication?.trim() ||
+    resolveMedicationItemCode(item) ||
+    "—"
+  );
 }
 
 export interface InpatientMedicationOrder {

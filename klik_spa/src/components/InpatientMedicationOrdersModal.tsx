@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search } from "lucide-react";
 import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption } from "../services/patientService";
-import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype } from "../services/patientService";
+import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype, resolveMedicationItemCode, resolveMedicationDisplayName } from "../services/patientService";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -71,6 +71,9 @@ interface ItemRow {
   reference_no?: string;
   alternative_medicine?: string;
   alternative_medicine_name?: string;
+  old_medicine_code?: string;
+  old_medicine_name?: string;
+  medication?: string;
 }
 
 function hasText(value: unknown): value is string {
@@ -113,12 +116,29 @@ function formatMedicationSecondaryDetails(item: ItemRow): { label: string; value
       : item.alternative_medicine.trim();
     details.push({ label: "Alternative", value: altLabel });
   }
+  if (hasText(item.old_medicine_code) && item.old_medicine_code.trim() !== (item.drug || "").trim()) {
+    details.push({ label: "Old medicine code", value: item.old_medicine_code.trim() });
+  }
+  if (hasText(item.old_medicine_name) && item.old_medicine_name.trim() !== (item.drug_name || "").trim()) {
+    details.push({ label: "Old medicine name", value: item.old_medicine_name.trim() });
+  }
+  if (hasText(item.medication) && item.medication.trim() !== (item.drug_name || "").trim()) {
+    details.push({ label: "Medication", value: item.medication.trim() });
+  }
 
   return details;
 }
 
+function medicationLineKey(orderName: string | undefined, idx: number, item: ItemRow): string {
+  return `${orderName}::${idx}::${resolveMedicationItemCode(item)}`;
+}
+
+function medicationLineLabel(item: ItemRow): string {
+  return resolveMedicationDisplayName(item);
+}
+
 function MedicationDrugCell({ item }: { item: ItemRow }) {
-  const label = item.drug_name || item.drug || "—";
+  const label = medicationLineLabel(item);
   const details = useMemo(
     () => formatMedicationSecondaryDetails(item),
     [
@@ -133,6 +153,11 @@ function MedicationDrugCell({ item }: { item: ItemRow }) {
       item.reference_no,
       item.alternative_medicine,
       item.alternative_medicine_name,
+      item.old_medicine_code,
+      item.old_medicine_name,
+      item.medication,
+      item.drug,
+      item.drug_name,
     ]
   );
   const triggerRef = useRef<HTMLSpanElement>(null);
@@ -505,9 +530,10 @@ function ItemsTable({
         </thead>
         <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
           {items.map((item, idx) => {
-            const itemKey = `${orderName}::${idx}::${item.drug ?? ""}`;
+            const itemKey = medicationLineKey(orderName, idx, item);
+            const lineCode = resolveMedicationItemCode(item);
             const checked = selectedKeys?.has(itemKey) ?? false;
-            const avail = item.drug ? productAvailability?.[item.drug] : undefined;
+            const avail = lineCode ? productAvailability?.[lineCode] : undefined;
             const lowStock = avail !== undefined && (avail <= 0 || avail < Number(item.quantity || 1));
             return (
               <tr
@@ -534,7 +560,7 @@ function ItemsTable({
                    </td>
                 )}
                 <td className="px-3 py-2 font-semibold text-gray-800 dark:text-gray-200 whitespace-nowrap">
-                  {showDetailsOnHover ? <MedicationDrugCell item={item} /> : (item.drug_name || item.drug || "—")}
+                  {showDetailsOnHover ? <MedicationDrugCell item={item} /> : medicationLineLabel(item)}
                  </td>
                 <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                   {item.dosage || "—"}
@@ -562,8 +588,8 @@ function ItemsTable({
                 {onAlternativeChange && (
                   <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     <AlternativeDrugSelect
-                      drugCode={item.drug}
-                      drugName={item.drug_name || item.drug}
+                      drugCode={lineCode}
+                      drugName={medicationLineLabel(item)}
                       value={alternativeDrugs?.[itemKey] || ""}
                       selectedLabel={alternativeDrugLabels?.[itemKey]}
                       lowStock={!!lowStock}

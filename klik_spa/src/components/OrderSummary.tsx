@@ -47,7 +47,7 @@ import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, type Patient, type InpatientMedicationOrder, type PatientHistorySummary } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientFileNo, getPatientDisplayName, type Patient, type InpatientMedicationOrder, type PatientHistorySummary } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
@@ -975,6 +975,27 @@ const DosageSelectField = ({ itemId: _itemId, options, value, onChange, isMobile
     </div>
   );
 };
+
+function PatientSearchDropdownOption({ patient }: { patient: Patient }) {
+  const displayName = getPatientDisplayName(patient);
+  const fileNo = getPatientFileNo(patient);
+
+  return (
+    <div className="flex items-center space-x-2">
+      <User className="w-4 h-4 text-blue-500 flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="font-medium text-gray-900 dark:text-white text-sm truncate">
+          {displayName}
+        </div>
+        {fileNo ? (
+          <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+            File No: {fileNo}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 export default function OrderSummary({
   cartItems,
@@ -1919,14 +1940,15 @@ export default function OrderSummary({
       
       orders.forEach(order => {
         order.items.forEach(item => {
-          if (item.drug) {
+          const itemCode = resolveMedicationItemCode(item);
+          if (itemCode) {
             itemsToAdd.push({
-              item_code: item.drug,
+              item_code: itemCode,
               quantity: item.quantity ?? 1,
               uom: item.uom,
               dosage: item.dosage || undefined,
               patient_frequency: item.patient_frequency,
-              drug_name: item.drug_name || undefined,
+              drug_name: resolveMedicationDisplayName(item) || undefined,
               medication_order: order.name,
               medication_order_entry: item.medication_order_entry,
               is_pink: item.is_pink,
@@ -2009,31 +2031,33 @@ export default function OrderSummary({
     for (const order of ordersToAdd) {
       for (let idx = 0; idx < order.items.length; idx++) {
         const item = order.items[idx];
-        if (!item.drug) continue;
-        const lineKey = `${order.name}::${idx}::${item.drug}`;
+        const itemCode = resolveMedicationItemCode(item);
+        if (!itemCode) continue;
+        const lineKey = `${order.name}::${idx}::${itemCode}`;
         const alternativeCode = alternatives?.[lineKey]?.trim();
-        const effectiveCode = alternativeCode || item.drug;
+        const effectiveCode = alternativeCode || itemCode;
+        const displayName = resolveMedicationDisplayName(item);
         const avail = availability[effectiveCode];
         if (avail === undefined) {
-          toast.error(`${item.drug_name || item.drug} not found in product list.`);
+          toast.error(`${displayName} not found in product list.`);
           validationFailed = true;
           break;
         }
         const qty = item.quantity ?? 1;
         if (avail <= 0 || avail < qty) {
           if (!alternativeCode) {
-            toast.error(`Insufficient stock for ${item.drug_name || item.drug}. Select an alternative drug.`);
+            toast.error(`Insufficient stock for ${displayName}. Select an alternative drug.`);
             validationFailed = true;
             break;
           }
         }
         itemsToAdd.push({
-          item_code: item.drug,
+          item_code: itemCode,
           quantity: qty,
           uom: item.uom,
           dosage: item.dosage || undefined,
           patient_frequency: item.patient_frequency,
-          drug_name: item.drug_name || undefined,
+          drug_name: displayName || undefined,
           medication_order: order.name,
           medication_order_entry: item.medication_order_entry,
           is_pink: item.is_pink,
@@ -2140,14 +2164,16 @@ export default function OrderSummary({
     const itemsToAdd: MedicationOrderLineInput[] = [];
     medicationOrderHistory.forEach((order) => {
       order.items.forEach((item, idx) => {
-        const key = `${order.name}::${idx}::${item.drug ?? ""}`;
-        if (selectedHistoryItems.has(key) && item.drug) {
+        const itemCode = resolveMedicationItemCode(item);
+        const key = `${order.name}::${idx}::${itemCode}`;
+        if (selectedHistoryItems.has(key) && itemCode) {
           itemsToAdd.push({
-            item_code: item.drug,
+            item_code: itemCode,
             quantity: item.quantity ?? 1,
             uom: item.uom,
             dosage: item.dosage || undefined,
             patient_frequency: item.patient_frequency,
+            drug_name: resolveMedicationDisplayName(item) || undefined,
             medication_order: order.name,
             medication_order_entry: item.medication_order_entry,
             is_pink: item.is_pink,
@@ -3329,7 +3355,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   type="text"
                   placeholder={
                     isHospitalPharmacy
-                      ? "Search patients... (name, patient ID, or file no)"
+                      ? "Search patients... (name or file no)"
                       : isPharmacy
                       ? "Search customers or patients... (name, email, phone, patient ID, or file no)"
                       : "Search customers... (name, email, or phone)"
@@ -3348,10 +3374,13 @@ const handleSetSerial = (event: CustomEvent) => {
                 />
 
                 {/* Customer/Patient Dropdown */}
-                {showCustomerDropdown && (filteredCustomers.length > 0 || ((isPharmacy || isHospitalPharmacy) && patients.length > 0)) && (
+                {showCustomerDropdown && (
+                  (!isHospitalPharmacy && filteredCustomers.length > 0) ||
+                  ((isPharmacy || isHospitalPharmacy) && patients.length > 0)
+                ) && (
                   <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
-                    {/* Customers */}
-                    {filteredCustomers.slice(0, 8).map((customer) => {
+                    {/* Customers (retail / pharmacy — hospital is patient-only search) */}
+                    {!isHospitalPharmacy && filteredCustomers.slice(0, 8).map((customer) => {
                       // Check if this customer also exists as a patient (patient_name matches customer name)
                       const matchingPatient = isPharmacy ? patients.find(
                         p => (p.patient_name || p.name).toLowerCase() === customer.name.toLowerCase()
@@ -3427,19 +3456,7 @@ const handleSetSerial = (event: CustomEvent) => {
                               onClick={() => handlePatientSelect(patient)}
                               className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
                             >
-                              <div className="flex items-center space-x-2">
-                                <User className="w-4 h-4 text-blue-500" />
-                                <div className="flex-1 min-w-0">
-                                  <div className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                                    {patient.patient_name || patient.name}
-                                  </div>
-                                  <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                                    {patient.patient_id && `ID: ${patient.patient_id}`}
-                                    {patient.patient_id && patient.file_no && " • "}
-                                    {patient.file_no && `File: ${patient.file_no}`}
-                                  </div>
-                                </div>
-                              </div>
+                              <PatientSearchDropdownOption patient={patient} />
                             </button>
                           ))}
                       </>
@@ -3464,7 +3481,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   <div className="flex items-center gap-2 min-w-0">
                     {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500 flex-shrink-0" />}
                     <span className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                      {selectedCustomer?.name ?? (selectedPatient?.patient_name || selectedPatient?.name)}
+                      {selectedCustomer?.name ?? getPatientDisplayName(selectedPatient!)}
                     </span>
                   </div>
                   <div className="flex-1 flex justify-center items-center min-w-0">
@@ -3515,6 +3532,12 @@ const handleSetSerial = (event: CustomEvent) => {
                   </div>
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">
+                  {selectedPatient && getPatientFileNo(selectedPatient) ? (
+                    <span>File No: {getPatientFileNo(selectedPatient)}</span>
+                  ) : null}
+                  {selectedPatient && getPatientFileNo(selectedPatient) && selectedCustomer?.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" ? (
+                    <span className="mx-2">•</span>
+                  ) : null}
                   {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
                     <span>{selectedCustomer.phone}</span>
                   )}
@@ -3524,7 +3547,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
                     <span>{customerStats?.total_orders || 0} {party.historyLabel}</span>
                   )}
-                  {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
+                  {!selectedPatient && selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
                     <span className="text-gray-400 italic">No additional info</span>
                   )}
                 </div>
@@ -3545,7 +3568,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 type="text"
                 placeholder={
                   isHospitalPharmacy
-                    ? "Search patients... (name, patient ID, or file no)"
+                      ? "Search patients... (name or file no)"
                     : "Search customers... (name, email, or phone)"
                 }
                 value={customerSearchQuery}
@@ -3559,9 +3582,12 @@ const handleSetSerial = (event: CustomEvent) => {
               />
 
               {/* ADD THIS MISSING DROPDOWN - This was missing in mobile version */}
-              {showCustomerDropdown && (filteredCustomers.length > 0 || ((isPharmacy || isHospitalPharmacy) && patients.length > 0)) && (
+              {showCustomerDropdown && (
+                (!isHospitalPharmacy && filteredCustomers.length > 0) ||
+                ((isPharmacy || isHospitalPharmacy) && patients.length > 0)
+              ) && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
-                  {filteredCustomers.slice(0, 8).map((customer) => {
+                  {!isHospitalPharmacy && filteredCustomers.slice(0, 8).map((customer) => {
                     const matchingPatient = (isPharmacy || isHospitalPharmacy) ? patients.find(
                       p => (p.patient_name || p.name).toLowerCase() === customer.name.toLowerCase()
                     ) : null;
@@ -3605,19 +3631,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         onClick={() => handlePatientSelect(patient)}
                         className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
                       >
-                        <div className="flex items-center space-x-2">
-                          <User className="w-4 h-4 text-blue-500" />
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                              {patient.patient_name || patient.name}
-                            </div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                              {patient.patient_id && `ID: ${patient.patient_id}`}
-                              {patient.patient_id && patient.file_no && " • "}
-                              {patient.file_no && `File: ${patient.file_no}`}
-                            </div>
-                          </div>
-                        </div>
+                        <PatientSearchDropdownOption patient={patient} />
                       </button>
                     ))}
                 </div>
@@ -3639,7 +3653,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 <div className="flex items-center gap-2 min-w-0">
                   {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500 flex-shrink-0" />}
                   <span className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                    {selectedCustomer?.name ?? (selectedPatient?.patient_name || selectedPatient?.name)}
+                    {selectedCustomer?.name ?? (selectedPatient ? getPatientDisplayName(selectedPatient) : "")}
                   </span>
                 </div>
                 <div className="flex-1 flex justify-center items-center min-w-0">
@@ -3691,6 +3705,12 @@ const handleSetSerial = (event: CustomEvent) => {
                 </div>
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">
+                {selectedPatient && getPatientFileNo(selectedPatient) ? (
+                  <span>File No: {getPatientFileNo(selectedPatient)}</span>
+                ) : null}
+                {selectedPatient && getPatientFileNo(selectedPatient) && selectedCustomer?.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" ? (
+                  <span className="mx-2">•</span>
+                ) : null}
                 {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
                   <span>{selectedCustomer.phone}</span>
                 )}
@@ -3700,7 +3720,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 {selectedCustomer && (customerStats?.total_orders || 0) > 0 && (
                   <span>{customerStats?.total_orders || 0} orders</span>
                 )}
-                {selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
+                {!selectedPatient && selectedCustomer && (!selectedCustomer.phone || selectedCustomer.phone === "N/A" || selectedCustomer.phone.trim() === "") && (customerStats?.total_orders || 0) === 0 && (
                   <span className="text-gray-400 italic">No additional info</span>
                 )}
               </div>
