@@ -12,6 +12,22 @@ def _strip_html_text(value):
 	return strip_html(str(value)).strip()
 
 
+def _field_text(value):
+	if value is None:
+		return ""
+	if isinstance(value, str) and "<" in value:
+		return _strip_html_text(value)
+	return str(value).strip()
+
+
+def _first_non_empty(*values):
+	for value in values:
+		text = _field_text(value)
+		if text:
+			return text
+	return ""
+
+
 def _medication_order_entry_to_dict(item):
 	"""Map a Patient Medication Order child row to the POS API payload."""
 	item_dict = {}
@@ -19,17 +35,31 @@ def _medication_order_entry_to_dict(item):
 	if hasattr(item, "name") and item.name:
 		item_dict["medication_order_entry"] = item.name
 
-	if hasattr(item, "drug"):
-		item_dict["drug"] = item.drug
-	elif hasattr(item, "item_code"):
-		item_dict["drug"] = item.item_code
-	elif hasattr(item, "drug_code"):
-		item_dict["drug"] = item.drug_code
+	alternative_medicine = _field_text(getattr(item, "alternative_medicine", None))
+	alternative_medicine_name = _field_text(getattr(item, "alternative_medicine_name", None))
+	old_medicine_code = _field_text(getattr(item, "old_medicine_code", None))
+	old_medicine_name = _field_text(getattr(item, "old_medicine_name", None))
+	medication = _field_text(getattr(item, "medication", None))
 
-	if hasattr(item, "drug_name"):
-		item_dict["drug_name"] = item.drug_name
-	elif hasattr(item, "item_name"):
-		item_dict["drug_name"] = item.item_name
+	resolved_drug = _first_non_empty(
+		getattr(item, "drug", None),
+		getattr(item, "item_code", None),
+		getattr(item, "drug_code", None),
+		alternative_medicine,
+		old_medicine_code,
+	)
+	resolved_drug_name = _first_non_empty(
+		getattr(item, "drug_name", None),
+		getattr(item, "item_name", None),
+		alternative_medicine_name,
+		old_medicine_name,
+		medication,
+	)
+
+	if resolved_drug:
+		item_dict["drug"] = resolved_drug
+	if resolved_drug_name:
+		item_dict["drug_name"] = resolved_drug_name
 
 	if hasattr(item, "dosage"):
 		item_dict["dosage"] = item.dosage
@@ -55,10 +85,29 @@ def _medication_order_entry_to_dict(item):
 	item_dict["date"] = getattr(item, "date", None)
 	item_dict["time"] = getattr(item, "time", None)
 	item_dict["end_date"] = getattr(item, "end_date", None)
-	item_dict["alternative_medicine"] = getattr(item, "alternative_medicine", None)
-	item_dict["alternative_medicine_name"] = getattr(item, "alternative_medicine_name", None)
+	if alternative_medicine:
+		item_dict["alternative_medicine"] = alternative_medicine
+	if alternative_medicine_name:
+		item_dict["alternative_medicine_name"] = alternative_medicine_name
+	if old_medicine_code:
+		item_dict["old_medicine_code"] = old_medicine_code
+	if old_medicine_name:
+		item_dict["old_medicine_name"] = old_medicine_name
+	if medication:
+		item_dict["medication"] = medication
 
 	return item_dict
+
+
+def _medication_order_entry_has_content(item_dict):
+	"""True when a child row has enough data to display (incl. migrated legacy fields)."""
+	return bool(
+		item_dict.get("drug")
+		or item_dict.get("drug_name")
+		or item_dict.get("medication")
+		or item_dict.get("old_medicine_code")
+		or item_dict.get("old_medicine_name")
+	)
 
 
 def _resolve_pharmacy_visit_type():
@@ -93,7 +142,7 @@ def _extract_medication_order_items(order_doc):
 			continue
 		for row in child_table:
 			item_dict = _medication_order_entry_to_dict(row)
-			if item_dict.get("drug"):
+			if _medication_order_entry_has_content(item_dict):
 				items.append(item_dict)
 		if items:
 			break
@@ -202,51 +251,51 @@ def get_print_formats_for_doctype(doctype: str):
 @frappe.whitelist()
 def search_patients(search_query: str):
 	"""
-	Search for Patients by name, patient_id, or file_no.
+	Search for Patients by name, file no (KLiK patient id), or document name.
 	Returns a list of matching patients.
 	"""
 	try:
-		# Check if Patient doctype exists (from healthcare app)
 		if not frappe.db.exists("DocType", "Patient"):
 			frappe.throw("Patient doctype not found. Please ensure the healthcare app is installed.")
-		
+
+		search_query = (search_query or "").strip()
+		if not search_query:
+			return []
+
 		search_term = f"%{search_query}%"
-		
-		# Use frappe.get_all which handles field existence automatically
-		# Search by patient_name (which should always exist)
+		patient_meta = frappe.get_meta("Patient")
+		available_fields = {f.fieldname for f in patient_meta.fields}
+
+		fields = ["name", "patient_name"]
+		if "file_no" in available_fields:
+			fields.append("file_no")
+		if "patient_id" in available_fields:
+			fields.append("patient_id")
+
+		or_filters = [
+			["patient_name", "like", search_term],
+			["name", "like", search_term],
+		]
+		if "file_no" in available_fields:
+			or_filters.append(["file_no", "like", search_term])
+		if "patient_id" in available_fields:
+			or_filters.append(["patient_id", "like", search_term])
+
 		patients = frappe.get_all(
 			"Patient",
-			fields=["name", "patient_name"],
-			filters={
-				"patient_name": ["like", search_term]
-			},
-			or_filters=[
-				["patient_name", "like", search_term],
-			],
+			fields=fields,
+			or_filters=or_filters,
 			order_by="patient_name asc",
-			limit=50
+			limit=50,
 		)
-		
-		# Try to add file_no if it exists (optional field)
-		patient_meta = frappe.get_meta("Patient")
-		has_file_no = any(f.fieldname == "file_no" for f in patient_meta.fields)
-		
-		if has_file_no:
-			# Re-fetch with file_no field and add file_no to search
-			patients = frappe.get_all(
-				"Patient",
-				fields=["name", "patient_name", "file_no"],
-				filters={
-					"patient_name": ["like", search_term]
-				},
-				or_filters=[
-					["patient_name", "like", search_term],
-					["file_no", "like", search_term],
-				],
-				order_by="patient_name asc",
-				limit=50
-			)
-		
+
+		for patient in patients:
+			file_no = (patient.get("file_no") or patient.get("name") or "").strip()
+			if file_no:
+				patient["file_no"] = file_no
+			if not patient.get("patient_id") and file_no:
+				patient["patient_id"] = file_no
+
 		return patients
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error searching Patients")
