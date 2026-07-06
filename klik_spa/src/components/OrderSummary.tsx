@@ -47,7 +47,7 @@ import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type PatientHistorySummary } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
@@ -976,6 +976,33 @@ const DosageSelectField = ({ itemId: _itemId, options, value, onChange, isMobile
   );
 };
 
+function customerFromResolvedRow(row: ResolvedCustomer): Customer {
+  return {
+    id: row.name,
+    type: row.customer_type === "Company" ? "company" : "individual",
+    name: row.customer_name || row.name,
+    customer_name: row.customer_name || row.name,
+    email: "",
+    phone: "",
+    address: {
+      street: "",
+      city: "",
+      state: "",
+      zipCode: "",
+      country: "",
+    },
+    loyaltyPoints: 0,
+    totalSpent: 0,
+    totalOrders: 0,
+    preferredPaymentMethod: "Cash",
+    notes: "",
+    tags: [],
+    status: "active",
+    createdAt: new Date().toISOString(),
+    defaultCurrency: row.default_currency,
+  };
+}
+
 function PatientSearchDropdownOption({ patient }: { patient: Patient }) {
   const displayName = getPatientDisplayName(patient);
   const secondaryLabel = getPatientSecondaryLabel(patient);
@@ -1870,11 +1897,26 @@ export default function OrderSummary({
         );
 
   const validateCustomer = () => {
-    if (!selectedCustomer) {
-      toast.error(`Kindly choose ${party.lower}`);
+    if (selectedCustomer) {
+      return true;
+    }
+    if (isHospitalPharmacy && selectedPatient) {
+      toast.error(
+        `Selected ${party.lower} has no linked customer record. Please link a Customer on the Patient in ERPNext.`
+      );
       return false;
     }
-    return true;
+    toast.error(`Kindly choose ${party.lower}`);
+    return false;
+  };
+
+  const resolveCustomerForSelectedPatient = async (): Promise<Customer | null> => {
+    if (!selectedPatient?.name) return null;
+    const resolved = await resolveCustomerForPatient(selectedPatient.name);
+    if (!resolved) return null;
+    const customer = customerFromResolvedRow(resolved);
+    setSelectedCustomer(customer);
+    return customer;
   };
 
   const handleCustomerSelect = (customer: Customer) => {
@@ -1909,15 +1951,19 @@ export default function OrderSummary({
       }
     }, 50);
     
-    // Patient full name (patient_name) is the same as customer name, try to find matching customer
-    const matchingCustomer = customers.find(
-      c => c.name.toLowerCase() === patientName.toLowerCase() || 
-           c.customer_name?.toLowerCase() === patientName.toLowerCase()
-    );
-    
-    if (matchingCustomer) {
-      // Set the customer as well since patient_name matches customer name
-      setSelectedCustomer(matchingCustomer);
+    // Resolve linked Customer from Patient record (not just local name match)
+    const resolvedCustomer = await resolveCustomerForPatient(patient.name);
+    if (resolvedCustomer) {
+      setSelectedCustomer(customerFromResolvedRow(resolvedCustomer));
+    } else {
+      const matchingCustomer = customers.find(
+        (c) =>
+          c.name.toLowerCase() === patientName.toLowerCase() ||
+          c.customer_name?.toLowerCase() === patientName.toLowerCase()
+      );
+      if (matchingCustomer) {
+        setSelectedCustomer(matchingCustomer);
+      }
     }
     
     // Fetch pending/history medication orders for this patient and automatically add pending to cart
@@ -2637,9 +2683,15 @@ const pages = labels.map((label) => `
     }
   };
 
-  const handleDispense = () => {
-    if (!validateCustomer()) return;
-    if (!selectedCustomer) return;
+  const handleDispense = async () => {
+    let customer = selectedCustomer;
+    if (!customer && isHospitalPharmacy && selectedPatient) {
+      customer = await resolveCustomerForSelectedPatient();
+    }
+    if (!customer) {
+      validateCustomer();
+      return;
+    }
     if (!isHospitalPharmacy) {
       setShowPaymentDialog(true);
       return;
@@ -2734,6 +2786,7 @@ const pages = labels.map((label) => `
       // Clear local UI state too.
       setItemDiscounts({});
       setSelectedCustomer(null);
+      setSelectedPatient(null);
       setCustomerSearchQuery("");
       return;
     }
@@ -2754,6 +2807,7 @@ const pages = labels.map((label) => `
 
     // Reset customer selection
     setSelectedCustomer(null);
+    setSelectedPatient(null);
     setCustomerSearchQuery("");
   };
 
