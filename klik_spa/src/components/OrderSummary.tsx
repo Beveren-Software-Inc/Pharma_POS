@@ -47,7 +47,7 @@ import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientFileNo, getPatientDisplayName, type Patient, type InpatientMedicationOrder, type PatientHistorySummary } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type PatientHistorySummary } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
@@ -978,7 +978,7 @@ const DosageSelectField = ({ itemId: _itemId, options, value, onChange, isMobile
 
 function PatientSearchDropdownOption({ patient }: { patient: Patient }) {
   const displayName = getPatientDisplayName(patient);
-  const fileNo = getPatientFileNo(patient);
+  const secondaryLabel = getPatientSecondaryLabel(patient);
 
   return (
     <div className="flex items-center space-x-2">
@@ -987,9 +987,9 @@ function PatientSearchDropdownOption({ patient }: { patient: Patient }) {
         <div className="font-medium text-gray-900 dark:text-white text-sm truncate">
           {displayName}
         </div>
-        {fileNo ? (
+        {secondaryLabel ? (
           <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
-            File No: {fileNo}
+            {secondaryLabel}
           </div>
         ) : null}
       </div>
@@ -3355,7 +3355,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   type="text"
                   placeholder={
                     isHospitalPharmacy
-                      ? "Search patients... (name or file no)"
+                      ? "Search patients... (name, file no, or ID number)"
                       : isPharmacy
                       ? "Search customers or patients... (name, email, phone, patient ID, or file no)"
                       : "Search customers... (name, email, or phone)"
@@ -3532,10 +3532,10 @@ const handleSetSerial = (event: CustomEvent) => {
                   </div>
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">
-                  {selectedPatient && getPatientFileNo(selectedPatient) ? (
-                    <span>File No: {getPatientFileNo(selectedPatient)}</span>
+                  {selectedPatient && getPatientSecondaryLabel(selectedPatient) ? (
+                    <span>{getPatientSecondaryLabel(selectedPatient)}</span>
                   ) : null}
-                  {selectedPatient && getPatientFileNo(selectedPatient) && selectedCustomer?.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" ? (
+                  {selectedPatient && getPatientSecondaryLabel(selectedPatient) && selectedCustomer?.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" ? (
                     <span className="mx-2">•</span>
                   ) : null}
                   {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (
@@ -3568,7 +3568,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 type="text"
                 placeholder={
                   isHospitalPharmacy
-                      ? "Search patients... (name or file no)"
+                      ? "Search patients... (name, file no, or ID number)"
                     : "Search customers... (name, email, or phone)"
                 }
                 value={customerSearchQuery}
@@ -3705,10 +3705,10 @@ const handleSetSerial = (event: CustomEvent) => {
                 </div>
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">
-                {selectedPatient && getPatientFileNo(selectedPatient) ? (
-                  <span>File No: {getPatientFileNo(selectedPatient)}</span>
+                {selectedPatient && getPatientSecondaryLabel(selectedPatient) ? (
+                  <span>{getPatientSecondaryLabel(selectedPatient)}</span>
                 ) : null}
-                {selectedPatient && getPatientFileNo(selectedPatient) && selectedCustomer?.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" ? (
+                {selectedPatient && getPatientSecondaryLabel(selectedPatient) && selectedCustomer?.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" ? (
                   <span className="mx-2">•</span>
                 ) : null}
                 {selectedCustomer && selectedCustomer.phone && selectedCustomer.phone !== "N/A" && selectedCustomer.phone.trim() !== "" && (

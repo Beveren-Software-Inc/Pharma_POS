@@ -251,7 +251,7 @@ def get_print_formats_for_doctype(doctype: str):
 @frappe.whitelist()
 def search_patients(search_query: str):
 	"""
-	Search for Patients by name, file no (KLiK patient id), or document name.
+	Search for Patients by name, file no (KLiK patient id), id number, or document name.
 	Returns a list of matching patients.
 	"""
 	try:
@@ -271,6 +271,8 @@ def search_patients(search_query: str):
 			fields.append("file_no")
 		if "patient_id" in available_fields:
 			fields.append("patient_id")
+		if "id_number" in available_fields:
+			fields.append("id_number")
 
 		or_filters = [
 			["patient_name", "like", search_term],
@@ -280,6 +282,8 @@ def search_patients(search_query: str):
 			or_filters.append(["file_no", "like", search_term])
 		if "patient_id" in available_fields:
 			or_filters.append(["patient_id", "like", search_term])
+		if "id_number" in available_fields:
+			or_filters.append(["id_number", "like", search_term])
 
 		patients = frappe.get_all(
 			"Patient",
