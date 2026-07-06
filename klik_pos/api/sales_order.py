@@ -249,6 +249,42 @@ def _derive_reference_from_medication_orders(reference_type, reference_name, med
 	return reference_type, reference_name
 
 
+def _resolve_pos_cost_center(pos_profile):
+	"""Cost center from POS Profile, falling back to company default."""
+	cost_center = getattr(pos_profile, "cost_center", None)
+	if cost_center:
+		return cost_center
+	company = getattr(pos_profile, "company", None)
+	if company:
+		return frappe.db.get_value("Company", company, "cost_center")
+	return None
+
+
+def _apply_cost_center_to_sales_order(doc, cost_center):
+	if not cost_center:
+		return
+	try:
+		from healthcare.api.sales_order_cost_center import apply_cost_center_to_sales_order
+
+		apply_cost_center_to_sales_order(doc, cost_center)
+	except ImportError:
+		if hasattr(doc, "cost_center"):
+			doc.cost_center = cost_center
+		if frappe.get_meta("Sales Order Item").has_field("cost_center"):
+			for row in doc.get("items") or []:
+				row.cost_center = cost_center
+
+
+def _apply_cost_center_to_delivery_note(dn, cost_center):
+	if not cost_center:
+		return
+	if hasattr(dn, "cost_center"):
+		dn.cost_center = cost_center
+	if frappe.get_meta("Delivery Note Item").has_field("cost_center"):
+		for row in dn.get("items") or []:
+			row.cost_center = cost_center
+
+
 def _resolve_patient_for_hospital_order(data, medication_orders):
 	"""
 	Link Sales Order to Patient (Healthcare) when field exists.
@@ -317,7 +353,7 @@ def get_batch_label_details(batch_nos):
 		return {}
 
 
-def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_profile):
+def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_profile, cost_center=None):
 	"""Create submitted Delivery Note from Sales Order so stock updates immediately (not long SO reservation)."""
 	try:
 		from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
@@ -338,6 +374,18 @@ def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_prof
 
 	if hasattr(dn, "update_stock"):
 		dn.update_stock = 1
+
+	if not cost_center:
+		try:
+			from healthcare.api.sales_order_cost_center import cost_center_from_sales_order
+
+			so_doc = frappe.get_doc("Sales Order", sales_order_name)
+			cost_center = cost_center_from_sales_order(so_doc)
+		except ImportError:
+			cost_center = frappe.db.get_value("Sales Order", sales_order_name, "cost_center")
+	if not cost_center:
+		cost_center = _resolve_pos_cost_center(pos_profile)
+	_apply_cost_center_to_delivery_note(dn, cost_center)
 
 	dn.insert(ignore_permissions=True)
 	dn.submit()
@@ -362,6 +410,8 @@ def create_and_submit_hospital_sales_order(data):
 		pos_profile = _get_active_pos_profile()
 		if not _to_bool(getattr(pos_profile, "custom_is_hospital_pharmacy", 0)):
 			frappe.throw("Hospital pharmacy flow is not enabled on current POS Profile.")
+
+		cost_center = _resolve_pos_cost_center(pos_profile)
 
 		doc = frappe.new_doc("Sales Order")
 		doc.customer = customer
@@ -419,8 +469,12 @@ def create_and_submit_hospital_sales_order(data):
 				row["batch_no"] = item.get("batchNumber")
 			if item.get("serialNumber") and frappe.db.has_column("Sales Order Item", "serial_no"):
 				row["serial_no"] = item.get("serialNumber")
+			if cost_center and frappe.get_meta("Sales Order Item").has_field("cost_center"):
+				row["cost_center"] = cost_center
 
 			doc.append("items", row)
+
+		_apply_cost_center_to_sales_order(doc, cost_center)
 
 		savepoint = "hospital_dispense_so_dn"
 		frappe.db.savepoint(savepoint)
@@ -428,7 +482,9 @@ def create_and_submit_hospital_sales_order(data):
 			doc.insert(ignore_permissions=True)
 			doc.submit()
 
-			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(doc.name, pos_profile)
+			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(
+				doc.name, pos_profile, cost_center=cost_center
+			)
 			_finalize_medication_orders_after_dispense(items, medication_orders)
 		except Exception:
 			frappe.db.rollback(save_point=savepoint)
