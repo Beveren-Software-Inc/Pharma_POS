@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef, Fragment } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   FileText,
@@ -20,12 +21,16 @@ import {
   RotateCcw,
   Check,
   FileMinus,
+  ChevronDown,
+  ChevronRight,
+  Printer,
 } from "lucide-react";
 
 import InvoiceViewModal from "../components/InvoiceViewModal";
 import BottomNavigation from "../components/BottomNavigation";
 import MultiInvoiceReturn from "../components/MultiInvoiceReturn";
 import SingleInvoiceReturn from "../components/SingleInvoiceReturn";
+import DispenseOrderReturn from "../components/DispenseOrderReturn";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { formatCurrency } from "../utils/currency";
 import type { SalesInvoice } from "../../types";
@@ -44,6 +49,7 @@ import { addDraftInvoiceToCart } from "../utils/draftInvoiceToCart";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { isToday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
 import { exportInvoicesToCSV, getExportFilename, type ExportableInvoice } from "../utils/exportUtils";
+import { getPrintFormatsForDoctype } from "../services/patientService";
 // import InvoiceViewPage from "./InvoiceViewPage";
 
 export default function InvoiceHistoryPage() {
@@ -68,6 +74,16 @@ export default function InvoiceHistoryPage() {
   // Single Invoice Return states
   const [showSingleReturn, setShowSingleReturn] = useState(false);
   const [selectedInvoiceForReturn, setSelectedInvoiceForReturn] = useState<SalesInvoice | null>(null);
+
+  // Hospital dispense return states
+  const [showDispenseReturn, setShowDispenseReturn] = useState(false);
+  const [selectedDispenseOrder, setSelectedDispenseOrder] = useState<SalesInvoice | null>(null);
+  const [expandedDispenseOrders, setExpandedDispenseOrders] = useState<Set<string>>(new Set());
+  const [openDispensePrintFor, setOpenDispensePrintFor] = useState<string | null>(null);
+  const [dispensePrintMenuPosition, setDispensePrintMenuPosition] = useState<{ top: number; right: number } | null>(null);
+  const dispensePrintButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [deliveryNotePrintFormats, setDeliveryNotePrintFormats] = useState<string[]>(["Standard"]);
+  const [salesOrderPrintFormats, setSalesOrderPrintFormats] = useState<string[]>(["Standard"]);
 
   // Delete confirmation states
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -95,6 +111,7 @@ export default function InvoiceHistoryPage() {
     totalLoaded,
     totalCount,
     loadMore,
+    refetch,
   } = isHospitalPharmacy ? dispenseQuery : salesInvoiceQuery;
 
   const { modes } = useAllPaymentModes();
@@ -144,6 +161,62 @@ export default function InvoiceHistoryPage() {
     { id: "Return", name: "Returns", icon: RefreshCw, color: "text-purple-600" },
     { id: "Cancelled", name: "Cancelled", icon: XCircle, color: "text-red-500" },
   ];
+
+  useEffect(() => {
+    if (!isHospitalPharmacy) return;
+    void getPrintFormatsForDoctype("Delivery Note").then((res) => {
+      setDeliveryNotePrintFormats(res.formats);
+    });
+    void getPrintFormatsForDoctype("Sales Order").then((res) => {
+      setSalesOrderPrintFormats(res.formats);
+    });
+  }, [isHospitalPharmacy]);
+
+  useLayoutEffect(() => {
+    if (!openDispensePrintFor || !dispensePrintButtonRef.current) return;
+    const rect = dispensePrintButtonRef.current.getBoundingClientRect();
+    setDispensePrintMenuPosition({
+      top: rect.bottom + 4,
+      right: window.innerWidth - rect.right,
+    });
+  }, [openDispensePrintFor]);
+
+  useEffect(() => {
+    if (!openDispensePrintFor) return;
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-dispense-print-menu]") && !target.closest("[data-dispense-print-trigger]")) {
+        setOpenDispensePrintFor(null);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [openDispensePrintFor]);
+
+  const toggleDispenseExpand = (orderId: string) => {
+    setExpandedDispenseOrders((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  };
+
+  const openDispensePrint = (doctype: string, name: string, format = "Standard") => {
+    const params = new URLSearchParams({
+      doctype,
+      name,
+      format,
+      trigger_print: "1",
+      no_letterhead: "0",
+    });
+    window.open(`${window.location.origin}/printview?${params}`, "_blank", "noopener,noreferrer");
+  };
+
+  const canReturnDispenseOrder = (invoice: SalesInvoice) => {
+    if (!invoice.canReturn) return false;
+    return (invoice.items || []).some((item) => (item.available_qty ?? 0) > 0);
+  };
 
   const filterInvoiceByDate = (invoiceDateStr: string) => {
     if (dateFilter === "all") return true;
@@ -275,6 +348,73 @@ const getStatusBadge = (status: string) => {
       return customerName.includes(query) || customerCode.includes(query);
     });
   }, [customers, customerSearchQuery]);
+
+  const dispensePrintOrder = useMemo(
+    () => invoices.find((inv) => inv.id === openDispensePrintFor) || null,
+    [invoices, openDispensePrintFor]
+  );
+
+  const dispensePrintMenu =
+    openDispensePrintFor &&
+    dispensePrintMenuPosition &&
+    dispensePrintOrder &&
+    typeof document !== "undefined"
+      ? createPortal(
+          <div
+            data-dispense-print-menu
+            className="fixed z-[9999] min-w-[220px] max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl dark:border-gray-700 dark:bg-gray-800"
+            style={{
+              top: dispensePrintMenuPosition.top,
+              right: dispensePrintMenuPosition.right,
+              left: "auto",
+            }}
+          >
+            {dispensePrintOrder.deliveryNoteName && (
+              <>
+                <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                  Delivery Note
+                </div>
+                {deliveryNotePrintFormats.map((format) => (
+                  <button
+                    key={`dn-${format}`}
+                    type="button"
+                    className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-gray-200 dark:hover:bg-gray-700"
+                    onClick={() => {
+                      openDispensePrint(
+                        "Delivery Note",
+                        dispensePrintOrder.deliveryNoteName!,
+                        format
+                      );
+                      setOpenDispensePrintFor(null);
+                    }}
+                  >
+                    <Printer size={13} className="text-slate-400 flex-shrink-0" />
+                    <span className="truncate">{format}</span>
+                  </button>
+                ))}
+              </>
+            )}
+            <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 border-t border-gray-100 dark:border-gray-700">
+              Sales Order
+            </div>
+            {salesOrderPrintFormats.map((format) => (
+              <button
+                key={`so-${format}`}
+                type="button"
+                className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-gray-200 dark:hover:bg-gray-700"
+                onClick={() => {
+                  openDispensePrint("Sales Order", dispensePrintOrder.id, format);
+                  setOpenDispensePrintFor(null);
+                }}
+              >
+                <Printer size={13} className="text-slate-400 flex-shrink-0" />
+                <span className="truncate">{format}</span>
+              </button>
+            ))}
+          </div>,
+          document.body
+        )
+      : null;
 
   // Get count for each status - filtered by cashier, date, and payment (but not status)
   // This ensures tab counts reflect the current filter selections
@@ -539,100 +679,194 @@ const getStatusBadge = (status: string) => {
                     Zatca Status
                   </th>
                 )}
-                {!isHospitalPharmacy && (
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Actions
                 </th>
-                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
-              {filteredInvoices.map((invoice) => (
-                <tr key={`${activeTab}-${invoice.id}`} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div>
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
-                      <div className="text-sm text-gray-500 dark:text-gray-400">
-                        {invoice.date} {invoice.time}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900 dark:text-white">{invoice.customer}</div>
+              {filteredInvoices.map((invoice) => {
+                const isExpanded = expandedDispenseOrders.has(invoice.id);
+                const hospitalColSpan = 6;
 
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                    {invoice.cashier}
-                  </td>
-                  {!isHospitalPharmacy && (
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className="text-sm text-gray-900 dark:text-white">{invoice.paymentMethod}</span>
-                  </td>
-                  )}
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900 dark:text-white">
-                      {formatCurrency(invoice.totalAmount, invoice.currency)}
-                    </div>
-                    {invoice.giftCardDiscount > 0 && (
-                      <div className="text-xs text-orange-600 dark:text-green-400">
-                        -{formatCurrency(invoice.giftCardDiscount, invoice.currency)} gift card
-                      </div>
+                return (
+                  <Fragment key={`${activeTab}-${invoice.id}`}>
+                    <tr className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-start gap-2">
+                          {isHospitalPharmacy && (
+                            <button
+                              type="button"
+                              onClick={() => toggleDispenseExpand(invoice.id)}
+                              className="mt-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                              aria-label={isExpanded ? "Collapse medicines" : "Expand medicines"}
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="w-4 h-4" />
+                              ) : (
+                                <ChevronRight className="w-4 h-4" />
+                              )}
+                            </button>
+                          )}
+                          <div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                              {invoice.date} {invoice.time}
+                            </div>
+                            {isHospitalPharmacy && invoice.deliveryNoteName && (
+                              <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                                DN: {invoice.deliveryNoteName}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900 dark:text-white">{invoice.customer}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                        {invoice.cashier}
+                      </td>
+                      {!isHospitalPharmacy && (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="text-sm text-gray-900 dark:text-white">{invoice.paymentMethod}</span>
+                      </td>
+                      )}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900 dark:text-white">
+                          {formatCurrency(invoice.totalAmount, invoice.currency)}
+                        </div>
+                        {invoice.giftCardDiscount > 0 && (
+                          <div className="text-xs text-orange-600 dark:text-green-400">
+                            -{formatCurrency(invoice.giftCardDiscount, invoice.currency)} gift card
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={getStatusBadge(invoice.status)}>{invoice.status}</span>
+                      </td>
+                      {posDetails?.is_zatca_enabled && !isHospitalPharmacy && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {/* @ts-expect-error just ignore */}
+                          <span className={getStatusBadge(invoice.custom_zatca_submit_status)}>{invoice.custom_zatca_submit_status}</span>
+                        </td>
+                      )}
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        {isHospitalPharmacy ? (
+                          <div className="flex space-x-2">
+                            <button
+                              type="button"
+                              data-dispense-print-trigger
+                              ref={openDispensePrintFor === invoice.id ? dispensePrintButtonRef : null}
+                              onClick={() =>
+                                setOpenDispensePrintFor((prev) =>
+                                  prev === invoice.id ? null : invoice.id
+                                )
+                              }
+                              className="text-slate-600 hover:text-slate-900 flex items-center space-x-1"
+                            >
+                              <Printer className="w-4 h-4" />
+                              <span>Print</span>
+                            </button>
+                            {canReturnDispenseOrder(invoice) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDispenseOrder(invoice);
+                                  setShowDispenseReturn(true);
+                                }}
+                                className="text-orange-600 hover:text-orange-900 flex items-center space-x-1"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                                <span>Return</span>
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex space-x-2">
+                            <button
+                              onClick={() => handleViewInvoice(invoice)}
+                              className="text-beveren-600 hover:text-beveren-900 flex items-center space-x-1"
+                            >
+                              <Eye className="w-4 h-4" />
+                              <span>View</span>
+                            </button>
+                            {invoice.status === "Draft" && (
+                              <button
+                                onClick={() => handleEditDraftClick(invoice)}
+                                className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 flex items-center space-x-1"
+                              >
+                                <Edit className="w-4 h-4" />
+                                <span>Edit</span>
+                              </button>
+                            )}
+                            {/* @ts-expect-error just ignore */}
+                            {["Paid", "Unpaid", "Overdue", "Partly Paid", "Credit Note Issued"].includes(invoice.status) && !invoice.is_return && hasReturnableItems(invoice) && (
+                              <button
+                                onClick={() => handleSingleReturnClick(invoice)}
+                                className="text-orange-600 hover:text-orange-900 flex items-center space-x-1"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                                <span>Return</span>
+                              </button>
+                            )}
+                            {invoice.status === "Draft" && (
+                              <button
+                                onClick={() => handleDeleteClick(invoice)}
+                                className="text-red-600 hover:text-red-900 flex items-center space-x-1"
+                              >
+                                <FileMinus className="w-4 h-4" />
+                                <span>Delete</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                    {isHospitalPharmacy && isExpanded && (
+                      <tr className="bg-gray-50/80 dark:bg-gray-800/50">
+                        <td colSpan={hospitalColSpan} className="px-6 py-4">
+                          <div className="ml-6 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                            <table className="w-full text-sm">
+                              <thead className="bg-gray-100 dark:bg-gray-700/80">
+                                <tr>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Medicine</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Batch</th>
+                                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Qty</th>
+                                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Rate</th>
+                                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Amount</th>
+                                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Returned</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
+                                {(invoice.items || []).map((item) => (
+                                  <tr key={`${invoice.id}-${item.so_detail || item.item_code}`}>
+                                    <td className="px-4 py-2 text-gray-900 dark:text-white">
+                                      <div className="font-medium">{item.item_name || item.name}</div>
+                                      <div className="text-xs text-gray-500">{item.item_code}</div>
+                                    </td>
+                                    <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{item.batch_no || "—"}</td>
+                                    <td className="px-4 py-2 text-right text-gray-900 dark:text-white">{item.qty ?? item.quantity}</td>
+                                    <td className="px-4 py-2 text-right text-gray-900 dark:text-white">
+                                      {formatCurrency(item.rate ?? item.unitPrice ?? 0, invoice.currency)}
+                                    </td>
+                                    <td className="px-4 py-2 text-right text-gray-900 dark:text-white">
+                                      {formatCurrency(item.amount ?? item.total ?? 0, invoice.currency)}
+                                    </td>
+                                    <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-300">
+                                      {item.returned_qty ?? 0}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={getStatusBadge(invoice.status)}>{invoice.status}</span>
-                  </td>
-                  {posDetails?.is_zatca_enabled && !isHospitalPharmacy && (
-                    <td className="px-6 py-4 whitespace-nowrap">
-                                  {/* @ts-expect-error just ignore */}
-                      <span className={getStatusBadge(invoice.custom_zatca_submit_status)}>{invoice.custom_zatca_submit_status}</span>
-                    </td>
-                  )}
-                  {!isHospitalPharmacy && (
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleViewInvoice(invoice)}
-                        className="text-beveren-600 hover:text-beveren-900 flex items-center space-x-1"
-                      >
-                        <Eye className="w-4 h-4" />
-                        <span>View</span>
-                      </button>
-                      {invoice.status === "Draft" && (
-                        <button
-                          onClick={() => handleEditDraftClick(invoice)}
-                          className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 flex items-center space-x-1"
-                        >
-                          <Edit className="w-4 h-4" />
-                          <span>Edit</span>
-                        </button>
-                      )}
-                      {/* @ts-expect-error just ignore */}
-                      {["Paid", "Unpaid", "Overdue", "Partly Paid", "Credit Note Issued"].includes(invoice.status) && !invoice.is_return && hasReturnableItems(invoice) && (
-
-                        <button
-                          onClick={() => handleSingleReturnClick(invoice)}
-                          className="text-orange-600 hover:text-orange-900 flex items-center space-x-1"
-                        >
-                          <RotateCcw className="w-4 h-4" />
-                          <span>Return</span>
-                        </button>
-                      )}
-
-                      {invoice.status === "Draft" && (
-                        <button
-                          onClick={() => handleDeleteClick(invoice)}
-                          className="text-red-600 hover:text-red-900 flex items-center space-x-1"
-                        >
-                          <FileMinus className="w-4 h-4" />
-                          <span>Delete</span>
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                  )}
-                </tr>
-              ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -666,7 +900,41 @@ const getStatusBadge = (status: string) => {
                 </div>
               </div>
               <div className="mt-4 flex space-x-2">
-                {!isHospitalPharmacy && (
+                {isHospitalPharmacy ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => toggleDispenseExpand(invoice.id)}
+                      className="flex-1 text-xs px-3 py-2 bg-slate-100 text-slate-700 rounded hover:bg-slate-200 transition-colors dark:bg-gray-600 dark:text-gray-200"
+                    >
+                      {expandedDispenseOrders.has(invoice.id) ? "Hide medicines" : "Show medicines"}
+                    </button>
+                    <button
+                      type="button"
+                      data-dispense-print-trigger
+                      onClick={() =>
+                        setOpenDispensePrintFor((prev) =>
+                          prev === invoice.id ? null : invoice.id
+                        )
+                      }
+                      className="flex-1 text-xs px-3 py-2 bg-slate-600 text-white rounded hover:bg-slate-700 transition-colors"
+                    >
+                      Print
+                    </button>
+                    {canReturnDispenseOrder(invoice) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDispenseOrder(invoice);
+                          setShowDispenseReturn(true);
+                        }}
+                        className="flex-1 text-xs px-3 py-2 bg-orange-600 text-white rounded hover:bg-orange-700 transition-colors"
+                      >
+                        Return
+                      </button>
+                    )}
+                  </>
+                ) : (
                 <>
                 <button
                   onClick={() => handleViewInvoice(invoice)}
@@ -694,6 +962,29 @@ const getStatusBadge = (status: string) => {
                 </>
                 )}
               </div>
+              {isHospitalPharmacy && expandedDispenseOrders.has(invoice.id) && (
+                <div className="mt-4 space-y-2 border-t border-gray-200 dark:border-gray-600 pt-3">
+                  {(invoice.items || []).map((item) => (
+                    <div
+                      key={`${invoice.id}-${item.so_detail || item.item_code}`}
+                      className="flex justify-between gap-3 text-sm"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-900 dark:text-white truncate">
+                          {item.item_name || item.name}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {item.item_code}
+                          {item.batch_no ? ` · Batch ${item.batch_no}` : ""}
+                        </div>
+                      </div>
+                      <div className="text-right text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                        {item.qty ?? item.quantity} × {formatCurrency(item.rate ?? 0, invoice.currency)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -914,6 +1205,11 @@ const getStatusBadge = (status: string) => {
       window.location.reload();
     };
 
+    const handleDispenseReturnSuccess = () => {
+      setShowDispenseReturn(false);
+      setSelectedDispenseOrder(null);
+      refetch();
+    };
 
   const handleCustomerSelect = (customer: string) => {
     if (!customer) {
@@ -1330,6 +1626,15 @@ const getStatusBadge = (status: string) => {
           onClose={() => setShowSingleReturn(false)}
           onSuccess={handleSingleReturnSuccess}
         />
+
+        <DispenseOrderReturn
+          order={selectedDispenseOrder}
+          isOpen={showDispenseReturn}
+          onClose={() => setShowDispenseReturn(false)}
+          onSuccess={handleDispenseReturnSuccess}
+        />
+
+        {dispensePrintMenu}
 
         {/* Delete Confirmation Dialog */}
         <ConfirmDialog

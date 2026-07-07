@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { AuthProvider } from "./hooks/useAuth";
 import { ThemeProvider } from "./hooks/useTheme";
 import { I18nProvider } from "./hooks/useI18n";
@@ -16,11 +16,17 @@ import { cleanupStaleOverlays } from "./utils/cleanupOverlays";
 const queryClient = new QueryClient();
 
 function App() {
+  const location = useLocation();
+
   useEffect(() => {
     // Set up global error handling for API calls
     setupGlobalErrorHandling();
     cleanupStaleOverlays();
   }, []);
+
+  useEffect(() => {
+    cleanupStaleOverlays();
+  }, [location.pathname]);
 
   return (
     <QueryClientProvider client={queryClient}>

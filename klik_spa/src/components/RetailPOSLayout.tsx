@@ -11,11 +11,12 @@ import LoadingSpinner from "./LoadingSpinner"
 import BarcodeScannerModal from "./BarcodeScanner"
 import { useBarcodeScanner } from "../hooks/useBarcodeScanner"
 import { looksLikeGS1 } from "../hooks/gS1parser"
-import type { MenuItem, GiftCoupon } from "../../types"
+import type { MenuItem, GiftCoupon, CartItem } from "../../types"
 import { useMediaQuery } from "../hooks/useMediaQuery"
 import { useCartStore } from "../stores/cartStore"
 import { toast } from "react-toastify"
 import { getItemPriceForCustomer } from "../services/dynamicPricing"
+import { findLastCartLineForItem, getCartLineUpdateId } from "../utils/duplicateCartItems"
 
 export default function RetailPOSLayout() {
   const [selectedCategory, setSelectedCategory] = useState("all")
@@ -134,20 +135,13 @@ export default function RetailPOSLayout() {
 
   /** Returns the newly added cart item when a new line was created (for batch/serial targeting). */
   const addOrIncreaseWithQuantity = useCallback(async (item: MenuItem, quantity: number): Promise<{ cartLineId?: string; id: string } | void> => {
-    const allowDuplicatePos =
-      posDetails?.custom_allow_duplicate_items_in_pos === 1 ||
-      posDetails?.custom_allow_duplicate_items_in_pos === true ||
-      posDetails?.custom_allow_duplicate_items_in_pos === '1'
-    const itemHasSerialOrBatch =
-      item.has_serial_no === 1 || item.has_serial_no === true || item.has_serial_no === '1' ||
-      item.has_batch_no === 1 || item.has_batch_no === true || item.has_batch_no === '1'
-    const allowDuplicateForItem = allowDuplicatePos && itemHasSerialOrBatch
-    const existingItem = !allowDuplicateForItem
-      ? cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
-      : undefined
+    const existingItem = findLastCartLineForItem(cartItems, item.id);
     if (existingItem) {
-      updateQuantity(item.id, existingItem.quantity + quantity)
-      return
+      updateQuantity(getCartLineUpdateId(existingItem), existingItem.quantity + quantity);
+      return {
+        cartLineId: (existingItem as { cartLineId?: string }).cartLineId,
+        id: existingItem.id,
+      };
     }
     const uomToUse = resolveUomForCart(item)
     let priceToUse = item.price
@@ -169,38 +163,26 @@ export default function RetailPOSLayout() {
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,
       has_batch_no: item.has_batch_no,
-      allowDuplicate: allowDuplicateForItem,
     })
-    if (quantity !== 1 && added && (added as { cartLineId?: string }).cartLineId) {
-      updateQuantity((added as { cartLineId: string }).cartLineId, quantity)
-    } else if (quantity !== 1) {
-      updateQuantity(item.id, quantity)
+    if (quantity !== 1 && added) {
+      const lineId = getCartLineUpdateId(added as CartItem);
+      updateQuantity(lineId, quantity);
     }
     return added ? { cartLineId: (added as { cartLineId?: string }).cartLineId, id: added.id } : undefined
-  }, [cartItems, updateQuantity, addToCart, isPharmacy, pharmacyDefaultUom, selectedCustomer, posDetails])
+  }, [cartItems, updateQuantity, addToCart, isPharmacy, pharmacyDefaultUom, selectedCustomer])
 
   // Separate function for adding items to cart (used by both click and barcode). Returns a Promise so barcode scanner can wait for add before dispatching batch/serial.
-  const addItemToCart = (item: MenuItem): void | Promise<unknown> => {
-    const allowDuplicatePos =
-      posDetails?.custom_allow_duplicate_items_in_pos === 1 ||
-      posDetails?.custom_allow_duplicate_items_in_pos === true ||
-      posDetails?.custom_allow_duplicate_items_in_pos === "1"
-    const itemHasSerialOrBatch =
-      item.has_serial_no === 1 ||
-      item.has_serial_no === true ||
-      item.has_serial_no === "1" ||
-      item.has_batch_no === 1 ||
-      item.has_batch_no === true ||
-      item.has_batch_no === "1"
-    const allowDuplicateForItem = allowDuplicatePos && itemHasSerialOrBatch
+  const addItemToCart = (
+    item: MenuItem,
+    options?: { forceNewLine?: boolean }
+  ): void | Promise<unknown> => {
+    if (!options?.forceNewLine) {
+      const existingItem = findLastCartLineForItem(cartItems, item.id);
 
-    const existingItem = !allowDuplicateForItem
-      ? cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
-      : undefined
-
-    if (existingItem && !allowDuplicateForItem) {
-      updateQuantity(item.id, existingItem.quantity + 1)
-      return
+      if (existingItem) {
+        updateQuantity(getCartLineUpdateId(existingItem), existingItem.quantity + 1);
+        return;
+      }
     }
     const uomToUse = resolveUomForCart(item)
     const shouldFetchPrice = isPharmacy && pharmacyDefaultUom && !selectedCustomer && pharmacyDefaultUom !== item.uom
@@ -221,7 +203,6 @@ export default function RetailPOSLayout() {
             item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
             has_serial_no: item.has_serial_no,
             has_batch_no: item.has_batch_no,
-            allowDuplicate: allowDuplicateForItem,
           })
         })
         .catch(() => {
@@ -237,7 +218,6 @@ export default function RetailPOSLayout() {
             item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
             has_serial_no: item.has_serial_no,
             has_batch_no: item.has_batch_no,
-            allowDuplicate: allowDuplicateForItem,
           })
         })
     }
@@ -253,7 +233,6 @@ export default function RetailPOSLayout() {
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,
       has_batch_no: item.has_batch_no,
-      allowDuplicate: allowDuplicateForItem,
     })
   }
 
@@ -285,7 +264,9 @@ export default function RetailPOSLayout() {
   }
 
   // Barcode scanning functionality - moved after handleAddToCart is defined
-  const { scanBarcode } = useBarcodeScanner(addItemToCart)
+  const { scanBarcode } = useBarcodeScanner((item) =>
+    addItemToCart(item, { forceNewLine: true })
+  )
 
 
 

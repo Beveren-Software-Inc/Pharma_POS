@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Minus,
   Plus,
@@ -34,6 +34,7 @@ import {
   buildSerialLotMap,
   joinDispensingLotNames,
   getDispensingLotCacheKey,
+  setDispensingLotsCache,
   filterLotsByBatch,
   resolveSerialNumbersFromLotNames,
   type DispensingLotOption,
@@ -53,6 +54,7 @@ import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
 import { getCachedDraftInvoiceItems } from "../utils/draftInvoiceCache";
 import { getPartyLabels } from "../utils/partyLabels";
+import { POS_BEFORE_NAVIGATE_EVENT } from "../utils/navigation";
 
 
 interface OrderSummaryProps {
@@ -104,12 +106,20 @@ const MEDICATION_LABEL_CSS = `
 `;
 
 /** Shared cart line field styles — inputs and select triggers use the same size/spacing */
+const cartFieldLabelClass =
+  "block text-xs font-normal text-gray-500 dark:text-gray-400 mb-1 leading-tight";
+
+const cartFieldCellClass = "min-w-0 flex flex-col";
+
 const cartFieldInputClass =
-  "w-full text-sm px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white";
+  "w-full h-9 text-sm px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white";
 
-const cartFieldSelectTriggerClass = `${cartFieldInputClass} text-left flex items-center justify-between`;
+const cartFieldSelectTriggerClass = `${cartFieldInputClass} text-left flex items-center justify-between gap-2 min-h-9`;
 
-const cartFieldMultiSelectTriggerClass = `${cartFieldInputClass} min-h-[42px] text-left flex flex-wrap items-center gap-1`;
+const cartFieldMultiSelectTriggerClass = `${cartFieldInputClass} min-h-9 max-h-9 overflow-hidden text-left flex items-center gap-1`;
+
+const cartFieldActionButtonClass =
+  "w-full h-9 text-sm font-normal px-3 rounded-md border border-beveren-500 text-beveren-600 dark:text-beveren-400 hover:bg-beveren-50 dark:hover:bg-beveren-900/20 transition-colors flex items-center justify-center";
 
 const cartFieldDropdownFilterClass =
   "w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white";
@@ -394,7 +404,7 @@ const UOMSelectField = ({ item, onUOMChange, isMobile, selectedCustomer }: UOMSe
         onClick={() => setIsDropdownOpen(!isDropdownOpen)}
         className={cartFieldSelectTriggerClass}
       >
-        <span>{selectedUOM}</span>
+        <span className="truncate">{selectedUOM}</span>
         <svg className={`w-4 h-4 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
@@ -1104,28 +1114,44 @@ export default function OrderSummary({
   const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
   const [isDispensing, setIsDispensing] = useState(false);
   const [showClinicalAppropriatenessConfirm, setShowClinicalAppropriatenessConfirm] = useState(false);
+
+  useEffect(() => {
+    const closeTransientUi = () => {
+      setShowCustomerDropdown(false);
+      setShowPaymentDialog(false);
+      setShowMedicationOrdersModal(false);
+      setShowRedeemLoyaltyModal(false);
+      setShowAdditionalAmountModal(false);
+      setShowPharmacyServiceModal(false);
+      setShowAddCustomerModal(false);
+      setShowClinicalAppropriatenessConfirm(false);
+    };
+
+    window.addEventListener(POS_BEFORE_NAVIGATE_EVENT, closeTransientUi);
+    return () => window.removeEventListener(POS_BEFORE_NAVIGATE_EVENT, closeTransientUi);
+  }, []);
   const [lastDispensedSalesOrder, setLastDispensedSalesOrder] = useState<string | null>(null);
   const [lastDispensedLabelItems, setLastDispensedLabelItems] = useState<DispensedLabelItem[]>([]);
   const [lastDispensedCartSignature, setLastDispensedCartSignature] = useState<string | null>(null);
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
-  const { customers, isLoading, refetch: refetchCustomers } = useCustomers(customerSearchQuery);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { products, refetch: _refetchProducts, refreshStockOnly, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems, updateSerialsForItems, updateDispensingLotsForItems } = useProducts();
-  // const navigate = useNavigate();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { posDetails, loading: _posLoading } = usePOSDetails();
-  const setAfterPosSaleComplete = useUiStore((state) => state.setAfterPosSaleComplete);
-  const { checkCustomerPermission } = useCustomerPermission();
-  
-  // Check if pharmacy mode is enabled
   const isPharmacy = posDetails?.custom_is_pharmacy === 1 ||
                      posDetails?.custom_is_pharmacy === true ||
                      posDetails?.custom_is_pharmacy === "1";
   const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
                              posDetails?.custom_is_hospital_pharmacy === true ||
                              posDetails?.custom_is_hospital_pharmacy === "1";
+  const { customers, isLoading, refetch: refetchCustomers } = useCustomers(
+    isHospitalPharmacy ? "" : customerSearchQuery
+  );
 
   const party = getPartyLabels(isHospitalPharmacy);
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { products, refetch: _refetchProducts, refreshStockOnly, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems, updateSerialsForItems, updateDispensingLotsForItems } = useProducts();
+  const setAfterPosSaleComplete = useUiStore((state) => state.setAfterPosSaleComplete);
+  const { checkCustomerPermission } = useCustomerPermission();
 
   const pharmacyDefaultUom =
     typeof posDetails?.custom_pharmacy_default_uom === "string"
@@ -1234,19 +1260,27 @@ export default function OrderSummary({
   // Search for patients when pharmacy or hospital pharmacy mode is enabled
   useEffect(() => {
     if ((isPharmacy || isHospitalPharmacy) && customerSearchQuery.trim().length >= 2) {
+      let cancelled = false;
       const searchPatientsDebounced = setTimeout(() => {
         searchPatients(customerSearchQuery.trim())
-          .then(setPatients)
+          .then((results) => {
+            if (!cancelled) setPatients(results);
+          })
           .catch((error) => {
-            console.error('Error searching patients:', error);
-            setPatients([]);
+            if (!cancelled) {
+              console.error("Error searching patients:", error);
+              setPatients([]);
+            }
           });
       }, 300);
-      
-      return () => clearTimeout(searchPatientsDebounced);
-    } else {
-      setPatients([]);
+
+      return () => {
+        cancelled = true;
+        clearTimeout(searchPatientsDebounced);
+      };
     }
+
+    setPatients([]);
   }, [customerSearchQuery, isPharmacy, isHospitalPharmacy]);
 
   // Close patient/customer dropdown when clicking outside (without selecting)
@@ -1270,35 +1304,29 @@ export default function OrderSummary({
   
   // State for prescription frequencies (from Prescription Frequency doctype)
   const [prescriptionFrequencies, setPrescriptionFrequencies] = useState<PrescriptionFrequency[]>([]);
-  const [frequenciesLoaded, setFrequenciesLoaded] = useState(false);
-  
-  // Load prescription frequencies when pharmacy is enabled OR when items are added to cart
+
   useEffect(() => {
-    if (isPharmacy && !frequenciesLoaded) {
-      getPrescriptionFrequencies()
-        .then((frequencies) => {
-          setPrescriptionFrequencies(frequencies);
-          setFrequenciesLoaded(true);
-        })
-        .catch((error) => {
-          console.error('❌ Error loading prescription frequencies:', error);
-        });
+    if (!isPharmacy && !isHospitalPharmacy) {
+      setPrescriptionFrequencies([]);
+      return;
     }
-  }, [isPharmacy, frequenciesLoaded]);
-  
-  // Also load frequencies when items are added to cart (if pharmacy mode is enabled)
-  useEffect(() => {
-    if (isPharmacy && cartItems.length > 0 && !frequenciesLoaded) {
-      getPrescriptionFrequencies()
-        .then((frequencies) => {
-          setPrescriptionFrequencies(frequencies);
-          setFrequenciesLoaded(true);
-        })
-        .catch((error) => {
-          console.error('❌ Error loading prescription frequencies:', error);
-        });
-    }
-  }, [cartItems.length, isPharmacy, frequenciesLoaded]);
+
+    let cancelled = false;
+    getPrescriptionFrequencies()
+      .then((frequencies) => {
+        if (!cancelled) setPrescriptionFrequencies(frequencies);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Error loading prescription frequencies:", error);
+          setPrescriptionFrequencies([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPharmacy, isHospitalPharmacy]);
 
   // Get customer statistics for the selected customer
   const { statistics: customerStats } = useCustomerStatistics(selectedCustomer?.id || null);
@@ -1383,12 +1411,20 @@ export default function OrderSummary({
   // Ref so batch/serial handlers always merge with latest discounts (avoids losing other lines when state is stale)
   const itemDiscountsRef = useRef(itemDiscounts);
   const serialLotMapsRef = useRef(serialLotMaps);
+  const itemDispensingLotsRef = useRef(itemDispensingLots);
+  const cartItemsRef = useRef(cartItems);
   useEffect(() => {
     itemDiscountsRef.current = itemDiscounts;
   }, [itemDiscounts]);
   useEffect(() => {
     serialLotMapsRef.current = serialLotMaps;
   }, [serialLotMaps]);
+  useEffect(() => {
+    itemDispensingLotsRef.current = itemDispensingLots;
+  }, [itemDispensingLots]);
+  useEffect(() => {
+    cartItemsRef.current = cartItems;
+  }, [cartItems]);
 
   const draftRestoreKeyRef = useRef<string | null>(null);
 
@@ -1503,6 +1539,25 @@ export default function OrderSummary({
       );
     },
     [itemDiscounts, getLineKey]
+  );
+
+  const cartFetchSignature = useMemo(
+    () =>
+      cartItems
+        .map((item) => `${getLineKey(item)}:${item.item_code || item.id}`)
+        .join("|"),
+    [cartItems, getLineKey]
+  );
+
+  const dispensingLotSignature = useMemo(
+    () =>
+      cartItems
+        .map((item) => {
+          const lineKey = getLineKey(item);
+          return `${lineKey}:${getLineBatchNo(item, lineKey)}`;
+        })
+        .join("|"),
+    [cartItems, getLineKey, getLineBatchNo]
   );
 
   const getLotsForLine = useCallback(
@@ -1638,8 +1693,13 @@ export default function OrderSummary({
       return;
     }
     if (e.key === "Enter" && customerSearchQuery.trim() !== "") {
+      if (isHospitalPharmacy && visiblePatients.length === 1 && visiblePatients[0]) {
+        void handlePatientSelect(visiblePatients[0]);
+        return;
+      }
+
       // Check if there are no matching customers
-      if (filteredCustomers.length === 0) {
+      if (filteredCustomers.length === 0 && !(isHospitalPharmacy && visiblePatients.length > 0)) {
         // This is a new customer - detect input type and set prefilled data
         const trimmedValue = customerSearchQuery.trim();
         let prefilledData = {};
@@ -1895,6 +1955,18 @@ export default function OrderSummary({
               tag.toLowerCase().includes(customerSearchQuery.toLowerCase())
             )
         );
+
+  const visiblePatients = useMemo(() => {
+    if (!isPharmacy && !isHospitalPharmacy) return [];
+    if (isHospitalPharmacy) return patients;
+    return patients.filter((patient) => {
+      const patientName = (patient.patient_name || patient.name).toLowerCase();
+      const matchesCustomer = filteredCustomers.some(
+        (customer) => customer.name.toLowerCase() === patientName
+      );
+      return !matchesCustomer;
+    });
+  }, [patients, filteredCustomers, isPharmacy, isHospitalPharmacy]);
 
   const validateCustomer = () => {
     if (selectedCustomer) {
@@ -2480,23 +2552,40 @@ const pages = labels.map((label) => `
 
   const handleSelectPharmacyService = async (service: PharmacyServiceItem) => {
     if (!pharmacyServiceParent) return;
+    const parentLineKey = pharmacyServiceParent.lineKey;
+    const servicePrice = service.price || 0;
     try {
       await addToCartWithQuantity(
         {
           id: service.id,
           name: service.name,
           category: service.category || "Service",
-          price: service.price,
+          price: servicePrice,
           image: service.image || "",
           uom: service.uom,
           item_code: service.id,
           item_tax_template: service.item_tax_template,
           allowDuplicate: true,
           is_pharmacy_service: true,
-          parent_cart_line_id: pharmacyServiceParent.lineKey,
+          parent_cart_line_id: parentLineKey,
+          ...(servicePrice === 0 ? { rate_edited: true } : {}),
         },
         1
       );
+
+      const matchingServices = useCartStore
+        .getState()
+        .cartItems.filter(
+          (ci) =>
+            (ci as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service &&
+            (ci as CartItem & { parent_cart_line_id?: string }).parent_cart_line_id === parentLineKey &&
+            (ci.item_code || ci.id) === service.id
+        );
+      const addedService = matchingServices[matchingServices.length - 1];
+      if (addedService) {
+        setExpandedItems((prev) => new Set([...prev, getLineKey(addedService)]));
+      }
+
       toast.success(`Added ${service.name} to cart`);
       setShowPharmacyServiceModal(false);
       setPharmacyServiceParent(null);
@@ -2540,6 +2629,17 @@ const pages = labels.map((label) => `
     if (missingPinkReference.length > 0) {
       const uniqueItems = Array.from(new Set(missingPinkReference));
       toast.error(`Reference is required for: ${uniqueItems.join(", ")}.`);
+      return false;
+    }
+
+    const missingServiceAmount = cartItems
+      .filter((item) => (item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service)
+      .filter((item) => getDiscountedPrice(item) <= 0)
+      .map((item) => item.name || item.item_code || item.id);
+
+    if (missingServiceAmount.length > 0) {
+      const uniqueItems = Array.from(new Set(missingServiceAmount));
+      toast.error(`Enter an amount for service: ${uniqueItems.join(", ")}.`);
       return false;
     }
 
@@ -2608,6 +2708,7 @@ const pages = labels.map((label) => `
             alternative_drug: cartLine.alternative_drug || undefined,
             alternative_medicine: cartLine.alternative_drug || undefined,
             original_drug: cartLine.original_drug || undefined,
+            item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
           };
         }),
         medication_orders: allMedicationOrders,
@@ -2923,58 +3024,114 @@ const pages = labels.map((label) => `
   }, [posDetails, selectedCustomer, _posLoading, userRemovedDefaultCustomer, checkCustomerPermission, isHospitalPharmacy]);
 
   useEffect(() => {
+    if (!cartItems.length) return;
+
+    let cancelled = false;
+
     const fetchAndSetInfo = async () => {
-      const newBatches = { ...itemBatches };
-      const newSerials = { ...itemSerials } as Record<string, string[]>;
-      const newDispensingLots = { ...itemDispensingLots };
-      const newLotMaps = { ...serialLotMaps };
+      const batchesToAdd: Record<string, Awaited<ReturnType<typeof getBatches>>> = {};
+      const serialsToAdd: Record<string, string[]> = {};
 
       for (const item of cartItems) {
+        if (cancelled) return;
+
         const key = item.item_code || item.id;
-        if (key && key !== 'undefined') {
-          if (!newBatches[key]) {
-            try {
-              const batches = await getBatches(item.id);
-              if (Array.isArray(batches)) newBatches[key] = batches;
-            } catch (err) {
-              console.error("Error fetching batches", err);
-            }
+        if (!key || key === "undefined") continue;
+
+        if (!batchesToAdd[key]) {
+          try {
+            const batches = await getBatches(item.id);
+            if (Array.isArray(batches)) batchesToAdd[key] = batches;
+          } catch (err) {
+            console.error("Error fetching batches", err);
           }
-          const batchNo = getLineBatchNo(item);
-          if (useDispenseLot) {
-            const cacheKey = getDispensingLotCacheKey(key, batchNo);
-            if (!newDispensingLots[cacheKey]) {
-              try {
-                const lots = await getDispensingLots(key, batchNo || undefined);
-                newDispensingLots[cacheKey] = lots;
-                newLotMaps[cacheKey] = buildSerialLotMap(lots);
-              } catch (err) {
-                console.error("Error fetching dispensing lots", err);
-              }
-            }
-          } else if (!newSerials[key]) {
-            try {
-              const serials = await getSerials(key);
-              if (Array.isArray(serials)) newSerials[key] = serials;
-            } catch (err) {
-              console.error("Error fetching serials", err);
-            }
+        }
+
+        if (!useDispenseLot && !serialsToAdd[key]) {
+          try {
+            const serials = await getSerials(key);
+            if (Array.isArray(serials)) serialsToAdd[key] = serials;
+          } catch (err) {
+            console.error("Error fetching serials", err);
           }
-        } else {
-          console.log(`OrderSummary: Skipping initial info loading for key "${key}"`);
         }
       }
 
-      setItemBatches(newBatches);
-      setItemSerials(newSerials);
-      setItemDispensingLots(newDispensingLots);
-      setSerialLotMaps(newLotMaps);
+      if (cancelled) return;
+
+      if (Object.keys(batchesToAdd).length > 0) {
+        setItemBatches((prev) => ({ ...prev, ...batchesToAdd }));
+      }
+      if (Object.keys(serialsToAdd).length > 0) {
+        setItemSerials((prev) => ({ ...prev, ...serialsToAdd }));
+      }
     };
 
-    if (cartItems.length) {
-      fetchAndSetInfo();
-    }
-  }, [cartItems, useDispenseLot, itemDiscounts, getLineBatchNo]);
+    void fetchAndSetInfo();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cartFetchSignature, useDispenseLot]);
+
+  useEffect(() => {
+    if (!useDispenseLot || !dispensingLotSignature) return;
+
+    let cancelled = false;
+
+    const fetchMissingDispensingLots = async () => {
+      const items = cartItemsRef.current;
+      const lotsToAdd: Record<string, DispensingLotOption[]> = {};
+      const mapsToAdd: Record<string, Record<string, string>> = {};
+      const keysToFetch = new Map<string, { itemCode: string; batchNo: string }>();
+
+      for (const item of items) {
+        const key = item.item_code || item.id;
+        if (!key || key === "undefined") continue;
+
+        const lineKey = getLineKey(item);
+        const discount = itemDiscountsRef.current[lineKey];
+        const batchNo =
+          discount?.batchNumber?.trim() ||
+          (item as CartItem & { batch_no?: string }).batch_no?.trim() ||
+          "";
+        const cacheKey = getDispensingLotCacheKey(key, batchNo);
+
+        if (
+          Object.prototype.hasOwnProperty.call(itemDispensingLotsRef.current, cacheKey) ||
+          keysToFetch.has(cacheKey)
+        ) {
+          continue;
+        }
+
+        keysToFetch.set(cacheKey, { itemCode: key, batchNo });
+      }
+
+      for (const [cacheKey, { itemCode, batchNo }] of keysToFetch) {
+        if (cancelled) return;
+
+        try {
+          const lots = await getDispensingLots(itemCode, batchNo || undefined);
+          if (cancelled) return;
+          lotsToAdd[cacheKey] = lots;
+          mapsToAdd[cacheKey] = buildSerialLotMap(lots);
+        } catch (err) {
+          console.error("Error fetching dispensing lots", err);
+        }
+      }
+
+      if (cancelled || Object.keys(lotsToAdd).length === 0) return;
+
+      setItemDispensingLots((prev) => ({ ...prev, ...lotsToAdd }));
+      setSerialLotMaps((prev) => ({ ...prev, ...mapsToAdd }));
+    };
+
+    void fetchMissingDispensingLots();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dispensingLotSignature, useDispenseLot]);
 
   // Listen for batch quantity updates from ProductProvider
   useEffect(() => {
@@ -3027,6 +3184,7 @@ const pages = labels.map((label) => `
             if (itemCode && itemCode !== "undefined") {
               const cacheKey = getDispensingLotCacheKey(itemCode, batchNo);
               newLots[cacheKey] = lots;
+              setDispensingLotsCache(itemCode, batchNo, lots);
             }
           }
         );
@@ -3213,7 +3371,6 @@ const handleSetBatch = (event: CustomEvent) => {
       serial_no: undefined,
       dispensing_lot: undefined,
     });
-    void refreshDispensingLotsForItem(itemCode, batchId || undefined);
   } else {
     setPendingPreselect(prev => ({
       ...prev,
@@ -3430,7 +3587,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 {/* Customer/Patient Dropdown */}
                 {showCustomerDropdown && (
                   (!isHospitalPharmacy && filteredCustomers.length > 0) ||
-                  ((isPharmacy || isHospitalPharmacy) && patients.length > 0)
+                  ((isPharmacy || isHospitalPharmacy) && visiblePatients.length > 0)
                 ) && (
                   <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
                     {/* Customers (retail / pharmacy — hospital is patient-only search) */}
@@ -3482,37 +3639,22 @@ const handleSetSerial = (event: CustomEvent) => {
                     })}
                     
                     {/* Patients (pharmacy / hospital mode) */}
-                    {(isPharmacy || isHospitalPharmacy) && patients.length > 0 && (
+                    {(isPharmacy || isHospitalPharmacy) && visiblePatients.length > 0 && (
                       <>
                         {filteredCustomers.length > 0 && !isHospitalPharmacy && (
                           <div className="px-3 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
                             Patients (without customer record)
                           </div>
                         )}
-                        {filteredCustomers.length > 0 && isHospitalPharmacy && (
-                          <div className="px-3 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
-                            More {party.plural.toLowerCase()}
-                          </div>
-                        )}
-                        {patients
-                          .filter(patient => {
-                            // Filter out patients where patient_name matches an existing customer name
-                            const patientName = (patient.patient_name || patient.name).toLowerCase();
-                            const matchesCustomer = filteredCustomers.some(
-                              c => c.name.toLowerCase() === patientName
-                            );
-                            return !matchesCustomer;
-                          })
-                          .slice(0, 8)
-                          .map((patient) => (
-                            <button
-                              key={patient.name}
-                              onClick={() => handlePatientSelect(patient)}
-                              className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
-                            >
-                              <PatientSearchDropdownOption patient={patient} />
-                            </button>
-                          ))}
+                        {visiblePatients.slice(0, 8).map((patient) => (
+                          <button
+                            key={patient.name}
+                            onClick={() => handlePatientSelect(patient)}
+                            className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
+                          >
+                            <PatientSearchDropdownOption patient={patient} />
+                          </button>
+                        ))}
                       </>
                     )}
                   </div>
@@ -3638,7 +3780,7 @@ const handleSetSerial = (event: CustomEvent) => {
               {/* ADD THIS MISSING DROPDOWN - This was missing in mobile version */}
               {showCustomerDropdown && (
                 (!isHospitalPharmacy && filteredCustomers.length > 0) ||
-                ((isPharmacy || isHospitalPharmacy) && patients.length > 0)
+                ((isPharmacy || isHospitalPharmacy) && visiblePatients.length > 0)
               ) && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
                   {!isHospitalPharmacy && filteredCustomers.slice(0, 8).map((customer) => {
@@ -3673,11 +3815,7 @@ const handleSetSerial = (event: CustomEvent) => {
                     </button>
                     );
                   })}
-                  {(isPharmacy || isHospitalPharmacy) && patients.length > 0 && patients
-                    .filter(patient => {
-                      const patientName = (patient.patient_name || patient.name).toLowerCase();
-                      return !filteredCustomers.some(c => c.name.toLowerCase() === patientName);
-                    })
+                  {(isPharmacy || isHospitalPharmacy) && visiblePatients.length > 0 && visiblePatients
                     .slice(0, 8)
                     .map((patient) => (
                       <button
@@ -3920,7 +4058,7 @@ const handleSetSerial = (event: CustomEvent) => {
                       >
                         {item.category}
                       </p>
-                      {!isHospitalPharmacy && (
+                      {(!isHospitalPharmacy || isServiceItem) && (
                       <div className={`${isMobile ? "text-base" : "text-sm"}`}>
                         {discountedPrice < item.price ? (
                           <div className="flex items-center space-x-2">
@@ -4054,9 +4192,9 @@ const handleSetSerial = (event: CustomEvent) => {
                     >
                       <div className="w-full">
                         {/* Row 1: Quantity | UOM (or Rate for service items) */}
-                        <div className="grid grid-cols-2 gap-4 mb-4">
-                          <div>
-                            <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                        <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
+                          <div className={cartFieldCellClass}>
+                            <label className={cartFieldLabelClass}>
                               Quantity
                             </label>
                             <QuantityInput
@@ -4065,10 +4203,10 @@ const handleSetSerial = (event: CustomEvent) => {
                               isMobile={isMobile}
                             />
                           </div>
-                          {isServiceItem && !isHospitalPharmacy ? (
-                            <div>
-                              <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
-                                Rate
+                          {isServiceItem ? (
+                            <div className={cartFieldCellClass}>
+                              <label className={cartFieldLabelClass}>
+                                {isHospitalPharmacy ? "Amount" : "Rate"}
                               </label>
                               <ServiceRateInput
                                 lineKey={lineKey}
@@ -4079,11 +4217,9 @@ const handleSetSerial = (event: CustomEvent) => {
                                 isMobile={isMobile}
                               />
                             </div>
-                          ) : isServiceItem && isHospitalPharmacy ? (
-                            <div aria-hidden="true" />
                           ) : (
-                            <div>
-                              <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                            <div className={cartFieldCellClass}>
+                              <label className={cartFieldLabelClass}>
                                 UOM
                               </label>
                               <UOMSelectField
@@ -4100,9 +4236,9 @@ const handleSetSerial = (event: CustomEvent) => {
 
                         {/* Row 2: Discount Amount | Discount (%) — hidden in hospital pharmacy */}
                         {!isHospitalPharmacy && (
-                        <div className="grid grid-cols-2 gap-4 mb-4">
-                          <div>
-                            <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                        <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
+                          <div className={cartFieldCellClass}>
+                            <label className={cartFieldLabelClass}>
                               Discount Amount
                             </label>
                             <input
@@ -4121,8 +4257,8 @@ const handleSetSerial = (event: CustomEvent) => {
                               className={cartFieldInputClass}
                             />
                           </div>
-                          <div>
-                            <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                          <div className={cartFieldCellClass}>
+                            <label className={cartFieldLabelClass}>
                               Discount (%)
                             </label>
                             <input
@@ -4147,9 +4283,9 @@ const handleSetSerial = (event: CustomEvent) => {
 
                         {/* Row 3: Batch | Serial No */}
                         {!isServiceItem && (
-                        <div className="grid grid-cols-2 gap-4 mb-4">
-                          <div>
-                            <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                        <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
+                          <div className={cartFieldCellClass}>
+                            <label className={cartFieldLabelClass}>
                               Batch
                             </label>
                             <BatchSelectField
@@ -4166,18 +4302,12 @@ const handleSetSerial = (event: CustomEvent) => {
                                   serial_no: undefined,
                                   dispensing_lot: undefined,
                                 })
-                                if (useDispenseLot) {
-                                  void refreshDispensingLotsForItem(
-                                    item.item_code || item.id,
-                                    selectedBatch || undefined
-                                  )
-                                }
                               }}
                               isMobile={isMobile}
                             />
                           </div>
-                          <div>
-                            <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                          <div className={cartFieldCellClass}>
+                            <label className={cartFieldLabelClass}>
                               {useDispenseLot ? "Dispensing Lot" : "Serial No"}
                             </label>
                             <SerialSelectField
@@ -4199,9 +4329,9 @@ const handleSetSerial = (event: CustomEvent) => {
 
                         {/* Row 4: Dosage | Prescription Frequency (Pharmacy only) */}
                         {isPharmacy && !isServiceItem && (
-                          <div className="grid grid-cols-2 gap-4 mb-4">
-                            <div>
-                              <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                          <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
+                            <div className={cartFieldCellClass}>
+                              <label className={cartFieldLabelClass}>
                                 Dosage
                               </label>
                               <DosageInput
@@ -4211,8 +4341,8 @@ const handleSetSerial = (event: CustomEvent) => {
                                 isMobile={isMobile}
                               />
                             </div>
-                            <div>
-                              <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                            <div className={cartFieldCellClass}>
+                              <label className={cartFieldLabelClass}>
                                 Prescription Frequency
                               </label>
                               <DosageSelectField
@@ -4226,10 +4356,10 @@ const handleSetSerial = (event: CustomEvent) => {
                           </div>
                         )}
 
-                        {/* Row 5: Reference (pink) | Item Tax Template | Add Service | Additional Amount */}
+                        {/* Row 5: Reference (pink) | Item Tax Template (retail) | Add Service | Additional Amount */}
                         {(showPinkReference || showAddService || (isItemTaxTemplateMode && !isHospitalPharmacy) || (isAllowAdditionalAmounts && !isHospitalPharmacy)) && (
                           <div
-                            className={`grid gap-4 mb-4 ${
+                            className={`grid gap-3 mb-3 items-stretch ${
                               row5FieldCount >= 3
                                 ? "grid-cols-3"
                                 : row5FieldCount === 2
@@ -4238,8 +4368,8 @@ const handleSetSerial = (event: CustomEvent) => {
                             }`}
                           >
                             {showPinkReference && (
-                              <div className="min-w-0">
-                                <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                              <div className={cartFieldCellClass}>
+                                <label className={cartFieldLabelClass}>
                                   Reference
                                 </label>
                                 <input
@@ -4254,8 +4384,8 @@ const handleSetSerial = (event: CustomEvent) => {
                               </div>
                             )}
                             {isItemTaxTemplateMode && !isHospitalPharmacy && (
-                              <div className="min-w-0">
-                                <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                              <div className={cartFieldCellClass}>
+                                <label className={cartFieldLabelClass}>
                                   Item Tax Template
                                 </label>
                                 <select
@@ -4275,22 +4405,22 @@ const handleSetSerial = (event: CustomEvent) => {
                               </div>
                             )}
                             {showAddService && (
-                              <div className="min-w-0">
-                                <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                              <div className={cartFieldCellClass}>
+                                <label className={cartFieldLabelClass}>
                                   Add Service
                                 </label>
                                 <button
                                   type="button"
                                   onClick={() => openPharmacyServiceModal(lineKey, item.name)}
-                                  className={`w-full ${isMobile ? "text-sm" : "text-sm"} px-3 py-2 font-medium rounded-md border border-beveren-500 text-beveren-600 dark:text-beveren-400 hover:bg-beveren-50 dark:hover:bg-beveren-900/20 transition-colors`}
+                                  className={cartFieldActionButtonClass}
                                 >
                                   Add Service
                                 </button>
                               </div>
                             )}
                             {isAllowAdditionalAmounts && !isHospitalPharmacy && (
-                              <div>
-                                <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
+                              <div className={cartFieldCellClass}>
+                                <label className={cartFieldLabelClass}>
                                   Additional Amount
                                 </label>
                                 <input

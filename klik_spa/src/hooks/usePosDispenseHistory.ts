@@ -93,6 +93,11 @@ export function usePosDispenseHistory(
                   qty: Number(item.qty) || 0,
                   rate: Number(item.rate) || 0,
                   amount: Number(item.amount) || 0,
+                  returned_qty: Number(item.returned_qty) || 0,
+                  available_qty: Number(item.available_qty ?? item.qty) || 0,
+                  so_detail: item.so_detail ? String(item.so_detail) : undefined,
+                  dn_detail: item.dn_detail ? String(item.dn_detail) : undefined,
+                  batch_no: item.batch_no ? String(item.batch_no) : undefined,
                 }))
               : [];
 
@@ -121,9 +126,12 @@ export function usePosDispenseHistory(
               currency: String(row.currency || "USD"),
               posProfile: "",
               custom_pos_opening_entry: "",
-              canReturn: false,
+              canReturn: Boolean(row.can_return),
               isPosDispense: true,
-            } as SalesInvoice & { canReturn?: boolean; isPosDispense?: boolean };
+              deliveryNoteName: row.delivery_note_name
+                ? String(row.delivery_note_name)
+                : undefined,
+            } as SalesInvoice;
           }
         );
 

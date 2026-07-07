@@ -117,8 +117,16 @@ export default function PharmacyServiceModal({
                     </div>
                   </div>
                   <div className="text-sm font-semibold text-beveren-600 dark:text-beveren-400 shrink-0">
-                    {currencySymbol}
-                    {(item.price || 0).toFixed(3)}
+                    {(item.price || 0) > 0 ? (
+                      <>
+                        {currencySymbol}
+                        {item.price.toFixed(3)}
+                      </>
+                    ) : (
+                      <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                        Enter amount in cart
+                      </span>
+                    )}
                   </div>
                 </button>
               ))}

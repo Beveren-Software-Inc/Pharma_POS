@@ -8,24 +8,80 @@ export interface DispensingLotOption {
   label: string;
 }
 
+const dispensingLotsResultCache = new Map<string, DispensingLotOption[]>();
+const dispensingLotsInflight = new Map<string, Promise<DispensingLotOption[]>>();
+
+async function fetchDispensingLotsFromApi(
+  itemCode: string,
+  batchNo?: string
+): Promise<DispensingLotOption[]> {
+  const params = new URLSearchParams({ item_code: itemCode });
+  if (batchNo) {
+    params.set("batch_no", batchNo);
+  }
+  const res = await fetch(
+    `/api/method/klik_pos.api.item.get_dispensing_lots_for_item?${params.toString()}`
+  );
+  if (!res.ok) return [];
+  const data = (await res.json()) as { message?: DispensingLotOption[] };
+  return Array.isArray(data?.message) ? data.message : [];
+}
+
+export function invalidateDispensingLotsCache(
+  itemCode?: string,
+  batchNo?: string
+): void {
+  if (!itemCode) {
+    dispensingLotsResultCache.clear();
+    dispensingLotsInflight.clear();
+    return;
+  }
+  const cacheKey = getDispensingLotCacheKey(itemCode, batchNo);
+  dispensingLotsResultCache.delete(cacheKey);
+  dispensingLotsInflight.delete(cacheKey);
+}
+
+export function setDispensingLotsCache(
+  itemCode: string,
+  batchNo: string | undefined,
+  lots: DispensingLotOption[]
+): void {
+  const cacheKey = getDispensingLotCacheKey(itemCode, batchNo);
+  dispensingLotsResultCache.set(cacheKey, lots);
+  dispensingLotsInflight.delete(cacheKey);
+}
+
 export async function getDispensingLots(
   itemCode: string,
   batchNo?: string
 ): Promise<DispensingLotOption[]> {
-  try {
-    const params = new URLSearchParams({ item_code: itemCode });
-    if (batchNo) {
-      params.set("batch_no", batchNo);
-    }
-    const res = await fetch(
-      `/api/method/klik_pos.api.item.get_dispensing_lots_for_item?${params.toString()}`
-    );
-    if (!res.ok) return [];
-    const data = (await res.json()) as { message?: DispensingLotOption[] };
-    return Array.isArray(data?.message) ? data.message : [];
-  } catch {
-    return [];
+  const cacheKey = getDispensingLotCacheKey(itemCode, batchNo);
+
+  const cached = dispensingLotsResultCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
+
+  const inflight = dispensingLotsInflight.get(cacheKey);
+  if (inflight) {
+    return inflight;
+  }
+
+  const promise = fetchDispensingLotsFromApi(itemCode, batchNo)
+    .then((lots) => {
+      dispensingLotsResultCache.set(cacheKey, lots);
+      return lots;
+    })
+    .catch(() => {
+      dispensingLotsResultCache.delete(cacheKey);
+      return [] as DispensingLotOption[];
+    })
+    .finally(() => {
+      dispensingLotsInflight.delete(cacheKey);
+    });
+
+  dispensingLotsInflight.set(cacheKey, promise);
+  return promise;
 }
 
 /** Show remaining qty prefix when selling in a UOM other than stock (pack) UOM. */

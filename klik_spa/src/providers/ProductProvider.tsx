@@ -2,6 +2,11 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import type { ReactNode } from 'react';
 import type { MenuItem } from '../../types';
 import { useAuth } from '../hooks/useAuth';
+import {
+  getDispensingLots,
+  invalidateDispensingLotsCache,
+  type DispensingLotOption,
+} from '../utils/dispensingLot';
 
 interface ProductContextType {
   products: MenuItem[];
@@ -588,19 +593,9 @@ export function ProductProvider({ children }: ProductProviderProps) {
           if (!itemCode || itemCode === "undefined") return null;
 
           try {
-            const params = new URLSearchParams({ item_code: itemCode });
-            if (batchNo) {
-              params.set("batch_no", batchNo);
-            }
-            const response = await fetch(
-              `/api/method/klik_pos.api.item.get_dispensing_lots_for_item?${params.toString()}`
-            );
-            const resData = await response.json();
-
-            if (resData?.message && Array.isArray(resData.message)) {
-              return { itemCode, batchNo: batchNo || "", lots: resData.message };
-            }
-            return { itemCode, batchNo: batchNo || "", lots: [] };
+            invalidateDispensingLotsCache(itemCode, batchNo);
+            const lots = await getDispensingLots(itemCode, batchNo);
+            return { itemCode, batchNo: batchNo || "", lots };
           } catch (error) {
             console.error(`Failed to update dispensing lots for ${itemCode}:`, error);
             return null;
@@ -611,7 +606,7 @@ export function ProductProvider({ children }: ProductProviderProps) {
         const validResults = lotResults.filter(
           (
             result
-          ): result is { itemCode: string; batchNo: string; lots: unknown[] } =>
+          ): result is { itemCode: string; batchNo: string; lots: DispensingLotOption[] } =>
             result !== null
         );
 

@@ -164,19 +164,22 @@ export const useCartStore = create<CartState>()(
         }
 
         if (existingItem) {
-          // Check if adding one more would exceed available stock
           const maxQty = getMaxQtyInItemUOM(existingItem);
           if (maxQty !== null && existingItem.quantity >= maxQty) {
             toast.error(`Only ${maxQty} ${existingItem.uom || item.uom || 'units'} of ${item.name} available`);
             return;
           }
 
+          const lineKey =
+            (existingItem as { cartLineId?: string }).cartLineId || existingItem.id;
           set((state) => ({
-            cartItems: state.cartItems.map((cartItem) =>
-              cartItem.id === item.id
+            cartItems: state.cartItems.map((cartItem) => {
+              const key =
+                (cartItem as { cartLineId?: string }).cartLineId || cartItem.id;
+              return key === lineKey
                 ? { ...cartItem, quantity: cartItem.quantity + 1 }
-                : cartItem
-            )
+                : cartItem;
+            }),
           }));
           return;
         }
@@ -234,25 +237,29 @@ export const useCartStore = create<CartState>()(
         }
 
         if (existingItem) {
-          // Check if adding the quantity would exceed available stock
           const maxQty = getMaxQtyInItemUOM(existingItem);
           if (maxQty !== null && (existingItem.quantity + quantity) > maxQty) {
             toast.error(`Only ${maxQty} ${existingItem.uom || item.uom || 'units'} of ${item.name} available`);
             return;
           }
 
+          const lineKey =
+            (existingItem as { cartLineId?: string }).cartLineId || existingItem.id;
           set((state) => ({
-            cartItems: state.cartItems.map((cartItem) =>
-              cartItem.id === item.id
+            cartItems: state.cartItems.map((cartItem) => {
+              const key =
+                (cartItem as { cartLineId?: string }).cartLineId || cartItem.id;
+              return key === lineKey
                 ? { ...cartItem, quantity: cartItem.quantity + quantity }
-                : cartItem
-            )
+                : cartItem;
+            }),
           }));
         } else {
-          // New item - fetch correct price if customer is selected
+          // New item - fetch correct price if customer is selected (not for pharmacy services)
           let finalPrice = item.price;
+          const isPharmacyService = !!(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service;
 
-          if (state.selectedCustomer) {
+          if (state.selectedCustomer && !isPharmacyService) {
             try {
               // Pass the item's UOM to ensure we get the price for the correct UOM
               const priceInfo = await getItemPriceForCustomer(item.id, state.selectedCustomer.id, item.uom);
@@ -272,6 +279,9 @@ export const useCartStore = create<CartState>()(
             cartLineId: item.allowDuplicate
               ? ((item as { cartLineId?: string }).cartLineId || crypto.randomUUID())
               : undefined,
+            ...(isPharmacyService && (!finalPrice || finalPrice === 0)
+              ? { rate_edited: true as const }
+              : {}),
           };
           const newCartItems = [...state.cartItems, newItem];
 
@@ -279,11 +289,12 @@ export const useCartStore = create<CartState>()(
             cartItems: newCartItems
           }));
 
-          // Apply pricing rules after adding item
+          // Apply pricing rules after adding item (skipped for pharmacy-only service lines)
           const stateAfterAdd = get();
-          if (stateAfterAdd.cartItems.length > 0) {
+          if (stateAfterAdd.cartItems.length > 0 && !isPharmacyService) {
             await stateAfterAdd.applyPricingRules();
           }
+          return newItem;
         }
       },
 
