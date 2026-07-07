@@ -99,10 +99,10 @@ fixtures = [
  {
 	 "doctype": "Delivery Channel",
 	"filters":[
-		
+
 	]
  }
- 
+
 ]
 
 doc_events = {
@@ -121,7 +121,7 @@ doc_events = {
 			"klik_pos.api.sales_invoice.finalize_paid_amount",
 			"klik_pos.api.delivery_compensation.create_compensation_for_sales_invoice",
 		],
-		
+
 		# "before_save": [
 		# 	"klik_pos.api.sales_invoice.sync_return_payments_before_save",
 		# ],

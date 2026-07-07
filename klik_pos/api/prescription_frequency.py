@@ -61,20 +61,17 @@ def get_prescription_frequencies():
 
 	fields = _prescription_frequency_select_fields()
 	order_by = _prescription_frequency_order_by(fields)
-	print("Nafika hapa pia")
+	
 	if _prescription_frequency_has_active_field():
-		print("Huku kuingia")
 		rows = _fetch_active_prescription_frequencies(fields, order_by)
-		print(f"Fetched {len(rows)} Prescription Frequencies (Active field present).")
 		return [row for row in rows if cint(row.get("active")) == 1]
-	print("hapa niko ")
+	
 	prescription = frappe.get_all(
 		"Prescription Frequency",
-		# fields=fields,
-		# filters={},
+		fields=fields,
+		filters={},
 		order_by=order_by,
 	)
-	print(f"Fetched {len(prescription)} Prescription Frequencies (Active field not present).")
 	return prescription
 
 
