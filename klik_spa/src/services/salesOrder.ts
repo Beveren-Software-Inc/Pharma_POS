@@ -20,6 +20,82 @@ export async function createHospitalSalesOrder(data: any) {
   return result.message;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function createDraftHospitalSalesOrder(data: any) {
+  const csrfToken = window.csrf_token;
+  const response = await fetch("/api/method/klik_pos.api.sales_order.create_draft_hospital_sales_order", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Frappe-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify({ data }),
+    credentials: "include",
+  });
+
+  const result = await response.json();
+  if (!response.ok || !result.message || result.message.success === false) {
+    throw new Error(extractErrorMessage(result, "Failed to hold dispense order"));
+  }
+  return result.message as { success: boolean; sales_order_name: string };
+}
+
+export async function getDraftHospitalSalesOrder(salesOrderName: string) {
+  const response = await fetch(
+    `/api/method/klik_pos.api.sales_order.get_draft_hospital_sales_order?sales_order_name=${encodeURIComponent(salesOrderName)}`,
+    {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    }
+  );
+  const result = await response.json();
+  if (!response.ok || !result.message || result.message.success === false) {
+    throw new Error(extractErrorMessage(result, "Failed to load held dispense order"));
+  }
+  return result.message as {
+    success: boolean;
+    sales_order_name: string;
+    customer: string;
+    customer_name?: string;
+    patient?: string;
+    custom_remarks?: string;
+    items: Array<{
+      item_code: string;
+      item_name?: string;
+      qty: number;
+      rate: number;
+      uom?: string;
+      batch_no?: string;
+      serial_no?: string;
+      custom_batch?: string;
+      custom_dispensing_lot?: string;
+      custom_dosage?: string;
+      custom_prescription_frequency?: string;
+    }>;
+    hold_payload?: Record<string, unknown> | null;
+    message?: string;
+  };
+}
+
+export async function deleteDraftHospitalSalesOrder(salesOrderName: string) {
+  const csrfToken = window.csrf_token;
+  const response = await fetch("/api/method/klik_pos.api.sales_order.delete_draft_hospital_sales_order", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Frappe-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify({ sales_order_name: salesOrderName }),
+    credentials: "include",
+  });
+  const result = await response.json();
+  if (!response.ok || !result.message || result.message.success === false) {
+    throw new Error(extractErrorMessage(result, "Failed to delete held dispense order"));
+  }
+  return result.message as { success: boolean; sales_order_name: string };
+}
+
 export async function getBatchLabelDetails(batchNumbers: string[]) {
   if (!Array.isArray(batchNumbers) || batchNumbers.length === 0) {
     return {};

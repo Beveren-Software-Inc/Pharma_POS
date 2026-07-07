@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { CartItem, GiftCoupon } from '../../types'
 import type { Customer } from '../types/customer'
+import type { Patient } from '../services/patientService'
 import { toast } from 'react-toastify'
 import { clearDraftInvoiceCache } from '../utils/draftInvoiceCache'
 import { updateItemPricesForCustomer, getItemPriceForCustomer, applyPricingRulesToCart } from '../services/dynamicPricing'
@@ -113,6 +114,7 @@ interface CartState {
   cartItems: CartItem[]
   appliedCoupons: GiftCoupon[]
   selectedCustomer: Customer | null
+  selectedPatient: Patient | null
   /** Points to redeem at checkout (loyalty); null = not redeeming */
   redeemLoyaltyPoints: number | null
   /** General additional amount (e.g. syringe, misc charges) - only when POS allows */
@@ -132,6 +134,7 @@ interface CartState {
   applyCoupon: (coupon: GiftCoupon) => void
   removeCoupon: (couponCode: string) => void
   setSelectedCustomer: (customer: Customer | null) => Promise<void>
+  setSelectedPatient: (patient: Patient | null) => void
   setRedeemLoyaltyPoints: (points: number | null) => void
   setGeneralAdditionalAmount: (amount: number) => void
   setAdditionalRemark: (remark: string | null) => void
@@ -145,6 +148,7 @@ export const useCartStore = create<CartState>()(
       cartItems: [],
       appliedCoupons: [],
       selectedCustomer: null,
+      selectedPatient: null,
       redeemLoyaltyPoints: null,
       generalAdditionalAmount: 0,
       additionalRemark: null,
@@ -401,6 +405,7 @@ export const useCartStore = create<CartState>()(
           cartItems: [],
           appliedCoupons: [],
           selectedCustomer: null,
+          selectedPatient: null,
           redeemLoyaltyPoints: null,
           generalAdditionalAmount: 0,
           additionalRemark: null,
@@ -434,7 +439,7 @@ export const useCartStore = create<CartState>()(
       setSelectedCustomer: async (customer) => {
         set((state) => ({
           selectedCustomer: customer,
-          ...(customer ? {} : { redeemLoyaltyPoints: null })
+          ...(customer ? {} : { selectedPatient: null, redeemLoyaltyPoints: null }),
         }));
 
         // Apply pricing rules when customer changes (pricing rules can be customer-specific)
@@ -443,6 +448,8 @@ export const useCartStore = create<CartState>()(
           await state.updatePricesForCustomer(customer?.id);
         }
       },
+
+      setSelectedPatient: (patient) => set(() => ({ selectedPatient: patient })),
 
       updatePricesForCustomer: async (customerId) => {
         const state = get();

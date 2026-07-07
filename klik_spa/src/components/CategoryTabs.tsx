@@ -63,17 +63,17 @@ export default function CategoryTabs({
         <button
           key={category.id}
           onClick={() => onCategoryChange(category.id)}
-          className={`flex items-center justify-center px-3 py-2 rounded-xl whitespace-nowrap transition-all duration-200 flex-shrink-0 min-w-fit ${
+          className={`flex items-center justify-center px-2.5 py-1.5 rounded-xl whitespace-nowrap transition-all duration-200 flex-shrink-0 min-w-fit ${
             selectedCategory === category.id
               ? "bg-beveren-50 dark:bg-beveren-900/20 text-beveren-700 dark:text-beveren-300 border border-beveren-200 dark:border-beveren-800 shadow-sm"
               : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700"
           }`}
         >
           <div className="flex flex-col items-center">
-            <span className={`font-semibold ${isMobile ? "text-xs" : "text-sm"}`}>
+            <span className={`font-semibold leading-tight ${isMobile ? "text-[10px]" : "text-[11px]"}`}>
               {category.name}
             </span>
-            <span className={`${isMobile ? "text-xs" : "text-xs"} font-medium opacity-70`}>
+            <span className={`${isMobile ? "text-[9px]" : "text-[10px]"} font-medium opacity-70 leading-tight`}>
               {category.count} Item{category.count !== 1 ? "s" : ""}
             </span>
           </div>

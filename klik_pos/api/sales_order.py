@@ -44,6 +44,69 @@ def _normalize_medication_orders(data):
 	return [o for o in orders if isinstance(o, str) and o.strip()]
 
 
+def _sales_order_item_meta():
+	return frappe.get_meta("Sales Order Item")
+
+
+def _sales_order_item_has_field(fieldname):
+	meta = _sales_order_item_meta()
+	return meta.has_field(fieldname) and frappe.db.has_column("Sales Order Item", fieldname)
+
+
+def _get_sales_order_item_fetch_fields():
+	"""Build Sales Order Item field list based on columns available on site."""
+	fields = ["name", "item_code", "item_name", "qty", "rate", "uom"]
+	for optional in (
+		"batch_no",
+		"serial_no",
+		"custom_batch",
+		"custom_dispensing_lot",
+		"custom_dosage",
+		"custom_prescription_frequency",
+	):
+		if _sales_order_item_has_field(optional):
+			fields.append(optional)
+	return fields
+
+
+def _apply_hospital_so_item_hold_fields(row, item):
+	"""Persist POS dispense line metadata on Sales Order Item for held orders."""
+	batch_val = (
+		item.get("batchNumber")
+		or item.get("batch_no")
+		or item.get("custom_batch")
+	)
+	if batch_val:
+		if _sales_order_item_has_field("custom_batch"):
+			row["custom_batch"] = batch_val
+		elif _sales_order_item_has_field("batch_no"):
+			row["batch_no"] = batch_val
+
+	serial_val = item.get("serialNumber") or item.get("serial_no")
+	if serial_val and _sales_order_item_has_field("serial_no"):
+		row["serial_no"] = serial_val
+
+	dispensing_lot = (
+		item.get("dispensingLot")
+		or item.get("dispensing_lot")
+		or item.get("custom_dispensing_lot")
+	)
+	if dispensing_lot and _sales_order_item_has_field("custom_dispensing_lot"):
+		row["custom_dispensing_lot"] = dispensing_lot
+
+	dosage = item.get("dosage") or item.get("custom_dosage")
+	if dosage is not None and str(dosage).strip() and _sales_order_item_has_field("custom_dosage"):
+		row["custom_dosage"] = str(dosage).strip()
+
+	frequency = (
+		item.get("prescriptionDosage")
+		or item.get("prescription_frequency")
+		or item.get("custom_prescription_frequency")
+	)
+	if frequency and _sales_order_item_has_field("custom_prescription_frequency"):
+		row["custom_prescription_frequency"] = frequency
+
+
 def _normalize_batch_nos(batch_nos):
 	if isinstance(batch_nos, str):
 		batch_nos = [b.strip() for b in batch_nos.split(",") if b and b.strip()]
@@ -392,6 +455,105 @@ def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_prof
 	return dn.name
 
 
+def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
+	"""Populate header fields on a hospital POS Sales Order."""
+	customer = (data.get("customer") or {}).get("id")
+	if not customer:
+		frappe.throw("Customer is required")
+
+	doc.customer = customer
+	doc.transaction_date = nowdate()
+	doc.delivery_date = nowdate()
+
+	if getattr(pos_profile, "company", None):
+		doc.company = pos_profile.company
+	if getattr(pos_profile, "currency", None):
+		doc.currency = pos_profile.currency
+	if hasattr(doc, "set_warehouse") and getattr(pos_profile, "warehouse", None):
+		doc.set_warehouse = pos_profile.warehouse
+	if hasattr(doc, "reserve_stock"):
+		doc.reserve_stock = 0
+
+	base_reference = data.get("base_reference") or "Patient Medication Order"
+	base_reference_name = data.get("base_reference_name")
+	medication_orders = _normalize_medication_orders(data)
+	reference_type = data.get("reference_type")
+	reference_name = data.get("reference_name")
+	reference_type, reference_name = _derive_reference_from_medication_orders(
+		reference_type, reference_name, medication_orders
+	)
+
+	if frappe.db.has_column("Sales Order", "custom_base_reference"):
+		doc.custom_base_reference = base_reference
+	if base_reference_name and frappe.db.has_column("Sales Order", "custom_base_reference_name"):
+		doc.custom_base_reference_name = base_reference_name
+	if reference_type and frappe.db.has_column("Sales Order", "custom_reference_type"):
+		doc.custom_reference_type = reference_type
+	if reference_name and frappe.db.has_column("Sales Order", "custom_reference_name"):
+		doc.custom_reference_name = reference_name
+
+	patient_link = _resolve_patient_for_hospital_order(data, medication_orders)
+	if patient_link and frappe.get_meta("Sales Order").has_field("patient"):
+		doc.patient = patient_link
+
+	if frappe.db.has_column("Sales Order", "custom_is_pos"):
+		doc.custom_is_pos = 1
+
+	custom_remarks = (data.get("custom_remarks") or "").strip()
+	if custom_remarks and frappe.db.has_column("Sales Order", "custom_remarks"):
+		doc.custom_remarks = custom_remarks
+
+	hold_payload = data.get("hold_payload")
+	if hold_payload and frappe.db.has_column("Sales Order", "custom_pos_hold_data"):
+		doc.custom_pos_hold_data = (
+			hold_payload if isinstance(hold_payload, str) else json.dumps(hold_payload)
+		)
+
+	return medication_orders
+
+
+def _append_hospital_sales_order_items(doc, items, pos_profile, cost_center):
+	for item in items:
+		item_code = item.get("id") or item.get("item_code")
+		if not item_code:
+			continue
+		row = {
+			"item_code": item_code,
+			"qty": flt(item.get("quantity") or 0),
+			"rate": flt(item.get("price") or item.get("rate") or 0),
+			"delivery_date": nowdate(),
+		}
+		if item.get("uom"):
+			row["uom"] = item.get("uom")
+		item_tax_template = item.get("item_tax_template") or item.get("itemTaxTemplate")
+		if (
+			item_tax_template
+			and getattr(pos_profile, "custom_allow_item_tax_template", 0)
+			and _sales_order_item_meta().has_field("item_tax_template")
+		):
+			row["item_tax_template"] = item_tax_template
+
+		_apply_hospital_so_item_hold_fields(row, item)
+
+		if cost_center and _sales_order_item_meta().has_field("cost_center"):
+			row["cost_center"] = cost_center
+
+		doc.append("items", row)
+
+
+def _parse_hold_payload(raw):
+	if not raw:
+		return None
+	if isinstance(raw, dict):
+		return raw
+	if isinstance(raw, str):
+		try:
+			return json.loads(raw)
+		except Exception:
+			return None
+	return None
+
+
 @frappe.whitelist()
 def create_and_submit_hospital_sales_order(data):
 	try:
@@ -413,80 +575,30 @@ def create_and_submit_hospital_sales_order(data):
 
 		cost_center = _resolve_pos_cost_center(pos_profile)
 
-		doc = frappe.new_doc("Sales Order")
-		doc.customer = customer
-		doc.transaction_date = nowdate()
-		doc.delivery_date = nowdate()
+		draft_sales_order_name = (data.get("draft_sales_order_name") or "").strip()
+		if draft_sales_order_name:
+			if not frappe.db.exists("Sales Order", draft_sales_order_name):
+				frappe.throw("Held dispense order not found.")
+			doc = frappe.get_doc("Sales Order", draft_sales_order_name)
+			if doc.docstatus != 0:
+				frappe.throw("Only held (draft) dispense orders can be resumed.")
+			if not _to_bool(getattr(doc, "custom_is_pos", 0)):
+				frappe.throw("This is not a POS dispense order.")
+			doc.items = []
+		else:
+			doc = frappe.new_doc("Sales Order")
 
-		if getattr(pos_profile, "company", None):
-			doc.company = pos_profile.company
-		if getattr(pos_profile, "currency", None):
-			doc.currency = pos_profile.currency
-		if hasattr(doc, "set_warehouse") and getattr(pos_profile, "warehouse", None):
-			doc.set_warehouse = pos_profile.warehouse
-		# Stock is updated via submitted Delivery Note right after SO; avoid long-lived reservation only.
-		if hasattr(doc, "reserve_stock"):
-			doc.reserve_stock = 0
-
-		base_reference = data.get("base_reference") or "Patient Medication Order"
-		base_reference_name = data.get("base_reference_name")
-		medication_orders = _normalize_medication_orders(data)
-		reference_type = data.get("reference_type")
-		reference_name = data.get("reference_name")
-		reference_type, reference_name = _derive_reference_from_medication_orders(
-			reference_type, reference_name, medication_orders
-		)
-
-		if frappe.db.has_column("Sales Order", "custom_base_reference"):
-			doc.custom_base_reference = base_reference
-		if base_reference_name and frappe.db.has_column("Sales Order", "custom_base_reference_name"):
-			doc.custom_base_reference_name = base_reference_name
-		if reference_type and frappe.db.has_column("Sales Order", "custom_reference_type"):
-			doc.custom_reference_type = reference_type
-		if reference_name and frappe.db.has_column("Sales Order", "custom_reference_name"):
-			doc.custom_reference_name = reference_name
-
-		patient_link = _resolve_patient_for_hospital_order(data, medication_orders)
-		if patient_link and frappe.get_meta("Sales Order").has_field("patient"):
-			doc.patient = patient_link
-
-		if frappe.db.has_column("Sales Order", "custom_is_pos"):
-			doc.custom_is_pos = 1
-
-		for item in items:
-			item_code = item.get("id") or item.get("item_code")
-			if not item_code:
-				continue
-			row = {
-				"item_code": item_code,
-				"qty": flt(item.get("quantity") or 0),
-				"rate": flt(item.get("price") or item.get("rate") or 0),
-				"delivery_date": nowdate(),
-			}
-			if item.get("uom"):
-				row["uom"] = item.get("uom")
-			item_tax_template = item.get("item_tax_template") or item.get("itemTaxTemplate")
-			if (
-				item_tax_template
-				and getattr(pos_profile, "custom_allow_item_tax_template", 0)
-				and frappe.get_meta("Sales Order Item").has_field("item_tax_template")
-			):
-				row["item_tax_template"] = item_tax_template
-			if item.get("batchNumber") and frappe.db.has_column("Sales Order Item", "batch_no"):
-				row["batch_no"] = item.get("batchNumber")
-			if item.get("serialNumber") and frappe.db.has_column("Sales Order Item", "serial_no"):
-				row["serial_no"] = item.get("serialNumber")
-			if cost_center and frappe.get_meta("Sales Order Item").has_field("cost_center"):
-				row["cost_center"] = cost_center
-
-			doc.append("items", row)
-
+		medication_orders = _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center)
+		_append_hospital_sales_order_items(doc, items, pos_profile, cost_center)
 		_apply_cost_center_to_sales_order(doc, cost_center)
 
 		savepoint = "hospital_dispense_so_dn"
 		frappe.db.savepoint(savepoint)
 		try:
-			doc.insert(ignore_permissions=True)
+			if draft_sales_order_name:
+				doc.save(ignore_permissions=True)
+			else:
+				doc.insert(ignore_permissions=True)
 			doc.submit()
 
 			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(
@@ -511,6 +623,128 @@ def create_and_submit_hospital_sales_order(data):
 		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Hospital Sales Order Error")
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def create_draft_hospital_sales_order(data):
+	"""Save a held hospital dispense cart as a draft Sales Order (not submitted)."""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+		if not data:
+			frappe.throw("No data provided")
+
+		customer = (data.get("customer") or {}).get("id")
+		items = data.get("items") or []
+		if not customer:
+			frappe.throw("Customer is required")
+		if not items:
+			frappe.throw("At least one item is required")
+
+		pos_profile = _get_active_pos_profile()
+		if not _to_bool(getattr(pos_profile, "custom_is_hospital_pharmacy", 0)):
+			frappe.throw("Hospital pharmacy flow is not enabled on current POS Profile.")
+
+		cost_center = _resolve_pos_cost_center(pos_profile)
+		draft_sales_order_name = (data.get("draft_sales_order_name") or "").strip()
+
+		if draft_sales_order_name:
+			if not frappe.db.exists("Sales Order", draft_sales_order_name):
+				frappe.throw("Held dispense order not found.")
+			doc = frappe.get_doc("Sales Order", draft_sales_order_name)
+			if doc.docstatus != 0:
+				frappe.throw("Only held (draft) dispense orders can be updated")
+			if not _to_bool(getattr(doc, "custom_is_pos", 0)):
+				frappe.throw("This is not a POS dispense order")
+			doc.items = []
+		else:
+			doc = frappe.new_doc("Sales Order")
+
+		_apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center)
+		_append_hospital_sales_order_items(doc, items, pos_profile, cost_center)
+		_apply_cost_center_to_sales_order(doc, cost_center)
+
+		if draft_sales_order_name:
+			doc.save(ignore_permissions=True)
+		else:
+			doc.insert(ignore_permissions=True)
+
+		return {
+			"success": True,
+			"sales_order_name": doc.name,
+			"sales_order": {
+				"name": doc.name,
+				"customer": doc.customer,
+				"status": doc.status,
+				"docstatus": doc.docstatus,
+			},
+		}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Hospital Draft Sales Order Error")
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def get_draft_hospital_sales_order(sales_order_name):
+	"""Load a held draft hospital Sales Order for POS cart restore."""
+	try:
+		sales_order_name = (sales_order_name or "").strip()
+		if not sales_order_name:
+			frappe.throw("Sales order is required")
+		if not frappe.db.exists("Sales Order", sales_order_name):
+			frappe.throw("Sales order not found")
+
+		doc = frappe.get_doc("Sales Order", sales_order_name)
+		if doc.docstatus != 0:
+			frappe.throw("Only held (draft) dispense orders can be edited")
+		if not _to_bool(getattr(doc, "custom_is_pos", 0)):
+			frappe.throw("This is not a POS dispense order")
+
+		hold_payload = None
+		if frappe.db.has_column("Sales Order", "custom_pos_hold_data"):
+			hold_payload = _parse_hold_payload(getattr(doc, "custom_pos_hold_data", None))
+
+		item_rows = frappe.get_all(
+			"Sales Order Item",
+			filters={"parent": sales_order_name},
+			fields=_get_sales_order_item_fetch_fields(),
+			order_by="idx asc",
+		)
+
+		return {
+			"success": True,
+			"sales_order_name": doc.name,
+			"customer": doc.customer,
+			"customer_name": doc.customer_name or doc.customer,
+			"patient": getattr(doc, "patient", None),
+			"custom_remarks": getattr(doc, "custom_remarks", None) if hasattr(doc, "custom_remarks") else None,
+			"items": item_rows,
+			"hold_payload": hold_payload,
+		}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Get draft hospital sales order error")
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def delete_draft_hospital_sales_order(sales_order_name):
+	"""Delete a held draft hospital Sales Order."""
+	try:
+		sales_order_name = (sales_order_name or "").strip()
+		if not sales_order_name:
+			frappe.throw("Sales order is required")
+
+		doc = frappe.get_doc("Sales Order", sales_order_name)
+		if doc.docstatus != 0:
+			frappe.throw("Only held (draft) dispense orders can be deleted")
+		if not _to_bool(getattr(doc, "custom_is_pos", 0)):
+			frappe.throw("This is not a POS dispense order")
+
+		frappe.delete_doc("Sales Order", sales_order_name, ignore_permissions=True)
+		return {"success": True, "sales_order_name": sales_order_name}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Delete draft hospital sales order error")
 		return {"success": False, "message": str(e)}
 
 
@@ -575,9 +809,40 @@ def _get_returned_qty_for_dn_item(delivery_note_name, customer, dn_detail):
 	return abs(flt(returned.get("qty") or 0))
 
 
+def _annotate_dispense_return_status(order_items):
+	"""Set per-line return_status and compute order-level dispense status."""
+	total_qty = 0
+	total_returned = 0
+	returned_line_count = 0
+
+	for item in order_items:
+		qty = flt(item.get("qty") or 0)
+		returned = flt(item.get("returned_qty") or 0)
+		total_qty += qty
+		total_returned += returned
+
+		if returned <= 0:
+			item["return_status"] = "none"
+		elif returned >= qty:
+			item["return_status"] = "full"
+			returned_line_count += 1
+		else:
+			item["return_status"] = "partial"
+			returned_line_count += 1
+
+	if total_returned <= 0:
+		status = "Dispensed medicine"
+	elif total_returned >= total_qty:
+		status = "Fully returned"
+	else:
+		status = "Partially returned"
+
+	return status, returned_line_count
+
+
 @frappe.whitelist()
 def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
-	"""List submitted Sales Orders created from POS hospital dispensing (custom_is_pos)."""
+	"""List POS hospital dispense Sales Orders (submitted and held drafts)."""
 	try:
 		if not frappe.db.has_column("Sales Order", "custom_is_pos"):
 			return {"success": True, "data": [], "total_count": 0}
@@ -585,7 +850,7 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 		limit = int(limit or 100)
 		start = int(start or 0)
 
-		filters = {"custom_is_pos": 1, "docstatus": 1}
+		filters = {"custom_is_pos": 1, "docstatus": ["in", [0, 1]]}
 
 		if cashier_name and cashier_name != "all":
 			from klik_pos.api.sales_invoice import _get_user_ids_by_full_name
@@ -614,7 +879,10 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 			"currency",
 			"status",
 			"modified",
+			"docstatus",
 		]
+		if frappe.db.has_column("Sales Order", "custom_remarks"):
+			fields.append("custom_remarks")
 
 		orders = frappe.get_all(
 			"Sales Order",
@@ -674,21 +942,30 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 		data = []
 		for order in orders:
 			order_items = items_map.get(order.name, [])
-			delivery_note_name = _get_pos_dispense_delivery_note(order.name)
-			if not delivery_note_name and dn_items_by_order.get(order.name):
-				delivery_note_name = dn_items_by_order[order.name][0].delivery_note
+			is_held = int(getattr(order, "docstatus", 1) or 0) == 0
+			delivery_note_name = None
+			can_return = 0
+			returned_line_count = 0
 
-			# Recompute returned_qty with correct customer now that we have the order
-			for item in order_items:
-				if item.get("dn_detail") and delivery_note_name:
-					item["returned_qty"] = _get_returned_qty_for_dn_item(
-						delivery_note_name, order.customer, item["dn_detail"]
-					)
-					item["available_qty"] = max(0, flt(item.get("qty") or 0) - flt(item["returned_qty"] or 0))
+			if is_held:
+				dispense_status = "Held"
+			else:
+				delivery_note_name = _get_pos_dispense_delivery_note(order.name)
+				if not delivery_note_name and dn_items_by_order.get(order.name):
+					delivery_note_name = dn_items_by_order[order.name][0].delivery_note
 
-			can_return = bool(delivery_note_name) and any(
-				flt(item.get("available_qty") or 0) > 0 for item in order_items
-			)
+				for item in order_items:
+					if item.get("dn_detail") and delivery_note_name:
+						item["returned_qty"] = _get_returned_qty_for_dn_item(
+							delivery_note_name, order.customer, item["dn_detail"]
+						)
+						item["available_qty"] = max(0, flt(item.get("qty") or 0) - flt(item["returned_qty"] or 0))
+
+				can_return = 1 if (
+					bool(delivery_note_name)
+					and any(flt(item.get("available_qty") or 0) > 0 for item in order_items)
+				) else 0
+				dispense_status, returned_line_count = _annotate_dispense_return_status(order_items)
 
 			data.append(
 				{
@@ -702,11 +979,15 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 					"base_grand_total": order.grand_total,
 					"currency": order.currency,
 					"erp_status": order.status,
-					"status": "Dispensed medicine",
+					"status": dispense_status,
+					"docstatus": order.docstatus,
+					"returned_line_count": returned_line_count,
 					"is_pos_dispense": 1,
+					"is_held_dispense": 1 if is_held else 0,
 					"mode_of_payment": "Dispensed medicine",
 					"delivery_note_name": delivery_note_name,
-					"can_return": 1 if can_return else 0,
+					"can_return": can_return,
+					"custom_remarks": getattr(order, "custom_remarks", None) or "",
 					"items": order_items,
 				}
 			)
@@ -748,44 +1029,57 @@ def create_dispense_return(sales_order_name, return_items):
 		if isinstance(return_doc, dict):
 			return_doc = frappe.get_doc(return_doc)
 
-		return_qty_by_dn_detail = {}
-		return_qty_by_so_detail = {}
-		return_qty_by_item_code = {}
-		for row in return_items:
-			qty = flt(row.get("return_qty") or 0)
-			if qty <= 0:
-				continue
-			if row.get("dn_detail"):
-				return_qty_by_dn_detail[row["dn_detail"]] = qty
-			elif row.get("so_detail"):
-				return_qty_by_so_detail[row["so_detail"]] = qty
-			elif row.get("item_code"):
-				return_qty_by_item_code[row["item_code"]] = qty
+		return_rows_by_dn_detail = {}
+		return_rows_by_so_detail = {}
+		return_rows_by_item_code = {}
+		for item in return_doc.items:
+			if getattr(item, "dn_detail", None):
+				return_rows_by_dn_detail[item.dn_detail] = item
+			if getattr(item, "so_detail", None):
+				return_rows_by_so_detail[item.so_detail] = item
+			return_rows_by_item_code.setdefault(item.item_code, []).append(item)
 
 		filtered_items = []
-		for item in return_doc.items:
-			requested_qty = 0
-			if item.name in return_qty_by_dn_detail:
-				requested_qty = return_qty_by_dn_detail[item.name]
-			elif item.so_detail and item.so_detail in return_qty_by_so_detail:
-				requested_qty = return_qty_by_so_detail[item.so_detail]
-			elif item.item_code in return_qty_by_item_code:
-				requested_qty = return_qty_by_item_code[item.item_code]
-
+		seen_rows = set()
+		for row in return_items:
+			if isinstance(row, str):
+				row = json.loads(row)
+			requested_qty = flt(row.get("return_qty") or 0)
 			if requested_qty <= 0:
 				continue
 
-			max_returnable = abs(flt(item.qty))
+			target_item = None
+			if row.get("dn_detail"):
+				target_item = return_rows_by_dn_detail.get(row["dn_detail"])
+			if not target_item and row.get("so_detail"):
+				target_item = return_rows_by_so_detail.get(row["so_detail"])
+			if not target_item and row.get("item_code"):
+				candidates = return_rows_by_item_code.get(row["item_code"], [])
+				if len(candidates) == 1:
+					target_item = candidates[0]
+				elif candidates:
+					for candidate in candidates:
+						if candidate.so_detail and candidate.so_detail == row.get("so_detail"):
+							target_item = candidate
+							break
+					if not target_item:
+						target_item = candidates[0]
+
+			if not target_item or target_item.name in seen_rows:
+				continue
+
+			max_returnable = abs(flt(target_item.qty))
 			if requested_qty > max_returnable:
 				frappe.throw(
-					f"Cannot return {requested_qty} for {item.item_code}. "
+					f"Cannot return {requested_qty} for {target_item.item_code}. "
 					f"Maximum returnable quantity is {max_returnable}."
 				)
 
-			item.qty = -abs(requested_qty)
-			if hasattr(item, "stock_qty") and flt(item.conversion_factor):
-				item.stock_qty = item.qty * flt(item.conversion_factor)
-			filtered_items.append(item)
+			target_item.qty = -abs(requested_qty)
+			if hasattr(target_item, "stock_qty") and flt(target_item.conversion_factor):
+				target_item.stock_qty = target_item.qty * flt(target_item.conversion_factor)
+			filtered_items.append(target_item)
+			seen_rows.add(target_item.name)
 
 		if not filtered_items:
 			frappe.throw("Select at least one item to return.")

@@ -142,6 +142,7 @@ export interface SalesInvoiceItem {
   so_detail?: string
   dn_detail?: string
   batch_no?: string
+  return_status?: "none" | "partial" | "full"
   item_group?: string
   is_non_returnable?: boolean
   is_refrigerated_overdue?: boolean
@@ -183,7 +184,9 @@ export interface SalesInvoice {
   custom_pos_opening_entry?: string;
   canReturn?: boolean;
   isPosDispense?: boolean;
+  isHeldDispense?: boolean;
   deliveryNoteName?: string;
+  returnedLineCount?: number;
   invoice:[];
   cashier_name:string;
   customer_email:string;

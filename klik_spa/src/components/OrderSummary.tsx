@@ -18,6 +18,7 @@ import type { Customer } from "../types/customer";
 import PaymentDialog from "./PaymentDialog";
 import AddCustomerModal from "./AddCustomerModal";
 import InpatientMedicationOrdersModal from "./InpatientMedicationOrdersModal";
+import PatientDetailsModal from "./PatientDetailsModal";
 import AdditionalAmountModal from "./AdditionalAmountModal";
 import PharmacyServiceModal from "./PharmacyServiceModal";
 import type { PharmacyServiceItem } from "../services/pharmacyService";
@@ -51,8 +52,14 @@ import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../servi
 import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
-import { createHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
+import { createHospitalSalesOrder, createDraftHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
 import { getCachedDraftInvoiceItems } from "../utils/draftInvoiceCache";
+import {
+  cacheHeldDispenseOrder,
+  clearHeldDispenseOrderCache,
+  getCachedHeldDispenseOrder,
+  getOriginalHeldDispenseOrderId,
+} from "../utils/heldDispenseOrderCache";
 import { getPartyLabels } from "../utils/partyLabels";
 import { POS_BEFORE_NAVIGATE_EVENT } from "../utils/navigation";
 
@@ -986,6 +993,19 @@ const DosageSelectField = ({ itemId: _itemId, options, value, onChange, isMobile
   );
 };
 
+function getSelectedPartyDisplayName(
+  selectedPatient: Patient | null | undefined,
+  selectedCustomer: Customer | null | undefined
+): string {
+  if (selectedPatient) {
+    return getPatientDisplayName(selectedPatient);
+  }
+  if (selectedCustomer) {
+    return selectedCustomer.customer_name || selectedCustomer.name;
+  }
+  return "";
+}
+
 function customerFromResolvedRow(row: ResolvedCustomer): Customer {
   return {
     id: row.name,
@@ -1048,6 +1068,8 @@ export default function OrderSummary({
   const {
     selectedCustomer,
     setSelectedCustomer,
+    selectedPatient,
+    setSelectedPatient,
     redeemLoyaltyPoints,
     setRedeemLoyaltyPoints,
     updateUOM,
@@ -1094,6 +1116,8 @@ export default function OrderSummary({
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [showMedicationOrdersModal, setShowMedicationOrdersModal] = useState(false);
+  const [showPatientDetailsModal, setShowPatientDetailsModal] = useState(false);
+  const [loadingPatientHistory, setLoadingPatientHistory] = useState(false);
   const [patientHistorySummary, setPatientHistorySummary] = useState<PatientHistorySummary | null>(null);
   const [showRedeemLoyaltyModal, setShowRedeemLoyaltyModal] = useState(false);
   const [showAdditionalAmountModal, setShowAdditionalAmountModal] = useState(false);
@@ -1106,7 +1130,6 @@ export default function OrderSummary({
   const [patients, setPatients] = useState<Patient[]>([]);
   const [medicationOrders, setMedicationOrders] = useState<InpatientMedicationOrder[]>([]);
   const [medicationOrderHistory, setMedicationOrderHistory] = useState<InpatientMedicationOrder[]>([]);
-  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedHistoryItems, setSelectedHistoryItems] = useState<Set<string>>(new Set());
   const [isCreatingVisit, setIsCreatingVisit] = useState(false);
@@ -1114,12 +1137,14 @@ export default function OrderSummary({
   const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
   const [isDispensing, setIsDispensing] = useState(false);
   const [showClinicalAppropriatenessConfirm, setShowClinicalAppropriatenessConfirm] = useState(false);
+  const [dispenseRemarks, setDispenseRemarks] = useState("");
 
   useEffect(() => {
     const closeTransientUi = () => {
       setShowCustomerDropdown(false);
       setShowPaymentDialog(false);
       setShowMedicationOrdersModal(false);
+      setShowPatientDetailsModal(false);
       setShowRedeemLoyaltyModal(false);
       setShowAdditionalAmountModal(false);
       setShowPharmacyServiceModal(false);
@@ -1147,6 +1172,54 @@ export default function OrderSummary({
   );
 
   const party = getPartyLabels(isHospitalPharmacy);
+
+  // Restore patient display after page refresh (customer is persisted; patient must be re-linked).
+  useEffect(() => {
+    if (!isHospitalPharmacy) return;
+
+    if (selectedPatient) {
+      setCustomerSearchQuery(getPatientDisplayName(selectedPatient));
+      return;
+    }
+
+    if (!selectedCustomer?.id) return;
+
+    let cancelled = false;
+    void resolvePatientForCustomer(selectedCustomer.id).then((patient) => {
+      if (cancelled || !patient) return;
+      setSelectedPatient(patient);
+      setCustomerSearchQuery(getPatientDisplayName(patient));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isHospitalPharmacy, selectedCustomer?.id, selectedPatient, setSelectedPatient]);
+
+  const loadPatientHistorySummary = useCallback(async (patientId: string) => {
+    if (!patientId?.trim()) {
+      setPatientHistorySummary(null);
+      return;
+    }
+    setLoadingPatientHistory(true);
+    try {
+      const summary = await getPatientHistorySummary(patientId, 10);
+      setPatientHistorySummary(summary);
+    } catch (error) {
+      console.error("Failed to load patient history summary:", error);
+      setPatientHistorySummary(null);
+    } finally {
+      setLoadingPatientHistory(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isHospitalPharmacy || !selectedPatient?.name) {
+      setPatientHistorySummary(null);
+      return;
+    }
+    void loadPatientHistorySummary(selectedPatient.name);
+  }, [isHospitalPharmacy, selectedPatient?.name, loadPatientHistorySummary]);
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { products, refetch: _refetchProducts, refreshStockOnly, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems, updateSerialsForItems, updateDispensingLotsForItems } = useProducts();
@@ -1427,6 +1500,7 @@ export default function OrderSummary({
   }, [cartItems]);
 
   const draftRestoreKeyRef = useRef<string | null>(null);
+  const heldRestoreKeyRef = useRef<string | null>(null);
 
   const productAvailability = useCallback(() => {
     const map: Record<string, number> = {};
@@ -1527,6 +1601,21 @@ export default function OrderSummary({
 
     void restoreDraftLines();
   }, [cartItems, useDispenseLot, updateItemMetadata]);
+
+  useEffect(() => {
+    const cached = getCachedHeldDispenseOrder();
+    if (!cached?.lineDiscounts || !cartItems.length) return;
+    if (heldRestoreKeyRef.current === cached.salesOrderId) return;
+
+    setItemDiscounts((prev) => ({ ...prev, ...cached.lineDiscounts! }));
+    if (cached.dispenseRemarks) {
+      setDispenseRemarks(cached.dispenseRemarks);
+    }
+    if (cached.createdVisitRef) {
+      setCreatedVisitRef(cached.createdVisitRef);
+    }
+    heldRestoreKeyRef.current = cached.salesOrderId;
+  }, [cartItems.length]);
 
   const getLineBatchNo = useCallback(
     (item: CartItem, lineKey?: string) => {
@@ -1826,14 +1915,18 @@ export default function OrderSummary({
       }
 
       const pink = isPinkMedicationLine(itemToAdd);
-      const uomToUse =
-        itemToAdd.uom || (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : product.uom);
-      const cartQuantity = await convertOrderQuantityToCartUOM(
-        product.id,
-        itemToAdd.quantity,
-        itemToAdd.uom,
-        uomToUse
-      );
+      const useHospitalDefaultUom = isHospitalPharmacy && !!pharmacyDefaultUom;
+      const uomToUse = useHospitalDefaultUom
+        ? pharmacyDefaultUom
+        : itemToAdd.uom || (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : product.uom);
+      const cartQuantity = useHospitalDefaultUom
+        ? itemToAdd.quantity
+        : await convertOrderQuantityToCartUOM(
+            product.id,
+            itemToAdd.quantity,
+            itemToAdd.uom,
+            uomToUse
+          );
       const prescriptionDosageValue = itemToAdd.patient_frequency;
       const lineId = pink ? crypto.randomUUID() : undefined;
       const currentQty = pink ? 0 : (qtyByItem.get(product.id) ?? 0);
@@ -1883,7 +1976,7 @@ export default function OrderSummary({
       }
 
       let priceToUse = product.price;
-      if (isPharmacy && uomToUse && uomToUse !== product.uom && !selectedCustomer) {
+      if ((isPharmacy || isHospitalPharmacy) && uomToUse && uomToUse !== product.uom && !selectedCustomer) {
         const priceInfo = await getItemPriceForCustomer(product.id, undefined, uomToUse);
         if (priceInfo?.success && priceInfo.price > 0) {
           priceToUse = priceInfo.price;
@@ -1928,6 +2021,7 @@ export default function OrderSummary({
     [
       products,
       isPharmacy,
+      isHospitalPharmacy,
       pharmacyDefaultUom,
       selectedCustomer,
       convertOrderQuantityToCartUOM,
@@ -2038,97 +2132,23 @@ export default function OrderSummary({
       }
     }
     
-    // Fetch pending/history medication orders for this patient and automatically add pending to cart
+    // Load medication orders and open modal — user adds items from there
     try {
-      const [orders, history] = await Promise.all([
+      const [orders, history, historySummary] = await Promise.all([
         getPendingInpatientMedicationOrders(patient.name),
         getPatientMedicationOrderHistory(patient.name, 50),
+        getPatientHistorySummary(patient.name, 10),
       ]);
       setMedicationOrders(orders);
       setMedicationOrderHistory(history);
-      
-      if (orders.length === 0) {
-        toast.info("No pending medication orders found for this patient.");
-        return;
+      setPatientHistorySummary(historySummary);
+      setSelectedOrders(new Set(orders.map((o) => o.name)));
+      setShowMedicationOrdersModal(true);
+      if (orders.length === 0 && history.length === 0) {
+        toast.info("No medication orders found for this patient.");
       }
-      
-      // Automatically add all medication orders to cart (quantity, uom, patient_frequency from order entry)
-      const selectedOrderNamesAll = Array.from(new Set(orders.map((o) => o.name).filter(Boolean)));
-      const itemsToAdd: MedicationOrderLineInput[] = [];
-      
-      orders.forEach(order => {
-        order.items.forEach(item => {
-          const itemCode = resolveMedicationItemCode(item);
-          if (itemCode) {
-            itemsToAdd.push({
-              item_code: itemCode,
-              quantity: item.quantity ?? 1,
-              uom: item.uom,
-              dosage: item.dosage || undefined,
-              patient_frequency: item.patient_frequency,
-              drug_name: resolveMedicationDisplayName(item) || undefined,
-              medication_order: order.name,
-              medication_order_entry: item.medication_order_entry,
-              is_pink: item.is_pink,
-              reference_no: item.reference_no,
-            });
-          }
-        });
-      });
-      
-      if (itemsToAdd.length === 0) {
-        toast.warning("No items found in medication orders.");
-        return;
-      }
-      
-      // Show loading toast
-      const loadingToast = toast.loading(`Adding ${itemsToAdd.length} item(s) from ${orders.length} order(s) to cart...`);
-      
-      try {
-        let addedCount = 0;
-        let notFoundCount = 0;
-
-        // IMPORTANT: cartItems updates are async; keep a local running quantity map so multiple
-        // medication orders for the same item_code accumulate correctly within this loop.
-        const qtyByItem = new Map<string, number>();
-        const medsByItem = new Map<string, Set<string>>();
-        cartItems.forEach((ci) => {
-          qtyByItem.set(ci.id, ci.quantity);
-          const existing = (ci as unknown as { medicationOrders?: string[] }).medicationOrders;
-          if (Array.isArray(existing) && existing.length) {
-            medsByItem.set(ci.id, new Set(existing));
-          }
-        });
-        
-        for (const itemToAdd of itemsToAdd) {
-          const result = await addMedicationOrderLineToCart(
-            itemToAdd,
-            qtyByItem,
-            medsByItem,
-            selectedOrderNamesAll
-          );
-          if (result === "added") addedCount++;
-          else notFoundCount++;
-        }
-        
-        toast.dismiss(loadingToast);
-        
-        if (addedCount > 0 && notFoundCount === 0) {
-          toast.success(`Successfully added ${addedCount} item(s) from ${orders.length} order(s) to cart.`);
-        } else if (addedCount > 0 && notFoundCount > 0) {
-          toast.warning(`Added ${addedCount} item(s) to cart. ${notFoundCount} item(s) not found.`);
-        } else {
-          toast.error(`Failed to add items. None of the items were found in the product list.`);
-        }
-        
-      } catch (error) {
-        console.error('Error adding items to cart:', error);
-        toast.dismiss(loadingToast);
-        toast.error('Failed to add items to cart. Please try again.');
-      }
-      
     } catch (error) {
-      console.error('❌ Error fetching medication orders:', error);
+      console.error("Error fetching medication orders:", error);
       toast.error("Failed to fetch medication orders.");
     }
   };
@@ -2243,6 +2263,25 @@ export default function OrderSummary({
       toast.dismiss(loadingToast);
       toast.error('Failed to add items to cart. Please try again.');
     }
+  };
+
+  const openPatientDetailsModal = async () => {
+    let patient = selectedPatient;
+    if (!patient?.name && selectedCustomer?.id && isHospitalPharmacy) {
+      const resolved = await resolvePatientForCustomer(selectedCustomer.id);
+      if (resolved) {
+        patient = resolved;
+        setSelectedPatient(resolved);
+      }
+    }
+    if (!patient?.name) {
+      toast.error("Patient not found.");
+      return;
+    }
+    if (patientHistorySummary?.patient?.name !== patient.name) {
+      await loadPatientHistorySummary(patient.name);
+    }
+    setShowPatientDetailsModal(true);
   };
 
   const openMedicationOrdersModal = async () => {
@@ -2646,79 +2685,112 @@ const pages = labels.map((label) => `
     return true;
   };
 
-  const executeDispense = async () => {
-    if (!selectedCustomer) return;
+  const buildHospitalDispensePayload = async () => {
+    if (!selectedCustomer) return null;
 
-    try {
-      setIsDispensing(true);
-      const allMedicationOrders = Array.from(new Set(
+    const allMedicationOrders = Array.from(
+      new Set(
         cartItems.flatMap((item) => {
           const many = (item as CartItem & { medicationOrders?: string[] }).medicationOrders || [];
           const one = (item as CartItem & { medicationOrder?: string }).medicationOrder;
           return [...many, ...(one ? [one] : [])].filter(Boolean);
         })
-      ));
-      const firstMedicationOrder = allMedicationOrders[0];
-      const sourceOrder = [...medicationOrders, ...medicationOrderHistory].find((o) => o.name === firstMedicationOrder);
-      const finalReferenceType = createdVisitRef?.doctype || sourceOrder?.custom_reference_type || "Patient Visit";
-      const finalReferenceName = createdVisitRef?.name || sourceOrder?.custom_reference_name || "";
+      )
+    );
+    const firstMedicationOrder = allMedicationOrders[0];
+    const sourceOrder = [...medicationOrders, ...medicationOrderHistory].find((o) => o.name === firstMedicationOrder);
+    const finalReferenceType = createdVisitRef?.doctype || sourceOrder?.custom_reference_type || "Patient Visit";
+    const finalReferenceName = createdVisitRef?.name || sourceOrder?.custom_reference_name || "";
 
-      const patientToUse =
-        selectedPatient ||
-        (selectedCustomer
-          ? patients.find(
-              (p) =>
-                (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
-            )
-          : null);
-      const patientIdForSo =
-        patientToUse?.name ||
-        (selectedCustomer && isHospitalPharmacy
-          ? (await resolvePatientForCustomer(selectedCustomer.id))?.name
-          : undefined);
+    const patientToUse =
+      selectedPatient ||
+      (selectedCustomer
+        ? patients.find(
+            (p) => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
+          )
+        : null);
+    const patientIdForSo =
+      patientToUse?.name ||
+      (selectedCustomer && isHospitalPharmacy
+        ? (await resolvePatientForCustomer(selectedCustomer.id))?.name
+        : undefined);
 
-      const payload = {
-        customer: { id: selectedCustomer.id },
-        ...(patientIdForSo ? { patient: patientIdForSo } : {}),
-        items: cartItems.map((item) => {
-          const lineKey = getLineKey(item);
-          const lineDiscount = (itemDiscounts[lineKey] || itemDiscounts[item.id] || {}) as {
-            batchNumber?: string;
-            serialNumber?: string;
-            medicationOrder?: string;
-          };
-          const cartLine = item as CartItem;
-          const effectiveItemCode = cartLine.alternative_drug || item.item_code || item.id;
-          const medicationOrderName =
-            cartLine.medicationOrder ||
-            lineDiscount.medicationOrder ||
-            (Array.isArray(cartLine.medicationOrders) ? cartLine.medicationOrders[0] : undefined);
-          return {
-            id: effectiveItemCode,
-            item_code: effectiveItemCode,
-            quantity: item.quantity,
-            price: getDiscountedPrice(item),
-            uom: item.uom,
-            batchNumber: lineDiscount.batchNumber || cartLine.batch_no,
-            serialNumber: lineDiscount.serialNumber || cartLine.serial_no,
-            medication_order: medicationOrderName,
-            medication_order_entry: cartLine.medication_order_entry,
-            reference_no: cartLine.reference_no,
-            is_pink: cartLine.is_pink ? 1 : 0,
-            alternative_drug: cartLine.alternative_drug || undefined,
-            alternative_medicine: cartLine.alternative_drug || undefined,
-            original_drug: cartLine.original_drug || undefined,
-            item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
-          };
-        }),
-        medication_orders: allMedicationOrders,
-        base_reference: "Patient Medication Order",
-        base_reference_name: allMedicationOrders.join(", "),
-        reference_type: finalReferenceType,
-        reference_name: finalReferenceName,
-      };
+    const cartSnapshot = cartItems.map((item) => ({
+      ...item,
+      cartLineId: (item as CartItem & { cartLineId?: string }).cartLineId || item.id,
+    }));
 
-      const result = await createHospitalSalesOrder(payload);
+    return {
+      customer: { id: selectedCustomer.id },
+      ...(patientIdForSo ? { patient: patientIdForSo } : {}),
+      items: cartItems.map((item) => {
+        const lineKey = getLineKey(item);
+        const lineDiscount = (itemDiscounts[lineKey] || itemDiscounts[item.id] || {}) as {
+          batchNumber?: string;
+          serialNumber?: string;
+          dispensingLot?: string;
+          dosage?: string;
+          prescriptionDosage?: string;
+          medicationOrder?: string;
+        };
+        const cartLine = item as CartItem;
+        const effectiveItemCode = cartLine.alternative_drug || item.item_code || item.id;
+        const medicationOrderName =
+          cartLine.medicationOrder ||
+          lineDiscount.medicationOrder ||
+          (Array.isArray(cartLine.medicationOrders) ? cartLine.medicationOrders[0] : undefined);
+        return {
+          id: effectiveItemCode,
+          item_code: effectiveItemCode,
+          quantity: item.quantity,
+          price: getDiscountedPrice(item),
+          uom: item.uom,
+          batchNumber: lineDiscount.batchNumber || cartLine.batch_no,
+          serialNumber: lineDiscount.serialNumber || cartLine.serial_no,
+          dispensingLot:
+            lineDiscount.dispensingLot ||
+            (cartLine as CartItem & { dispensing_lot?: string }).dispensing_lot,
+          dosage: lineDiscount.dosage ?? cartLine.dosage,
+          prescriptionDosage: lineDiscount.prescriptionDosage ?? cartLine.prescriptionDosage,
+          medication_order: medicationOrderName,
+          medication_order_entry: cartLine.medication_order_entry,
+          reference_no: cartLine.reference_no,
+          is_pink: cartLine.is_pink ? 1 : 0,
+          alternative_drug: cartLine.alternative_drug || undefined,
+          alternative_medicine: cartLine.alternative_drug || undefined,
+          original_drug: cartLine.original_drug || undefined,
+          item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
+        };
+      }),
+      medication_orders: allMedicationOrders,
+      base_reference: "Patient Medication Order",
+      base_reference_name: allMedicationOrders.join(", "),
+      reference_type: finalReferenceType,
+      reference_name: finalReferenceName,
+      ...(dispenseRemarks.trim() ? { custom_remarks: dispenseRemarks.trim() } : {}),
+      hold_payload: {
+        cart_items: cartSnapshot,
+        item_discounts: itemDiscounts,
+        patient: selectedPatient,
+        dispense_remarks: dispenseRemarks,
+        created_visit_ref: createdVisitRef,
+      },
+    };
+  };
+
+  const executeDispense = async () => {
+    if (!selectedCustomer) return;
+
+    try {
+      setIsDispensing(true);
+      const payload = await buildHospitalDispensePayload();
+      if (!payload) return;
+
+      const heldOrderId = getOriginalHeldDispenseOrderId();
+      const result = await createHospitalSalesOrder({
+        ...payload,
+        ...(heldOrderId ? { draft_sales_order_name: heldOrderId } : {}),
+      });
       const soName = result?.sales_order_name;
       if (!soName) {
         toast.error("Dispense failed. Sales Order was not created.");
@@ -2776,6 +2848,8 @@ const pages = labels.map((label) => `
 
       setLastDispensedSalesOrder(soName);
       setLastDispensedCartSignature(dispensedCartSignature);
+      setDispenseRemarks("");
+      clearHeldDispenseOrderCache();
       toast.success(`Dispensed successfully. Sales Order: ${soName}`);
     } catch (error) {
       toast.error(extractErrorFromException(error, "Failed to dispense items"));
@@ -2804,6 +2878,56 @@ const pages = labels.map((label) => `
   const handleConfirmClinicalAppropriateness = () => {
     setShowClinicalAppropriatenessConfirm(false);
     void executeDispense();
+  };
+
+  const handleHoldDispenseOrder = async () => {
+    let customer = selectedCustomer;
+    if (!customer && isHospitalPharmacy && selectedPatient) {
+      customer = await resolveCustomerForSelectedPatient();
+    }
+    if (!customer) {
+      validateCustomer();
+      return;
+    }
+    if (cartItems.length === 0) {
+      toast.error("Add items to the cart before holding.");
+      return;
+    }
+
+    try {
+      const payload = await buildHospitalDispensePayload();
+      if (!payload) return;
+
+      const heldOrderId = getOriginalHeldDispenseOrderId();
+      const result = await createDraftHospitalSalesOrder({
+        ...payload,
+        ...(heldOrderId ? { draft_sales_order_name: heldOrderId } : {}),
+      });
+      const soName = result?.sales_order_name;
+      if (!soName) {
+        toast.error("Failed to hold dispense order.");
+        return;
+      }
+
+      cacheHeldDispenseOrder({
+        items: cartItems.map((item) => ({
+          ...item,
+          cartLineId: (item as CartItem & { cartLineId?: string }).cartLineId || item.id,
+        })),
+        timestamp: Date.now(),
+        salesOrderId: soName,
+        customer,
+        patient: selectedPatient,
+        lineDiscounts: itemDiscounts,
+        dispenseRemarks,
+        createdVisitRef,
+      });
+
+      handleClearCart();
+      toast.success(`Order held successfully. Sales Order: ${soName}`);
+    } catch (error) {
+      toast.error(extractErrorFromException(error, "Failed to hold dispense order"));
+    }
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2887,7 +3011,6 @@ const pages = labels.map((label) => `
       // Clear local UI state too.
       setItemDiscounts({});
       setSelectedCustomer(null);
-      setSelectedPatient(null);
       setCustomerSearchQuery("");
       return;
     }
@@ -2908,7 +3031,6 @@ const pages = labels.map((label) => `
 
     // Reset customer selection
     setSelectedCustomer(null);
-    setSelectedPatient(null);
     setCustomerSearchQuery("");
   };
 
@@ -2919,6 +3041,7 @@ const pages = labels.map((label) => `
       setLastDispensedSalesOrder(null);
       setLastDispensedLabelItems([]);
       setLastDispensedCartSignature(null);
+      setDispenseRemarks("");
       setCreatedVisitRef(null);
       try {
         await refreshStockOnly();
@@ -3677,7 +3800,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   <div className="flex items-center gap-2 min-w-0">
                     {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500 flex-shrink-0" />}
                     <span className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                      {selectedCustomer?.name ?? getPatientDisplayName(selectedPatient!)}
+                      {getSelectedPartyDisplayName(selectedPatient, selectedCustomer)}
                     </span>
                   </div>
                   <div className="flex-1 flex justify-center items-center min-w-0">
@@ -3702,6 +3825,16 @@ const handleSetSerial = (event: CustomEvent) => {
                   <div className="flex items-center space-x-2 flex-shrink-0">
                     {/* Pill: view medication orders - always show when customer/patient selected in pharmacy so it survives refresh */}
                     {(selectedPatient || (selectedCustomer && (isPharmacy || isHospitalPharmacy))) ? (
+                      <>
+                      {isHospitalPharmacy ? (
+                        <button
+                          onClick={() => void openPatientDetailsModal()}
+                          className="p-1.5 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800/40 dark:hover:text-slate-300 transition-colors"
+                          title="Patient details & documents"
+                        >
+                          <User size={16} />
+                        </button>
+                      ) : null}
                       <button
                         onClick={openMedicationOrdersModal}
                         className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"
@@ -3709,11 +3842,11 @@ const handleSetSerial = (event: CustomEvent) => {
                       >
                         <Pill size={16} />
                     </button>
+                    </>
                   ) : null}
                     <button
                       onClick={() => {
                         setSelectedCustomer(null);
-                        setSelectedPatient(null);
                         setCustomerSearchQuery("");
                         setUserRemovedDefaultCustomer(true);
                         setMedicationOrders([]);
@@ -3845,7 +3978,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 <div className="flex items-center gap-2 min-w-0">
                   {selectedCustomer ? getCustomerTypeIcon(selectedCustomer) : <User className="w-4 h-4 text-blue-500 flex-shrink-0" />}
                   <span className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                    {selectedCustomer?.name ?? (selectedPatient ? getPatientDisplayName(selectedPatient) : "")}
+                    {getSelectedPartyDisplayName(selectedPatient, selectedCustomer)}
                   </span>
                 </div>
                 <div className="flex-1 flex justify-center items-center min-w-0">
@@ -3870,18 +4003,28 @@ const handleSetSerial = (event: CustomEvent) => {
                 <div className="flex items-center space-x-2 flex-shrink-0">
                   {/* Pill: view medication orders - always show when customer/patient selected in pharmacy so it survives refresh */}
                   {(selectedPatient || (selectedCustomer && (isPharmacy || isHospitalPharmacy))) ? (
-                    <button
-                      onClick={openMedicationOrdersModal}
-                      className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"
-                      title="View medication orders"
-                    >
-                      <Pill size={18} />
-                    </button>
+                    <>
+                      {isHospitalPharmacy ? (
+                        <button
+                          onClick={() => void openPatientDetailsModal()}
+                          className="p-1.5 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800/40 dark:hover:text-slate-300 transition-colors"
+                          title="Patient details & documents"
+                        >
+                          <User size={18} />
+                        </button>
+                      ) : null}
+                      <button
+                        onClick={openMedicationOrdersModal}
+                        className="p-1.5 rounded-md text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 transition-colors"
+                        title="View medication orders"
+                      >
+                        <Pill size={18} />
+                      </button>
+                    </>
                   ) : null}
                   <button
                     onClick={() => {
                       setSelectedCustomer(null);
-                      setSelectedPatient(null);
                       setCustomerSearchQuery("");
                       setUserRemovedDefaultCustomer(true);
                       setMedicationOrders([]);
@@ -4487,15 +4630,18 @@ const handleSetSerial = (event: CustomEvent) => {
           } space-y-3`}
         >
 
-          {/* Action Buttons */}
+          {/* Action Buttons — hidden after dispense (New Order / Print flow) */}
+          {!showPostDispenseActions && (
           <div
             className={`grid gap-3 ${isMobile ? "mb-3" : ""} ${
-              isAllowAdditionalAmounts
-                ? (isHospitalPharmacy ? "grid-cols-[1fr_auto]" : "grid-cols-[1fr_1fr_auto]")
-                : (isHospitalPharmacy ? "grid-cols-1" : "grid-cols-2")
+              isAllowAdditionalAmounts && !isHospitalPharmacy
+                ? "grid-cols-[1fr_1fr_auto]"
+                : isHospitalPharmacy
+                  ? "grid-cols-2"
+                  : "grid-cols-2"
             }`}
           >
-            {!isHospitalPharmacy && (
+            {!isHospitalPharmacy ? (
               <button
                 onClick={() => {
                   if (!validateCustomer()) return;
@@ -4507,15 +4653,21 @@ const handleSetSerial = (event: CustomEvent) => {
               >
                 Hold
               </button>
-            )}
-            {!showPostDispenseActions && (
+            ) : (
               <button
-                onClick={handleClearCart}
-                className="px-3 py-2 border border-red-500 text-red-600 dark:text-red-400 rounded-lg font-medium hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm"
+                onClick={() => void handleHoldDispenseOrder()}
+                disabled={isDispensing}
+                className="px-3 py-2 border border-beveren-600 text-beveren-600 dark:text-beveren-400 rounded-lg font-medium hover:bg-beveren-600 hover:text-white transition-colors text-sm disabled:opacity-50"
               >
-                Clear Cart
+                Hold
               </button>
             )}
+            <button
+              onClick={handleClearCart}
+              className="px-3 py-2 border border-red-500 text-red-600 dark:text-red-400 rounded-lg font-medium hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm"
+            >
+              Clear Cart
+            </button>
             {isAllowAdditionalAmounts && !isHospitalPharmacy && (
               <button
                 onClick={() => setShowAdditionalAmountModal(true)}
@@ -4526,8 +4678,7 @@ const handleSetSerial = (event: CustomEvent) => {
               </button>
             )}
           </div>
-
-
+          )}
 
           {/* Pay Button */}
           <button
@@ -4558,7 +4709,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 onClick={() => printSalesOrder(lastDispensedSalesOrder)}
                 className="px-3 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors text-sm"
               >
-                Print Report
+                Print Dispense Order
               </button>
             </div>
           )}
@@ -4723,6 +4874,19 @@ const handleSetSerial = (event: CustomEvent) => {
             <p className="px-5 py-4 text-sm text-gray-600 dark:text-gray-300">
               Medication checked for clinical appropriateness?
             </p>
+            <div className="px-5 pb-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Remark
+              </label>
+              <textarea
+                rows={3}
+                value={dispenseRemarks}
+                onChange={(e) => setDispenseRemarks(e.target.value)}
+                disabled={isDispensing}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm disabled:opacity-50"
+                placeholder="Optional note for this dispense (saved on Sales Order)"
+              />
+            </div>
             <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
               <button
                 type="button"
@@ -4776,6 +4940,17 @@ const handleSetSerial = (event: CustomEvent) => {
         />
       )}
 
+      {/* Patient Details Modal (hospital pharmacy) */}
+      {isHospitalPharmacy && (
+        <PatientDetailsModal
+          isOpen={showPatientDetailsModal}
+          onClose={() => setShowPatientDetailsModal(false)}
+          patient={selectedPatient}
+          patientHistory={patientHistorySummary}
+          loading={loadingPatientHistory}
+        />
+      )}
+
       {/* Inpatient Medication Orders Modal */}
       <InpatientMedicationOrdersModal
         isOpen={showMedicationOrdersModal}
@@ -4814,6 +4989,7 @@ const handleSetSerial = (event: CustomEvent) => {
         patientName={selectedPatient?.patient_name || selectedPatient?.name}
         patientId={selectedPatient?.name}
         isHospitalMode={isHospitalPharmacy}
+        defaultUom={pharmacyDefaultUom || undefined}
         lastCreatedVisit={createdVisitRef}
         patientVisitCreatedSignal={patientVisitCreatedSignal}
         patientHistory={patientHistorySummary}
