@@ -249,6 +249,42 @@ def _derive_reference_from_medication_orders(reference_type, reference_name, med
 	return reference_type, reference_name
 
 
+def _resolve_pos_cost_center(pos_profile):
+	"""Cost center from POS Profile, falling back to company default."""
+	cost_center = getattr(pos_profile, "cost_center", None)
+	if cost_center:
+		return cost_center
+	company = getattr(pos_profile, "company", None)
+	if company:
+		return frappe.db.get_value("Company", company, "cost_center")
+	return None
+
+
+def _apply_cost_center_to_sales_order(doc, cost_center):
+	if not cost_center:
+		return
+	try:
+		from healthcare.api.sales_order_cost_center import apply_cost_center_to_sales_order
+
+		apply_cost_center_to_sales_order(doc, cost_center)
+	except ImportError:
+		if hasattr(doc, "cost_center"):
+			doc.cost_center = cost_center
+		if frappe.get_meta("Sales Order Item").has_field("cost_center"):
+			for row in doc.get("items") or []:
+				row.cost_center = cost_center
+
+
+def _apply_cost_center_to_delivery_note(dn, cost_center):
+	if not cost_center:
+		return
+	if hasattr(dn, "cost_center"):
+		dn.cost_center = cost_center
+	if frappe.get_meta("Delivery Note Item").has_field("cost_center"):
+		for row in dn.get("items") or []:
+			row.cost_center = cost_center
+
+
 def _resolve_patient_for_hospital_order(data, medication_orders):
 	"""
 	Link Sales Order to Patient (Healthcare) when field exists.
@@ -317,7 +353,7 @@ def get_batch_label_details(batch_nos):
 		return {}
 
 
-def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_profile):
+def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_profile, cost_center=None):
 	"""Create submitted Delivery Note from Sales Order so stock updates immediately (not long SO reservation)."""
 	try:
 		from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
@@ -338,6 +374,18 @@ def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_prof
 
 	if hasattr(dn, "update_stock"):
 		dn.update_stock = 1
+
+	if not cost_center:
+		try:
+			from healthcare.api.sales_order_cost_center import cost_center_from_sales_order
+
+			so_doc = frappe.get_doc("Sales Order", sales_order_name)
+			cost_center = cost_center_from_sales_order(so_doc)
+		except ImportError:
+			cost_center = frappe.db.get_value("Sales Order", sales_order_name, "cost_center")
+	if not cost_center:
+		cost_center = _resolve_pos_cost_center(pos_profile)
+	_apply_cost_center_to_delivery_note(dn, cost_center)
 
 	dn.insert(ignore_permissions=True)
 	dn.submit()
@@ -362,6 +410,8 @@ def create_and_submit_hospital_sales_order(data):
 		pos_profile = _get_active_pos_profile()
 		if not _to_bool(getattr(pos_profile, "custom_is_hospital_pharmacy", 0)):
 			frappe.throw("Hospital pharmacy flow is not enabled on current POS Profile.")
+
+		cost_center = _resolve_pos_cost_center(pos_profile)
 
 		doc = frappe.new_doc("Sales Order")
 		doc.customer = customer
@@ -415,12 +465,23 @@ def create_and_submit_hospital_sales_order(data):
 			}
 			if item.get("uom"):
 				row["uom"] = item.get("uom")
+			item_tax_template = item.get("item_tax_template") or item.get("itemTaxTemplate")
+			if (
+				item_tax_template
+				and getattr(pos_profile, "custom_allow_item_tax_template", 0)
+				and frappe.get_meta("Sales Order Item").has_field("item_tax_template")
+			):
+				row["item_tax_template"] = item_tax_template
 			if item.get("batchNumber") and frappe.db.has_column("Sales Order Item", "batch_no"):
 				row["batch_no"] = item.get("batchNumber")
 			if item.get("serialNumber") and frappe.db.has_column("Sales Order Item", "serial_no"):
 				row["serial_no"] = item.get("serialNumber")
+			if cost_center and frappe.get_meta("Sales Order Item").has_field("cost_center"):
+				row["cost_center"] = cost_center
 
 			doc.append("items", row)
+
+		_apply_cost_center_to_sales_order(doc, cost_center)
 
 		savepoint = "hospital_dispense_so_dn"
 		frappe.db.savepoint(savepoint)
@@ -428,7 +489,9 @@ def create_and_submit_hospital_sales_order(data):
 			doc.insert(ignore_permissions=True)
 			doc.submit()
 
-			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(doc.name, pos_profile)
+			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(
+				doc.name, pos_profile, cost_center=cost_center
+			)
 			_finalize_medication_orders_after_dispense(items, medication_orders)
 		except Exception:
 			frappe.db.rollback(save_point=savepoint)
@@ -449,6 +512,67 @@ def create_and_submit_hospital_sales_order(data):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Hospital Sales Order Error")
 		return {"success": False, "message": str(e)}
+
+
+def _get_pos_dispense_delivery_note(sales_order_name):
+	"""Latest submitted non-return Delivery Note linked to a POS hospital Sales Order."""
+	rows = frappe.db.sql(
+		"""
+		SELECT DISTINCT dn.name
+		FROM `tabDelivery Note` dn
+		INNER JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+		WHERE dni.against_sales_order = %s
+		  AND dn.docstatus = 1
+		  AND IFNULL(dn.is_return, 0) = 0
+		ORDER BY dn.creation DESC
+		LIMIT 1
+		""",
+		sales_order_name,
+		as_dict=True,
+	)
+	return rows[0].name if rows else None
+
+
+def _get_dispense_dn_items_by_sales_order(order_names):
+	"""Map Sales Order name -> list of Delivery Note Item rows (non-return DN)."""
+	if not order_names:
+		return {}
+
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			dni.against_sales_order AS sales_order,
+			dni.parent AS delivery_note,
+			dni.name AS dn_detail,
+			dni.so_detail,
+			dni.item_code,
+			dni.batch_no
+		FROM `tabDelivery Note Item` dni
+		INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+		WHERE dni.against_sales_order IN %(orders)s
+		  AND dn.docstatus = 1
+		  AND IFNULL(dn.is_return, 0) = 0
+		""",
+		{"orders": order_names},
+		as_dict=True,
+	)
+
+	dn_items_map = {}
+	for row in rows:
+		dn_items_map.setdefault(row.sales_order, []).append(row)
+	return dn_items_map
+
+
+def _get_returned_qty_for_dn_item(delivery_note_name, customer, dn_detail):
+	try:
+		from erpnext.controllers.sales_and_purchase_return import get_returned_qty_map_for_row
+	except ImportError:
+		return 0
+
+	returned = get_returned_qty_map_for_row(delivery_note_name, customer, dn_detail, "Delivery Note")
+	if not returned:
+		return 0
+	return abs(flt(returned.get("qty") or 0))
 
 
 @frappe.whitelist()
@@ -512,26 +636,60 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 			users = frappe.get_all("User", filters={"name": ["in", user_ids]}, fields=["name", "full_name"])
 			cashier_names_map = {u.name: u.full_name or u.name for u in users}
 
+		dn_items_by_order = _get_dispense_dn_items_by_sales_order(order_names)
+
 		items_map = {}
 		if order_names:
 			item_rows = frappe.get_all(
 				"Sales Order Item",
 				filters={"parent": ["in", order_names]},
-				fields=["parent", "item_code", "item_name", "qty", "rate", "amount"],
+				fields=["parent", "name", "item_code", "item_name", "qty", "rate", "amount"],
 			)
 			for row in item_rows:
+				dn_match = None
+				for dn_item in dn_items_by_order.get(row.parent, []):
+					if dn_item.so_detail == row.name or (
+						not dn_item.so_detail and dn_item.item_code == row.item_code
+					):
+						dn_match = dn_item
+						break
+
+				dn_detail = dn_match.dn_detail if dn_match else None
+
 				items_map.setdefault(row.parent, []).append(
 					{
+						"so_detail": row.name,
+						"dn_detail": dn_detail,
 						"item_code": row.item_code,
 						"item_name": row.item_name,
 						"qty": row.qty,
 						"rate": row.rate,
 						"amount": row.amount,
+						"batch_no": dn_match.batch_no if dn_match else None,
+						"returned_qty": 0,
+						"available_qty": flt(row.qty),
 					}
 				)
 
 		data = []
 		for order in orders:
+			order_items = items_map.get(order.name, [])
+			delivery_note_name = _get_pos_dispense_delivery_note(order.name)
+			if not delivery_note_name and dn_items_by_order.get(order.name):
+				delivery_note_name = dn_items_by_order[order.name][0].delivery_note
+
+			# Recompute returned_qty with correct customer now that we have the order
+			for item in order_items:
+				if item.get("dn_detail") and delivery_note_name:
+					item["returned_qty"] = _get_returned_qty_for_dn_item(
+						delivery_note_name, order.customer, item["dn_detail"]
+					)
+					item["available_qty"] = max(0, flt(item.get("qty") or 0) - flt(item["returned_qty"] or 0))
+
+			can_return = bool(delivery_note_name) and any(
+				flt(item.get("available_qty") or 0) > 0 for item in order_items
+			)
+
 			data.append(
 				{
 					"name": order.name,
@@ -547,11 +705,101 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 					"status": "Dispensed medicine",
 					"is_pos_dispense": 1,
 					"mode_of_payment": "Dispensed medicine",
-					"items": items_map.get(order.name, []),
+					"delivery_note_name": delivery_note_name,
+					"can_return": 1 if can_return else 0,
+					"items": order_items,
 				}
 			)
 
 		return {"success": True, "data": data, "total_count": total_count}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching POS dispense history")
+		return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def create_dispense_return(sales_order_name, return_items):
+	"""Create and submit a partial return Delivery Note against a hospital dispense order."""
+	try:
+		if isinstance(return_items, str):
+			return_items = json.loads(return_items)
+
+		if not sales_order_name:
+			frappe.throw("Sales order is required.")
+		if not return_items:
+			frappe.throw("Select at least one item to return.")
+
+		so = frappe.get_doc("Sales Order", sales_order_name)
+		if so.docstatus != 1:
+			frappe.throw("Only submitted dispense orders can be returned.")
+		if not _to_bool(getattr(so, "custom_is_pos", 0)):
+			frappe.throw("This is not a POS dispense order.")
+
+		delivery_note_name = _get_pos_dispense_delivery_note(sales_order_name)
+		if not delivery_note_name:
+			frappe.throw("No delivery note found for this dispense order.")
+
+		try:
+			from erpnext.stock.doctype.delivery_note.delivery_note import make_sales_return
+		except ImportError:
+			frappe.throw("ERPNext is required to return dispensed medicine.")
+
+		return_doc = make_sales_return(delivery_note_name)
+		if isinstance(return_doc, dict):
+			return_doc = frappe.get_doc(return_doc)
+
+		return_qty_by_dn_detail = {}
+		return_qty_by_so_detail = {}
+		return_qty_by_item_code = {}
+		for row in return_items:
+			qty = flt(row.get("return_qty") or 0)
+			if qty <= 0:
+				continue
+			if row.get("dn_detail"):
+				return_qty_by_dn_detail[row["dn_detail"]] = qty
+			elif row.get("so_detail"):
+				return_qty_by_so_detail[row["so_detail"]] = qty
+			elif row.get("item_code"):
+				return_qty_by_item_code[row["item_code"]] = qty
+
+		filtered_items = []
+		for item in return_doc.items:
+			requested_qty = 0
+			if item.name in return_qty_by_dn_detail:
+				requested_qty = return_qty_by_dn_detail[item.name]
+			elif item.so_detail and item.so_detail in return_qty_by_so_detail:
+				requested_qty = return_qty_by_so_detail[item.so_detail]
+			elif item.item_code in return_qty_by_item_code:
+				requested_qty = return_qty_by_item_code[item.item_code]
+
+			if requested_qty <= 0:
+				continue
+
+			max_returnable = abs(flt(item.qty))
+			if requested_qty > max_returnable:
+				frappe.throw(
+					f"Cannot return {requested_qty} for {item.item_code}. "
+					f"Maximum returnable quantity is {max_returnable}."
+				)
+
+			item.qty = -abs(requested_qty)
+			if hasattr(item, "stock_qty") and flt(item.conversion_factor):
+				item.stock_qty = item.qty * flt(item.conversion_factor)
+			filtered_items.append(item)
+
+		if not filtered_items:
+			frappe.throw("Select at least one item to return.")
+
+		return_doc.items = filtered_items
+		return_doc.insert(ignore_permissions=True)
+		return_doc.submit()
+
+		return {
+			"success": True,
+			"return_delivery_note": return_doc.name,
+			"sales_order_name": sales_order_name,
+			"delivery_note_name": delivery_note_name,
+		}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Dispense return error")
 		return {"success": False, "error": str(e)}

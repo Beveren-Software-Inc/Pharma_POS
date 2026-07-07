@@ -1,10 +1,10 @@
 import { Receipt, FileText, Grid3X3, BarChart3, Users } from "lucide-react"
-import { useNavigate, useLocation } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { usePOSDetails } from "../hooks/usePOSProfile"
 import { getPartyLabels } from "../utils/partyLabels"
+import { prepareForPosNavigation } from "../utils/navigation"
 
 export default function BottomNavigation() {
-  const navigate = useNavigate()
   const location = useLocation()
   const { posDetails } = usePOSDetails()
 
@@ -32,9 +32,10 @@ export default function BottomNavigation() {
     <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 z-50 safe-area-pb">
       <div className="flex items-center justify-around py-2 px-4">
         {menuItems.map((item, index) => (
-          <button
+          <Link
             key={index}
-            onClick={() => navigate(item.path)}
+            to={item.path}
+            onMouseDown={() => prepareForPosNavigation()}
             className={`flex flex-col items-center justify-center min-w-0 flex-1 py-2 px-1 transition-colors ${
               isActive(item.path)
                 ? "text-beveren-600 dark:text-beveren-400"
@@ -58,7 +59,7 @@ export default function BottomNavigation() {
             >
               {item.label}
             </span>
-          </button>
+          </Link>
         ))}
       </div>
     </div>

@@ -305,7 +305,9 @@ def create_employee_dispense_invoice(data=None, employee=None, items=None, compa
 
 		doc.insert(ignore_permissions=True)
 		doc.submit()
-		delivery_note_name = _create_and_submit_delivery_note_from_sales_order(doc.name, pos_profile)
+		delivery_note_name = _create_and_submit_delivery_note_from_sales_order(
+			doc.name, pos_profile, cost_center=cost_center
+		)
 
 		invoice_name = None
 		if create_invoice_now:

@@ -139,6 +139,9 @@ export interface SalesInvoiceItem {
   description?: string
   returned_qty?: number
   available_qty?: number
+  so_detail?: string
+  dn_detail?: string
+  batch_no?: string
   item_group?: string
   is_non_returnable?: boolean
   is_refrigerated_overdue?: boolean
@@ -180,6 +183,7 @@ export interface SalesInvoice {
   custom_pos_opening_entry?: string;
   canReturn?: boolean;
   isPosDispense?: boolean;
+  deliveryNoteName?: string;
   invoice:[];
   cashier_name:string;
   customer_email:string;

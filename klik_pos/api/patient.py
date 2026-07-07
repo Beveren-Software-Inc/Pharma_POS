@@ -150,6 +150,28 @@ def _extract_medication_order_items(order_doc):
 	return items
 
 
+def resolve_customer_from_patient(patient):
+	"""Map a Healthcare Patient to the linked ERPNext Customer record."""
+	if not patient or not frappe.db.exists("DocType", "Patient"):
+		return None
+
+	patient = (patient or "").strip()
+	if not patient or not frappe.db.exists("Patient", patient):
+		return None
+
+	linked = frappe.db.get_value("Patient", patient, "customer")
+	if linked and frappe.db.exists("Customer", linked):
+		return linked
+
+	patient_name = frappe.db.get_value("Patient", patient, "patient_name")
+	if patient_name:
+		linked = frappe.db.get_value("Customer", {"customer_name": patient_name}, "name")
+		if linked and frappe.db.exists("Customer", linked):
+			return linked
+
+	return None
+
+
 def resolve_patient_from_customer(customer):
 	"""Map a POS Customer to the linked Healthcare Patient record."""
 	if not customer or not frappe.db.exists("DocType", "Patient"):
@@ -187,6 +209,22 @@ def resolve_patient_for_customer(customer: str):
 		"Patient",
 		patient_name,
 		["name", "patient_name", "patient_id", "file_no"],
+		as_dict=True,
+	)
+	return row
+
+
+@frappe.whitelist()
+def resolve_customer_for_patient(patient: str):
+	"""Return Customer summary for a selected Healthcare Patient (hospital pharmacy)."""
+	customer_name = resolve_customer_from_patient(patient)
+	if not customer_name:
+		return None
+
+	row = frappe.db.get_value(
+		"Customer",
+		customer_name,
+		["name", "customer_name", "customer_type", "default_currency"],
 		as_dict=True,
 	)
 	return row

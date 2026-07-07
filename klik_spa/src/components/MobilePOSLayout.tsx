@@ -13,6 +13,7 @@ import ProductGrid from "./ProductGrid"
 import BottomNavigation from "./BottomNavigation"
 import type { MenuItem, CartItem } from "../../types"
 import { getItemPriceForCustomer } from "../services/dynamicPricing"
+import { findLastCartLineForItem, getCartLineUpdateId } from "../utils/duplicateCartItems"
 
 interface MobilePOSLayoutProps {
   items: MenuItem[]
@@ -48,7 +49,7 @@ export default function MobilePOSLayout({
   const { user, logout } = useAuth()
   const { theme, toggleTheme } = useTheme()
   const { posDetails, loading: posLoading } = usePOSDetails()
-  const { cartItems, addToCart, selectedCustomer } = useCartStore()
+  const { cartItems, addToCart, updateQuantity, selectedCustomer } = useCartStore()
   const navigate = useNavigate()
   const [showUserMenu, setShowUserMenu] = useState(false)
 
@@ -121,18 +122,11 @@ export default function MobilePOSLayout({
   const handleAddToCart = async (item: MenuItem) => {
     if (!item || item.available <= 0) return
 
-    const allowDuplicatePos =
-      posDetails?.custom_allow_duplicate_items_in_pos === 1 ||
-      posDetails?.custom_allow_duplicate_items_in_pos === true ||
-      posDetails?.custom_allow_duplicate_items_in_pos === "1"
-    const itemHasSerialOrBatch =
-      item.has_serial_no === 1 ||
-      item.has_serial_no === true ||
-      item.has_serial_no === "1" ||
-      item.has_batch_no === 1 ||
-      item.has_batch_no === true ||
-      item.has_batch_no === "1"
-    const allowDuplicateForItem = allowDuplicatePos && itemHasSerialOrBatch
+    const existingItem = findLastCartLineForItem(cartItems, item.id)
+    if (existingItem) {
+      updateQuantity(getCartLineUpdateId(existingItem), existingItem.quantity + 1)
+      return
+    }
 
     const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : item.uom
     let priceToUse = item.price
@@ -156,7 +150,6 @@ export default function MobilePOSLayout({
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,
       has_batch_no: item.has_batch_no,
-      allowDuplicate: allowDuplicateForItem,
     })
   }
 

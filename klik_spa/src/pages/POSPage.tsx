@@ -14,6 +14,7 @@ import RetailPOSLayout from "../components/RetailPOSLayout"
 import POSOpeningModal from '../components/PosOpeningEntryDialog'
 import erpnextAPI from '../services/erpnext-api'
 import { loadCachedItemsToCart, hasCachedDraftInvoiceItems } from '../utils/draftInvoiceCache'
+import { navigateToDesk } from '../utils/navigation'
 
 export default function MainPOSScreen() {
   const { isRTL } = useI18n()
@@ -127,7 +128,7 @@ export default function MainPOSScreen() {
   }
 
   const handleOpeningClose = () => {
-    setShowOpeningModal(false)
+    navigateToDesk()
   }
 
   // Show loading screen while checking status

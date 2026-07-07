@@ -173,6 +173,35 @@ export async function resolvePatientForCustomer(customerId: string): Promise<Pat
   }
 }
 
+export interface ResolvedCustomer {
+  name: string;
+  customer_name?: string;
+  customer_type?: string;
+  default_currency?: string;
+}
+
+export async function resolveCustomerForPatient(patientId: string): Promise<ResolvedCustomer | null> {
+  if (!patientId?.trim()) return null;
+  try {
+    const response = await fetch(
+      `/api/method/klik_pos.api.patient.resolve_customer_for_patient?patient=${encodeURIComponent(patientId.trim())}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to resolve customer for patient");
+    }
+    return data?.message || null;
+  } catch (error) {
+    console.error("Error resolving customer for patient:", error);
+    return null;
+  }
+}
+
 export async function getPrintFormatsForDoctype(
   doctype: string
 ): Promise<{ formats: string[]; default: string }> {
