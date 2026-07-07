@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, CreditCard, Banknote, Wallet, AlertCircle, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, CreditCard, Banknote, Wallet, AlertCircle, CheckCircle2, ChevronDown } from 'lucide-react';
 import { formatCurrency } from '../utils/currency';
 import { useCreatePOSOpeningEntry } from '../services/opeiningEntry';
 import { usePaymentModes } from "../hooks/usePaymentModes"
@@ -29,6 +29,87 @@ interface POSOpeningModalProps {
   onClose: () => void;
   onSuccess: (openingEntry?: POSOpeningEntry) => void;
   currentUser: string;
+}
+
+interface PosProfileSelectProps {
+  profiles: { name: string; is_default: boolean }[];
+  value: string;
+  onChange: (profileName: string) => void;
+  disabled?: boolean;
+  loading?: boolean;
+}
+
+function PosProfileSelect({
+  profiles,
+  value,
+  onChange,
+  disabled = false,
+  loading = false,
+}: PosProfileSelectProps) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectedProfile = profiles.find((profile) => profile.name === value);
+  const displayLabel = loading
+    ? 'Loading profiles...'
+    : selectedProfile
+      ? selectedProfile.is_default
+        ? `${selectedProfile.name} (Default)`
+        : selectedProfile.name
+      : profiles.length === 0
+        ? 'No profiles available'
+        : 'Select POS Profile';
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => !disabled && !loading && setOpen((prev) => !prev)}
+        disabled={disabled || loading || profiles.length === 0}
+        className="relative w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-900 shadow-sm transition focus:outline-none focus:border-beveren-400/80 focus:ring-2 focus:ring-beveren-500/25 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+      >
+        <span className="block truncate pr-6">{displayLabel}</span>
+        <ChevronDown
+          className={`absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && profiles.length > 0 && (
+        <div className="absolute z-50 mt-1.5 w-full max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 text-slate-900 shadow-lg ring-1 ring-slate-200/60">
+          {profiles.map((profile) => {
+            const label = profile.is_default ? `${profile.name} (Default)` : profile.name;
+            const isSelected = profile.name === value;
+
+            return (
+              <button
+                key={profile.name}
+                type="button"
+                onClick={() => {
+                  onChange(profile.name);
+                  setOpen(false);
+                }}
+                className={`w-full px-3 py-2 text-left text-sm transition hover:bg-beveren-50/80 focus:bg-beveren-50/80 focus:outline-none ${
+                  isSelected ? 'bg-beveren-50/60 font-medium text-beveren-700' : 'text-slate-800'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
@@ -248,33 +329,16 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
             <div className="space-y-6">
               {/* POS Profile Selection */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-slate-700 mb-2">
                   POS Profile
                 </label>
-                <select
+                <PosProfileSelect
+                  profiles={posProfiles || []}
                   value={selectedProfile}
-                  onChange={(e) => handleProfileChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-white text-gray-900 dark:text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  disabled={!!profilesLoading || !!isLoadingPaymentModes}
-                >
-                  {(!posProfiles || posProfiles.length === 0) && (
-                    <option value="">
-                      {profilesLoading ? 'Loading profiles...' : 'No profiles available'}
-                    </option>
-                  )}
-                  {posProfiles && Array.isArray(posProfiles) && posProfiles.map((profile, index) => {
-                    const profileName = profile.name;
-                    const profileDisplay = profile.is_default
-                      ? `${profileName} (Default)`
-                      : profileName;
-
-                    return (
-                      <option key={profileName || index} value={profileName}>
-                        {profileDisplay}
-                      </option>
-                    );
-                  })}
-                </select>
+                  onChange={handleProfileChange}
+                  disabled={!!isLoadingPaymentModes}
+                  loading={!!profilesLoading}
+                />
               </div>
 
               {/* Payment Methods Loading State */}
@@ -340,7 +404,7 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
               <div className="flex space-x-3 pt-4">
                 <button
                   onClick={onClose}
-                  className="flex-1 px-4 py-2 text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+                  className="flex-1 px-4 py-2 text-red-600 bg-white border border-red-500 rounded-md hover:bg-red-50 transition-colors disabled:border-gray-300 disabled:text-gray-400 disabled:bg-gray-50 disabled:cursor-not-allowed"
                   disabled={!!profilesLoading || !!isCreating || !!isLoadingPaymentModes}
                 >
                   Cancel
@@ -354,7 +418,7 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
                     !selectedProfile ||
                     paymentMethods.length === 0
                   }
-                  className="flex-1 px-4 py-2 bg-beveren-700 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  className="flex-1 px-4 py-2 bg-white border border-beveren-600 text-beveren-700 rounded-md hover:bg-beveren-50 transition-colors disabled:border-gray-300 disabled:text-gray-400 disabled:bg-gray-50 disabled:cursor-not-allowed"
                 >
                   {profilesLoading ? 'Loading...' :
                    isCreating ? 'Creating...' :

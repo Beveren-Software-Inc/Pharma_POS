@@ -4,6 +4,7 @@ import { usePOSOpeningStatus } from '../hooks/usePOSOpeningEntry';
 import POSOpeningModal from './PosOpeningEntryDialog';
 import erpnextAPI from '../services/erpnext-api';
 import { useI18n } from '../hooks/useI18n';
+import { navigateToDesk } from '../utils/navigation';
 
 interface CurrentUser {
   name?: string;
@@ -175,7 +176,7 @@ export default function POSOpeningEntryGuard({
   };
 
   const handleOpeningClose = () => {
-
+    navigateToDesk();
   };
 
   // If path is excluded, render children directly
