@@ -8,9 +8,20 @@ interface ProductCardProps {
   onAddToCart: (item: MenuItem) => void
   isMobile?: boolean
   scannerOnly?: boolean
+  enableHoverTooltip?: boolean
+  onHoverStart?: () => void
+  onHoverEnd?: () => void
 }
 
-export default function ProductCard({ item, onAddToCart, isMobile = false, scannerOnly = false }: ProductCardProps) {
+export default function ProductCard({
+  item,
+  onAddToCart,
+  isMobile = false,
+  scannerOnly = false,
+  enableHoverTooltip = false,
+  onHoverStart,
+  onHoverEnd,
+}: ProductCardProps) {
   // const { t } = useI18n()
   const isOutOfStock = item.available <= 0
   const isDisabled = isOutOfStock || scannerOnly
@@ -26,6 +37,9 @@ return (
           : "hover:shadow-lg hover:scale-105 cursor-pointer active:scale-95"
       } ${isMobile ? "touch-manipulation" : ""}`}
       onClick={() => !isDisabled && onAddToCart(item)}
+      onMouseEnter={() => enableHoverTooltip && onHoverStart?.()}
+      onMouseLeave={() => enableHoverTooltip && onHoverEnd?.()}
+      data-item-hover-target={enableHoverTooltip ? "true" : undefined}
     >
       {/* Image - Maintain same size for consistency */}
       <div className="relative">

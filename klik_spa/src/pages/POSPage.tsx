@@ -14,6 +14,7 @@ import RetailPOSLayout from "../components/RetailPOSLayout"
 import POSOpeningModal from '../components/PosOpeningEntryDialog'
 import erpnextAPI from '../services/erpnext-api'
 import { loadCachedItemsToCart, hasCachedDraftInvoiceItems } from '../utils/draftInvoiceCache'
+import { loadCachedHeldDispenseToCart, hasCachedHeldDispenseOrder } from '../utils/heldDispenseOrderCache'
 import { navigateToDesk } from '../utils/navigation'
 
 export default function MainPOSScreen() {
@@ -84,11 +85,14 @@ export default function MainPOSScreen() {
       // Add a small delay to ensure everything is loaded
       setTimeout(async () => {
         const hasCached = hasCachedDraftInvoiceItems();
+        const hasHeld = hasCachedHeldDispenseOrder();
 
         if (hasCached) {
           console.log('Loading cached draft invoice items to cart');
           await loadCachedItemsToCart();
-
+        } else if (hasHeld) {
+          console.log('Loading cached held dispense order to cart');
+          await loadCachedHeldDispenseToCart();
         }
 
         // Mark cache as loaded to prevent multiple executions

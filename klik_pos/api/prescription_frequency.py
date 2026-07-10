@@ -53,29 +53,28 @@ def get_prescription_frequencies():
 	Fetch active Prescription Frequency records from the healthcare app.
 	Only returns rows where the Active checkbox is ticked.
 	"""
-	try:
-		if not frappe.db.exists("DocType", "Prescription Frequency"):
-			frappe.throw(
-				"Prescription Frequency doctype not found. Please ensure the healthcare app is installed."
-			)
-
-		fields = _prescription_frequency_select_fields()
-		order_by = _prescription_frequency_order_by(fields)
-
-		if _prescription_frequency_has_active_field():
-			rows = _fetch_active_prescription_frequencies(fields, order_by)
-			return [row for row in rows if cint(row.get("active")) == 1]
-
-		prescription = frappe.get_all(
-			"Prescription Frequency",
-			fields=fields,
-			filters={},
-			order_by=order_by,
+	# try:
+	if not frappe.db.exists("DocType", "Prescription Frequency"):
+		frappe.throw(
+			"Prescription Frequency doctype not found. Please ensure the healthcare app is installed."
 		)
-		print(f"Fetched {len(prescription)} Prescription Frequencies (Active field not present).")
-		return prescription
+
+	fields = _prescription_frequency_select_fields()
+	order_by = _prescription_frequency_order_by(fields)
+	
+	if _prescription_frequency_has_active_field():
+		rows = _fetch_active_prescription_frequencies(fields, order_by)
+		return [row for row in rows if cint(row.get("active")) == 1]
+	
+	prescription = frappe.get_all(
+		"Prescription Frequency",
+		fields=fields,
+		filters={},
+		order_by=order_by,
+	)
+	return prescription
 
 
-	except Exception as e:
-		frappe.log_error(frappe.get_traceback(), "Error fetching Prescription Frequencies")
-		frappe.throw(f"Failed to fetch Prescription Frequencies: {str(e)}")
+	# except Exception as e:
+	# 	frappe.log_error(frappe.get_traceback(), "Error fetching Prescription Frequencies")
+	# 	frappe.throw(f"Failed to fetch Prescription Frequencies: {str(e)}")

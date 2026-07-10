@@ -150,6 +150,47 @@ def _extract_medication_order_items(order_doc):
 	return items
 
 
+def _visit_type_from_reference(reference_type):
+	if not reference_type:
+		return None
+	rt = str(reference_type).strip().lower()
+	if "patient visit" in rt:
+		return "OP"
+	if "inpatient" in rt:
+		return "IP"
+	return None
+
+
+def _enrich_medication_order_summary(order, order_doc):
+	"""Attach header fields used by hospital pharmacy medication-order UI."""
+	order["healthcare_practitioner"] = (
+		getattr(order_doc, "healthcare_practitioner", None)
+		or getattr(order_doc, "practitioner", None)
+		or getattr(order_doc, "prescribing_practitioner", None)
+	)
+	order["healthcare_practitioner_name"] = (
+		getattr(order_doc, "healthcare_practitioner_name", None)
+		or getattr(order_doc, "practitioner_name", None)
+	)
+	order["after_discharge"] = int(getattr(order_doc, "after_discharge", 0) or 0)
+
+	ref_type = getattr(order_doc, "custom_reference_type", None)
+	ref_name = getattr(order_doc, "custom_reference_name", None)
+	if not ref_type or not ref_name:
+		if getattr(order_doc, "patient_encounter", None):
+			ref_type = "Patient Visit"
+			ref_name = order_doc.patient_encounter
+		elif getattr(order_doc, "inpatient_record", None):
+			ref_type = "Inpatient Admission"
+			ref_name = order_doc.inpatient_record
+
+	order["custom_reference_type"] = ref_type
+	order["custom_reference_name"] = ref_name
+	order["visit_type"] = _visit_type_from_reference(ref_type)
+	order["items"] = _extract_medication_order_items(order_doc)
+	return order
+
+
 def resolve_customer_from_patient(patient):
 	"""Map a Healthcare Patient to the linked ERPNext Customer record."""
 	if not patient or not frappe.db.exists("DocType", "Patient"):
@@ -181,6 +222,12 @@ def resolve_patient_from_customer(customer):
 	if not customer:
 		return None
 
+	# Argument may be customer display name rather than Customer.name (ID)
+	if not frappe.db.exists("Customer", customer):
+		customer_id = frappe.db.get_value("Customer", {"customer_name": customer}, "name")
+		if customer_id:
+			customer = customer_id
+
 	linked = frappe.db.get_value("Patient", {"customer": customer}, "name")
 	if linked and frappe.db.exists("Patient", linked):
 		return linked
@@ -205,10 +252,14 @@ def resolve_patient_for_customer(customer: str):
 	if not patient_name:
 		return None
 
+	fields = ["name", "patient_name", "patient_id", "file_no"]
+	if frappe.db.has_column("Patient", "id_number"):
+		fields.append("id_number")
+
 	row = frappe.db.get_value(
 		"Patient",
 		patient_name,
-		["name", "patient_name", "patient_id", "file_no"],
+		fields,
 		as_dict=True,
 	)
 	return row
@@ -347,8 +398,8 @@ def search_patients(search_query: str):
 @frappe.whitelist()
 def get_pending_inpatient_medication_orders(patient: str):
 	"""
-	Get all pending Inpatient Medication Orders for a given Patient.
-	Returns orders with their child table items (drug and dosage).
+	Get Inpatient Medication Orders for dispensing.
+	Excludes Completed, Draft, and Unsigned prescriptions from the pending tab.
 	"""
 	try:
 		# Check if Patient Medication Order doctype exists
@@ -372,13 +423,13 @@ def get_pending_inpatient_medication_orders(patient: str):
 			fields_to_fetch.append("creation")
 			order_by_field = "creation desc"
 		
-		# Fetch pending orders for the patient
+		# Pending tab: active orders only (exclude completed, draft, unsigned)
 		orders = frappe.get_all(
 			"Patient Medication Order",
 			fields=fields_to_fetch,
 			filters={
 				"patient": patient,
-				"status": ["in", ["Pending", "Active"]]
+				"status": ["not in", ["Completed", "Draft", "Unsigned"]],
 			},
 			order_by=order_by_field if order_by_field else "name desc"
 		)
@@ -386,25 +437,7 @@ def get_pending_inpatient_medication_orders(patient: str):
 		# For each order, get the child table items
 		for order in orders:
 			order_doc = frappe.get_doc("Patient Medication Order", order.name)
-			order["healthcare_practitioner"] = (
-				getattr(order_doc, "healthcare_practitioner", None)
-				or getattr(order_doc, "practitioner", None)
-				or getattr(order_doc, "prescribing_practitioner", None)
-			)
-			order["healthcare_practitioner_name"] = (
-				getattr(order_doc, "healthcare_practitioner_name", None)
-				or getattr(order_doc, "practitioner_name", None)
-			)
-			order["custom_reference_type"] = getattr(order_doc, "custom_reference_type", None)
-			order["custom_reference_name"] = getattr(order_doc, "custom_reference_name", None)
-			if not order["custom_reference_type"] or not order["custom_reference_name"]:
-				if getattr(order_doc, "patient_encounter", None):
-					order["custom_reference_type"] = "Patient Visit"
-					order["custom_reference_name"] = order_doc.patient_encounter
-				elif getattr(order_doc, "inpatient_record", None):
-					order["custom_reference_type"] = "Inpatient Admission"
-					order["custom_reference_name"] = order_doc.inpatient_record
-			order["items"] = _extract_medication_order_items(order_doc)
+			_enrich_medication_order_summary(order, order_doc)
 		return orders
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching Patient Medication Orders")
@@ -438,13 +471,13 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 			fields_to_fetch.append("creation")
 			order_by_field = "creation desc"
 
-		# History excludes pending/active orders.
+		# History tab: completed orders only (pending tab shows all other statuses).
 		orders = frappe.get_all(
 			"Patient Medication Order",
 			fields=fields_to_fetch,
 			filters={
 				"patient": patient,
-				"status": ["not in", ["Pending", "Active"]],
+				"status": "Completed",
 			},
 			order_by=order_by_field,
 			limit=limit,
@@ -453,25 +486,7 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 		# Reuse existing item extraction for consistency.
 		for order in orders:
 			order_doc = frappe.get_doc("Patient Medication Order", order.name)
-			order["healthcare_practitioner"] = (
-				getattr(order_doc, "healthcare_practitioner", None)
-				or getattr(order_doc, "practitioner", None)
-				or getattr(order_doc, "prescribing_practitioner", None)
-			)
-			order["healthcare_practitioner_name"] = (
-				getattr(order_doc, "healthcare_practitioner_name", None)
-				or getattr(order_doc, "practitioner_name", None)
-			)
-			order["custom_reference_type"] = getattr(order_doc, "custom_reference_type", None)
-			order["custom_reference_name"] = getattr(order_doc, "custom_reference_name", None)
-			if not order["custom_reference_type"] or not order["custom_reference_name"]:
-				if getattr(order_doc, "patient_encounter", None):
-					order["custom_reference_type"] = "Patient Visit"
-					order["custom_reference_name"] = order_doc.patient_encounter
-				elif getattr(order_doc, "inpatient_record", None):
-					order["custom_reference_type"] = "Inpatient Admission"
-					order["custom_reference_name"] = order_doc.inpatient_record
-			order["items"] = _extract_medication_order_items(order_doc)
+			_enrich_medication_order_summary(order, order_doc)
 
 		return orders
 	except Exception as e:
@@ -562,6 +577,137 @@ def _get_patient_warning_messages(patient: str, limit: int = 25):
 	return rows
 
 
+def _serialize_patient_upload_row(row):
+	"""Normalize a Patient Upload Document child row for POS."""
+	if isinstance(row, dict):
+		get = row.get
+	else:
+		get = lambda key, default=None: getattr(row, key, default)
+
+	file_url = get("document")
+	return {
+		"name": get("name"),
+		"file_name": get("file_name") or get("document_name"),
+		"document_name": get("document_name"),
+		"document_type": get("document_type"),
+		"transaction_no": get("transaction_no"),
+		"upload_remarks": get("upload_remarks"),
+		"document": file_url,
+	}
+
+
+def _get_patient_upload_documents(patient: str):
+	"""Return Patient Upload Document rows from Healthcare Patient record."""
+	if not patient:
+		return []
+
+	patient = (patient or "").strip()
+	if not patient:
+		return []
+
+	if not frappe.db.exists("Patient", patient):
+		resolved = resolve_patient_from_customer(patient)
+		if not resolved or not frappe.db.exists("Patient", resolved):
+			return []
+		patient = resolved
+
+	documents = []
+	seen_urls = set()
+
+	# Primary: query child table directly (Patient > patient_document > Patient Upload Document)
+	if frappe.db.exists("DocType", "Patient Upload Document"):
+		rows = frappe.get_all(
+			"Patient Upload Document",
+			filters={"parent": patient, "parenttype": "Patient"},
+			fields=[
+				"name",
+				"document_name",
+				"file_name",
+				"document_type",
+				"transaction_no",
+				"upload_remarks",
+				"document",
+			],
+			order_by="idx asc",
+		)
+		for row in rows:
+			serialized = _serialize_patient_upload_row(row)
+			file_url = serialized.get("document")
+			if file_url and file_url in seen_urls:
+				continue
+			if file_url:
+				seen_urls.add(file_url)
+			if (
+				serialized.get("document")
+				or serialized.get("file_name")
+				or serialized.get("document_name")
+				or serialized.get("document_type")
+			):
+				documents.append(serialized)
+
+	# Fallback: load via parent document
+	if not documents:
+		patient_doc = frappe.get_doc("Patient", patient)
+		for row in patient_doc.get("patient_document") or []:
+			serialized = _serialize_patient_upload_row(row)
+			file_url = serialized.get("document")
+			if file_url and file_url in seen_urls:
+				continue
+			if file_url:
+				seen_urls.add(file_url)
+			documents.append(serialized)
+
+	# Include CPR / National ID attach fields from Patient when present
+	patient_meta = frappe.get_meta("Patient")
+	attach_fields = [
+		("cprigama_front_photo", "CPR/Igama Front Photo"),
+		("cprigama_back_photo", "CPR/Igama Back Photo"),
+	]
+	for fieldname, label in attach_fields:
+		if not patient_meta.has_field(fieldname):
+			continue
+		file_url = frappe.db.get_value("Patient", patient, fieldname)
+		if file_url and file_url not in seen_urls:
+			seen_urls.add(file_url)
+			documents.append(
+				{
+					"name": f"{patient}-{fieldname}",
+					"file_name": label,
+					"document_name": label,
+					"document_type": "National ID",
+					"transaction_no": None,
+					"upload_remarks": None,
+					"document": file_url,
+				}
+			)
+
+	return documents
+
+
+@frappe.whitelist()
+def get_patient_documents(patient: str = None, customer: str = None):
+	"""Return Healthcare patient upload documents for POS (by patient or customer)."""
+	try:
+		patient_key = (patient or "").strip()
+		customer_key = (customer or "").strip()
+
+		if not patient_key and customer_key:
+			patient_key = resolve_patient_from_customer(customer_key) or ""
+
+		if not patient_key:
+			frappe.throw("Patient or customer is required")
+
+		documents = _get_patient_upload_documents(patient_key)
+		return {
+			"success": True,
+			"patient": patient_key,
+			"patient_documents": documents,
+		}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Get patient documents error")
+		return {"success": False, "message": str(e), "patient_documents": []}
+
+
 @frappe.whitelist()
 def get_patient_history_summary(patient: str, limit: int = 10):
 	"""
@@ -588,6 +734,8 @@ def get_patient_history_summary(patient: str, limit: int = 10):
 				fields.append("allergies")
 			if "medication" in available:
 				fields.append("medication")
+			if "id_number" in available:
+				fields.append("id_number")
 			if fields:
 				patient_details = frappe.db.get_value("Patient", patient, fields, as_dict=True) or {}
 
@@ -624,12 +772,14 @@ def get_patient_history_summary(patient: str, limit: int = 10):
 		medication_history = get_patient_medication_order_history(patient, limit=limit)
 		diagnosis_entries = _get_patient_diagnosis_entries(patient, limit=limit)
 		warning_messages = _get_patient_warning_messages(patient, limit=limit)
+		patient_documents = _get_patient_upload_documents(patient)
 		return {
 			"patient": patient_details or {"name": patient},
 			"visits": visits,
 			"medication_orders": medication_history,
 			"diagnosis_entries": diagnosis_entries,
 			"warning_messages": warning_messages,
+			"patient_documents": patient_documents,
 		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching patient history summary")

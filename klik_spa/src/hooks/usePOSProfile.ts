@@ -123,6 +123,8 @@ export type POSDetails = {
   custom_allow_item_tax_template?: number | boolean | string;
   custom_allow_additional_amounts?: number | boolean | string;
   custom_allow_duplicate_items_in_pos?: number | boolean | string;
+  /** ERPNext POS Profile: Allow User to Edit Rate (retail only in klik POS UI). */
+  allow_rate_change?: number | boolean | string;
   custom_print_delivery_receipt?: number | boolean | string;
   /** When set, POS serial picker uses Dispensing Lot instead of Serial No. */
   custom_dispense_lot?: number | boolean | string;

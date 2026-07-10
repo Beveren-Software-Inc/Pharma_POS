@@ -2,9 +2,11 @@
 
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search } from "lucide-react";
-import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption } from "../services/patientService";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink } from "lucide-react";
+import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument } from "../services/patientService";
 import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype, resolveMedicationItemCode, resolveMedicationDisplayName } from "../services/patientService";
+import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
+import MedicationOrderDischargedBadge from "./MedicationOrderDischargedBadge";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -22,6 +24,7 @@ interface InpatientMedicationOrdersModalProps {
   patientName?: string;
   patientId?: string;
   isHospitalMode?: boolean;
+  defaultUom?: string;
   /** Shown on Patient Visit tab after a successful create (persists while modal can reopen). */
   lastCreatedVisit?: { doctype: string; name: string } | null;
   /** Incremented on each successful visit create — switches modal to Patient Visit tab. */
@@ -35,13 +38,16 @@ const STATUS_CONFIG: Record<string, { label: string; classes: string }> = {
   Draft:        { label: "Draft",       classes: "bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 border border-gray-200 dark:border-gray-600" },
   Submitted:    { label: "Submitted",   classes: "bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-200 dark:border-blue-700" },
   Pending:      { label: "Pending",     classes: "bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400 border border-amber-200 dark:border-amber-700" },
+  Signed:       { label: "Signed",      classes: "bg-sky-50 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400 border border-sky-200 dark:border-sky-700" },
+  Unsigned:     { label: "Unsigned",    classes: "bg-orange-50 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400 border border-orange-200 dark:border-orange-700" },
   "In Process": { label: "In Process",  classes: "bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400 border border-violet-200 dark:border-violet-700" },
   Completed:    { label: "Completed",   classes: "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-700" },
   Cancelled:    { label: "Cancelled",   classes: "bg-red-50 text-red-500 dark:bg-red-900/30 dark:text-red-400 border border-red-200 dark:border-red-700" },
 };
 
-function StatusBadge({ status }: { status?: string }) {
+function StatusBadge({ status, hideStatuses }: { status?: string; hideStatuses?: string[] }) {
   if (!status) return null;
+  if (hideStatuses?.includes(status)) return null;
   const cfg = STATUS_CONFIG[status] ?? { label: status, classes: "bg-gray-100 text-gray-500 border border-gray-200" };
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full font-semibold tracking-wide ${cfg.classes}`}>
@@ -485,6 +491,17 @@ function AlternativeDrugSelect({
   );
 }
 
+function formatMedicationQty(
+  item: ItemRow,
+  _hospitalMode?: boolean,
+  defaultUom?: string
+) {
+  if (item.quantity == null) return "—";
+  // Show the UOM saved on the medication order line; POS default is fallback only.
+  const uom = item.uom?.trim() || defaultUom?.trim() || "";
+  return `${item.quantity}${uom ? ` ${uom}` : ""}`;
+}
+
 // ── Reusable items table ──────────────────────────────────────────────────────
 function ItemsTable({
   items,
@@ -497,6 +514,8 @@ function ItemsTable({
   alternativeDrugLabels,
   onAlternativeChange,
   showDetailsOnHover,
+  hospitalMode,
+  defaultUom,
 }: {
   items: ItemRow[];
   selectable?: boolean;
@@ -508,6 +527,8 @@ function ItemsTable({
   alternativeDrugLabels?: Record<string, string>;
   onAlternativeChange?: (key: string, value: string, itemName?: string) => void;
   showDetailsOnHover?: boolean;
+  hospitalMode?: boolean;
+  defaultUom?: string;
 }) {
   if (!items.length) return null;
   const isPrn = (v: ItemRow["is_prn"]) => v === 1 || v === true || v === "1";
@@ -566,7 +587,7 @@ function ItemsTable({
                   {item.dosage || "—"}
                  </td>
                 <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {item.quantity != null ? `${item.quantity}${item.uom ? ` ${item.uom}` : ""}` : "—"}
+                  {formatMedicationQty(item, hospitalMode, defaultUom)}
                  </td>
                 <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                   {item.patient_frequency || "—"}
@@ -607,6 +628,34 @@ function ItemsTable({
 }
 
 // ── Main modal ────────────────────────────────────────────────────────────────
+
+function resolvePatientFileUrl(path?: string | null): string {
+  if (!path?.trim()) return "";
+  const trimmed = path.trim();
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
+  const base = typeof window !== "undefined" ? window.location.origin : "";
+  return `${base}${trimmed.startsWith("/") ? trimmed : `/${trimmed}`}`;
+}
+
+function openPatientUploadDocument(url: string, print = false) {
+  const fullUrl = resolvePatientFileUrl(url);
+  if (!fullUrl) return;
+  const popup = window.open(fullUrl, "_blank", "noopener,noreferrer");
+  if (print && popup) {
+    popup.addEventListener("load", () => {
+      try {
+        popup.print();
+      } catch {
+        /* ignore */
+      }
+    });
+  }
+}
+
+function getUploadDocumentLabel(doc: PatientUploadDocument): string {
+  return doc.file_name?.trim() || doc.document_name?.trim() || doc.document_type?.trim() || "Document";
+}
+
 export default function InpatientMedicationOrdersModal({
   isOpen,
   onClose,
@@ -623,6 +672,7 @@ export default function InpatientMedicationOrdersModal({
   patientName,
   patientId,
   isHospitalMode = false,
+  defaultUom,
   lastCreatedVisit = null,
   patientVisitCreatedSignal = 0,
   patientHistory = null,
@@ -734,7 +784,7 @@ export default function InpatientMedicationOrdersModal({
   const tabs = [
     { id: "pending" as const, label: "Pending", count: pendingOrders.length, icon: ClipboardList },
     { id: "visit" as const, label: "Patient Visit", count: null, icon: UserPlus },
-    { id: "history" as const, label: "History", count: historyOrders.length, icon: Clock },
+    { id: "history" as const, label: "Prescription History", count: historyOrders.length, icon: Clock },
     { id: "patient_history" as const, label: "Patient History", count: null, icon: History },
   ];
 
@@ -834,7 +884,14 @@ export default function InpatientMedicationOrdersModal({
                           }`}>
                           {isSelected && <Check size={11} className="text-white" strokeWidth={3} />}
                         </div>
-                        <h3 className="font-semibold text-gray-900 dark:text-white text-sm flex-1">{order.name}</h3>
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate">{order.name}</h3>
+                          <DispenseVisitTypeBadge
+                            visitType={order.visit_type}
+                            referenceType={order.custom_reference_type}
+                          />
+                          <MedicationOrderDischargedBadge afterDischarge={order.after_discharge} />
+                        </div>
                         {order.posting_date && (
                           <span className="text-xs text-gray-400 dark:text-gray-500 tabular-nums">
                             {new Date(order.posting_date).toLocaleDateString()}
@@ -868,6 +925,8 @@ export default function InpatientMedicationOrdersModal({
                             items={order.items}
                             orderName={order.name}
                             showDetailsOnHover
+                            hospitalMode={isHospitalMode}
+                            defaultUom={defaultUom}
                             productAvailability={productAvailability}
                             alternativeDrugs={alternativeDrugs}
                             alternativeDrugLabels={alternativeDrugLabels}
@@ -895,7 +954,7 @@ export default function InpatientMedicationOrdersModal({
             historyOrders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
                 <Clock size={40} className="mb-3 opacity-30" />
-                <p className="text-sm font-medium">No medication history found.</p>
+                <p className="text-sm font-medium">No prescription history found.</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -923,6 +982,11 @@ export default function InpatientMedicationOrdersModal({
                             <ChevronDown size={15} />
                           </span>
                           <span className="font-semibold text-sm text-gray-800 dark:text-white truncate">{order.name}</span>
+                          <DispenseVisitTypeBadge
+                            visitType={order.visit_type}
+                            referenceType={order.custom_reference_type}
+                          />
+                          <MedicationOrderDischargedBadge afterDischarge={order.after_discharge} />
                           {order.posting_date && (
                             <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">
                               {new Date(order.posting_date).toLocaleDateString()}
@@ -933,7 +997,10 @@ export default function InpatientMedicationOrdersModal({
                               Dr: {order.healthcare_practitioner_name || order.healthcare_practitioner}
                             </span>
                           )}
-                          <StatusBadge status={order.status} />
+                          <StatusBadge
+                            status={order.status}
+                            hideStatuses={["Draft", "Completed", "Unsigned"]}
+                          />
                         </button>
                         <button
                           ref={openPrintMenuFor === order.name ? printButtonRef : null}
@@ -956,6 +1023,8 @@ export default function InpatientMedicationOrdersModal({
                             selectedKeys={selectedHistoryItems}
                             onToggle={onToggleHistoryItem}
                             orderName={order.name}
+                            hospitalMode={isHospitalMode}
+                            defaultUom={defaultUom}
                           />
                         </div>
                       )}
@@ -981,9 +1050,64 @@ export default function InpatientMedicationOrdersModal({
                   <div><span className="text-gray-500">Name:</span> <span className="font-medium">{String(patientHistory?.patient?.patient_name || patientName || "—")}</span></div>
                   <div><span className="text-gray-500">ID:</span> <span className="font-mono">{String(patientHistory?.patient?.name || patientId || "—")}</span></div>
                   {patientHistory?.patient?.file_no ? <div><span className="text-gray-500">File No:</span> {String(patientHistory.patient.file_no)}</div> : null}
+                  {patientHistory?.patient?.id_number ? <div><span className="text-gray-500">CPR / ID:</span> {String(patientHistory.patient.id_number)}</div> : null}
                   {patientHistory?.patient?.sex ? <div><span className="text-gray-500">Sex:</span> {String(patientHistory.patient.sex)}</div> : null}
+                  {patientHistory?.patient?.dob ? <div><span className="text-gray-500">DOB:</span> {String(patientHistory.patient.dob).slice(0, 10)}</div> : null}
                   {patientHistory?.patient?.blood_group ? <div><span className="text-gray-500">Blood:</span> {String(patientHistory.patient.blood_group)}</div> : null}
+                  {patientHistory?.patient?.mobile ? <div><span className="text-gray-500">Mobile:</span> {String(patientHistory.patient.mobile)}</div> : null}
                 </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
+                  <FileText size={15} className="text-gray-500" />
+                  <h3 className="text-sm font-bold text-gray-900 dark:text-white">Patient Documents</h3>
+                </div>
+                {(patientHistory?.patient_documents || []).length === 0 ? (
+                  <div className="p-4 text-sm text-gray-500">No documents on file for this patient.</div>
+                ) : (
+                  <ul className="divide-y divide-gray-100 dark:divide-gray-700">
+                    {(patientHistory?.patient_documents || []).map((doc, index) => {
+                      const label = getUploadDocumentLabel(doc);
+                      return (
+                        <li key={doc.name || `doc-${index}`} className="px-4 py-3 flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{label}</p>
+                            <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-gray-500">
+                              {doc.document_type ? <span>Type: {doc.document_type}</span> : null}
+                              {doc.transaction_no ? <span>Txn: {doc.transaction_no}</span> : null}
+                            </div>
+                            {doc.upload_remarks ? (
+                              <p className="mt-1 text-xs text-gray-600 dark:text-gray-400 line-clamp-2">{doc.upload_remarks}</p>
+                            ) : null}
+                          </div>
+                          {doc.document ? (
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => openPatientUploadDocument(doc.document!, false)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
+                              >
+                                <ExternalLink size={13} />
+                                Open
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openPatientUploadDocument(doc.document!, true)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-orange-600 hover:text-orange-700 rounded-md hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                              >
+                                <Printer size={13} />
+                                Print
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">No file</span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
 
               <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -1104,11 +1228,19 @@ export default function InpatientMedicationOrdersModal({
                                 {new Date(order.posting_date).toLocaleDateString()}
                               </span>
                             ) : null}
-                            <StatusBadge status={order.status} />
+                            <StatusBadge
+                            status={order.status}
+                            hideStatuses={["Draft", "Completed", "Unsigned"]}
+                          />
                           </button>
                           {isExpanded && order.items && order.items.length > 0 && (
                             <div className="px-4 py-3 border-t border-orange-200 dark:border-orange-800/40 bg-white/70 dark:bg-gray-900/20">
-                              <ItemsTable items={order.items} orderName={order.name} />
+                              <ItemsTable
+                                items={order.items}
+                                orderName={order.name}
+                                hospitalMode={isHospitalMode}
+                                defaultUom={defaultUom}
+                              />
                             </div>
                           )}
                           {isExpanded && (!order.items || order.items.length === 0) && (

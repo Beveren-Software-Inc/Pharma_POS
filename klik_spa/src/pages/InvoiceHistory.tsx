@@ -31,6 +31,7 @@ import BottomNavigation from "../components/BottomNavigation";
 import MultiInvoiceReturn from "../components/MultiInvoiceReturn";
 import SingleInvoiceReturn from "../components/SingleInvoiceReturn";
 import DispenseOrderReturn from "../components/DispenseOrderReturn";
+import DispenseVisitTypeBadge from "../components/DispenseVisitTypeBadge";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { formatCurrency } from "../utils/currency";
 import type { SalesInvoice } from "../../types";
@@ -43,13 +44,25 @@ import { getPartyLabels } from "../utils/partyLabels";
 import { toast } from "react-toastify";
 import { extractErrorFromException } from "../utils/errorExtraction";
 import { createSalesReturn, deleteDraftInvoice, submitDraftInvoice } from "../services/salesInvoice";
+import { deleteDraftHospitalSalesOrder } from "../services/salesOrder";
 import { useAllPaymentModes } from "../hooks/usePaymentModes";
 
 import { addDraftInvoiceToCart } from "../utils/draftInvoiceToCart";
+import { addHeldDispenseOrderToCart } from "../utils/heldDispenseOrderToCart";
+import {
+  clearHeldDispenseOrderCache,
+  getOriginalHeldDispenseOrderId,
+} from "../utils/heldDispenseOrderCache";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { isToday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
 import { exportInvoicesToCSV, getExportFilename, type ExportableInvoice } from "../utils/exportUtils";
 import { getPrintFormatsForDoctype } from "../services/patientService";
+import {
+  getItemReturnBadgeClass,
+  getItemReturnLabel,
+  getItemReturnStatus,
+  getReturnedLineCount,
+} from "../utils/dispenseReturnStatus";
 // import InvoiceViewPage from "./InvoiceViewPage";
 
 export default function InvoiceHistoryPage() {
@@ -82,7 +95,6 @@ export default function InvoiceHistoryPage() {
   const [openDispensePrintFor, setOpenDispensePrintFor] = useState<string | null>(null);
   const [dispensePrintMenuPosition, setDispensePrintMenuPosition] = useState<{ top: number; right: number } | null>(null);
   const dispensePrintButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [deliveryNotePrintFormats, setDeliveryNotePrintFormats] = useState<string[]>(["Standard"]);
   const [salesOrderPrintFormats, setSalesOrderPrintFormats] = useState<string[]>(["Standard"]);
 
   // Delete confirmation states
@@ -164,9 +176,6 @@ export default function InvoiceHistoryPage() {
 
   useEffect(() => {
     if (!isHospitalPharmacy) return;
-    void getPrintFormatsForDoctype("Delivery Note").then((res) => {
-      setDeliveryNotePrintFormats(res.formats);
-    });
     void getPrintFormatsForDoctype("Sales Order").then((res) => {
       setSalesOrderPrintFormats(res.formats);
     });
@@ -260,6 +269,10 @@ const getStatusBadge = (status: string) => {
     // Payment statuses
     case "dispensed medicine":
       return `${baseClasses} bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400`;
+    case "partially returned":
+      return `${baseClasses} bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400`;
+    case "fully returned":
+      return `${baseClasses} bg-purple-100 text-purple-800 dark:bg-purple-900/20 dark:text-purple-400`;
     case "paid":
       return `${baseClasses} bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400`;
     case "unpaid":
@@ -270,6 +283,8 @@ const getStatusBadge = (status: string) => {
       return `${baseClasses} bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400`;
     case "draft":
       return `${baseClasses} bg-gray-100 text-gray-800 dark:bg-gray-900/20 dark:text-gray-400`;
+    case "held":
+      return `${baseClasses} bg-amber-100 text-amber-800 dark:bg-amber-900/20 dark:text-amber-400`;
     case "return":
       return `${baseClasses} bg-purple-100 text-purple-800 dark:bg-purple-900/20 dark:text-purple-400`;
     case "cancelled":
@@ -369,33 +384,8 @@ const getStatusBadge = (status: string) => {
               left: "auto",
             }}
           >
-            {dispensePrintOrder.deliveryNoteName && (
-              <>
-                <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
-                  Delivery Note
-                </div>
-                {deliveryNotePrintFormats.map((format) => (
-                  <button
-                    key={`dn-${format}`}
-                    type="button"
-                    className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-gray-200 dark:hover:bg-gray-700"
-                    onClick={() => {
-                      openDispensePrint(
-                        "Delivery Note",
-                        dispensePrintOrder.deliveryNoteName!,
-                        format
-                      );
-                      setOpenDispensePrintFor(null);
-                    }}
-                  >
-                    <Printer size={13} className="text-slate-400 flex-shrink-0" />
-                    <span className="truncate">{format}</span>
-                  </button>
-                ))}
-              </>
-            )}
-            <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 border-t border-gray-100 dark:border-gray-700">
-              Sales Order
+            <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+              Dispense Order
             </div>
             {salesOrderPrintFormats.map((format) => (
               <button
@@ -481,7 +471,7 @@ const getStatusBadge = (status: string) => {
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
           <input
             type="text"
-            placeholder={isHospitalPharmacy ? "Search sales orders..." : "Search invoices..."}
+            placeholder={isHospitalPharmacy ? "Search dispense orders..." : "Search invoices..."}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -548,7 +538,7 @@ const getStatusBadge = (status: string) => {
   );
 
   const renderSummaryCards = () => (
-    <div className={`w-full max-w-none grid grid-cols-1 ${isHospitalPharmacy ? "md:grid-cols-2" : "md:grid-cols-4"} gap-6 mb-6`}>
+    <div className={`w-full max-w-none grid grid-cols-1 ${isHospitalPharmacy ? "md:grid-cols-1" : "md:grid-cols-4"} gap-6 mb-6`}>
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">
           <div>
@@ -565,6 +555,7 @@ const getStatusBadge = (status: string) => {
           <FileText className="w-8 h-8 text-orange-600" />
         </div>
       </div>
+      {!isHospitalPharmacy && (
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">
           <div>
@@ -576,6 +567,7 @@ const getStatusBadge = (status: string) => {
           <DollarSign className="w-8 h-8 text-orange-600" />
         </div>
       </div>
+      )}
       {!isHospitalPharmacy && (
       <>
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
@@ -655,7 +647,7 @@ const getStatusBadge = (status: string) => {
             <thead className="bg-gray-50 dark:bg-gray-700">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  {isHospitalPharmacy ? "Sales Order" : "Invoice"}
+                  {isHospitalPharmacy ? "Dispense Order" : "Invoice"}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   {party.singular}
@@ -668,12 +660,19 @@ const getStatusBadge = (status: string) => {
                   Payment
                 </th>
                 )}
+                {!isHospitalPharmacy && (
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Amount
                 </th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Status
                 </th>
+                {isHospitalPharmacy && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Remark
+                  </th>
+                )}
                 {posDetails?.is_zatca_enabled && !isHospitalPharmacy && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     Zatca Status
@@ -709,13 +708,26 @@ const getStatusBadge = (status: string) => {
                             </button>
                           )}
                           <div>
-                            <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                            <div className="flex items-center gap-2">
+                              <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                              {isHospitalPharmacy && (
+                                <DispenseVisitTypeBadge
+                                  visitType={invoice.visitType}
+                                  referenceType={invoice.customReferenceType}
+                                />
+                              )}
+                            </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
                               {invoice.date} {invoice.time}
                             </div>
                             {isHospitalPharmacy && invoice.deliveryNoteName && (
                               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
                                 DN: {invoice.deliveryNoteName}
+                              </div>
+                            )}
+                            {isHospitalPharmacy && getReturnedLineCount(invoice) > 0 && (
+                              <div className="text-xs text-purple-600 dark:text-purple-400 mt-0.5">
+                                {getReturnedLineCount(invoice)} item{getReturnedLineCount(invoice) !== 1 ? "s" : ""} returned
                               </div>
                             )}
                           </div>
@@ -732,6 +744,7 @@ const getStatusBadge = (status: string) => {
                         <span className="text-sm text-gray-900 dark:text-white">{invoice.paymentMethod}</span>
                       </td>
                       )}
+                      {!isHospitalPharmacy && (
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900 dark:text-white">
                           {formatCurrency(invoice.totalAmount, invoice.currency)}
@@ -742,9 +755,20 @@ const getStatusBadge = (status: string) => {
                           </div>
                         )}
                       </td>
+                      )}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={getStatusBadge(invoice.status)}>{invoice.status}</span>
                       </td>
+                      {isHospitalPharmacy && (
+                        <td className="px-6 py-4 max-w-xs">
+                          <div
+                            className="text-sm text-gray-700 dark:text-gray-300 truncate"
+                            title={invoice.notes || undefined}
+                          >
+                            {invoice.notes?.trim() ? invoice.notes : "—"}
+                          </div>
+                        </td>
+                      )}
                       {posDetails?.is_zatca_enabled && !isHospitalPharmacy && (
                         <td className="px-6 py-4 whitespace-nowrap">
                           {/* @ts-expect-error just ignore */}
@@ -754,6 +778,27 @@ const getStatusBadge = (status: string) => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         {isHospitalPharmacy ? (
                           <div className="flex space-x-2">
+                            {invoice.isHeldDispense || invoice.status === "Held" ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditHeldDispenseClick(invoice)}
+                                  className="text-blue-600 hover:text-blue-900 flex items-center space-x-1"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                  <span>Edit</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteHeldDispense(invoice)}
+                                  className="text-red-600 hover:text-red-900 flex items-center space-x-1"
+                                >
+                                  <FileMinus className="w-4 h-4" />
+                                  <span>Delete</span>
+                                </button>
+                              </>
+                            ) : (
+                              <>
                             <button
                               type="button"
                               data-dispense-print-trigger
@@ -780,6 +825,8 @@ const getStatusBadge = (status: string) => {
                                 <RotateCcw className="w-4 h-4" />
                                 <span>Return</span>
                               </button>
+                            )}
+                              </>
                             )}
                           </div>
                         ) : (
@@ -833,31 +880,51 @@ const getStatusBadge = (status: string) => {
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Medicine</th>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Batch</th>
                                   <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Qty</th>
-                                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Rate</th>
-                                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Amount</th>
                                   <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Returned</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
-                                {(invoice.items || []).map((item) => (
-                                  <tr key={`${invoice.id}-${item.so_detail || item.item_code}`}>
+                                {(invoice.items || []).map((item) => {
+                                  const returnStatus = getItemReturnStatus(item);
+                                  const returnLabel = getItemReturnLabel(returnStatus);
+                                  return (
+                                  <tr
+                                    key={`${invoice.id}-${item.so_detail || item.item_code}`}
+                                    className={
+                                      returnStatus === "full"
+                                        ? "bg-purple-50/70 dark:bg-purple-900/10"
+                                        : returnStatus === "partial"
+                                          ? "bg-orange-50/50 dark:bg-orange-900/10"
+                                          : ""
+                                    }
+                                  >
                                     <td className="px-4 py-2 text-gray-900 dark:text-white">
-                                      <div className="font-medium">{item.item_name || item.name}</div>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <div className="font-medium">{item.item_name || item.name}</div>
+                                        {returnLabel && (
+                                          <span className={getItemReturnBadgeClass(returnStatus)}>
+                                            {returnLabel}
+                                          </span>
+                                        )}
+                                      </div>
                                       <div className="text-xs text-gray-500">{item.item_code}</div>
                                     </td>
                                     <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{item.batch_no || "—"}</td>
                                     <td className="px-4 py-2 text-right text-gray-900 dark:text-white">{item.qty ?? item.quantity}</td>
-                                    <td className="px-4 py-2 text-right text-gray-900 dark:text-white">
-                                      {formatCurrency(item.rate ?? item.unitPrice ?? 0, invoice.currency)}
-                                    </td>
-                                    <td className="px-4 py-2 text-right text-gray-900 dark:text-white">
-                                      {formatCurrency(item.amount ?? item.total ?? 0, invoice.currency)}
-                                    </td>
-                                    <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-300">
-                                      {item.returned_qty ?? 0}
+                                    <td className="px-4 py-2 text-right">
+                                      <span
+                                        className={
+                                          returnStatus !== "none"
+                                            ? "font-medium text-purple-700 dark:text-purple-300"
+                                            : "text-gray-600 dark:text-gray-300"
+                                        }
+                                      >
+                                        {item.returned_qty ?? 0}
+                                      </span>
                                     </td>
                                   </tr>
-                                ))}
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -878,7 +945,15 @@ const getStatusBadge = (status: string) => {
               className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 hover:shadow-md transition-shadow"
             >
               <div className="flex items-center justify-between mb-3">
-                <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                  {isHospitalPharmacy && (
+                    <DispenseVisitTypeBadge
+                      visitType={invoice.visitType}
+                      referenceType={invoice.customReferenceType}
+                    />
+                  )}
+                </div>
                 <span className={getStatusBadge(invoice.status)}>{invoice.status}</span>
               </div>
               <div className="space-y-2">
@@ -886,10 +961,12 @@ const getStatusBadge = (status: string) => {
                   <span className="text-gray-600 dark:text-gray-400">{party.singular}:</span>
                   <span className="text-gray-900 dark:text-white">{invoice.customer}</span>
                 </div>
+                {!isHospitalPharmacy && (
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600 dark:text-gray-400">Amount:</span>
                   <span className="font-medium text-gray-900 dark:text-white">{formatCurrency(invoice.totalAmount, invoice.currency)}</span>
                 </div>
+                )}
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600 dark:text-gray-400">Date:</span>
                   <span className="text-gray-900 dark:text-white">{invoice.date}</span>
@@ -898,6 +975,25 @@ const getStatusBadge = (status: string) => {
                   <span className="text-gray-600 dark:text-gray-400">Cashier:</span>
                   <span className="text-gray-900 dark:text-white">{invoice.cashier}</span>
                 </div>
+                {isHospitalPharmacy && (
+                  <div className="flex justify-between text-sm gap-3">
+                    <span className="text-gray-600 dark:text-gray-400 flex-shrink-0">Remark:</span>
+                    <span
+                      className="text-gray-900 dark:text-white text-right truncate"
+                      title={invoice.notes || undefined}
+                    >
+                      {invoice.notes?.trim() ? invoice.notes : "—"}
+                    </span>
+                  </div>
+                )}
+                {isHospitalPharmacy && getReturnedLineCount(invoice) > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600 dark:text-gray-400">Returned:</span>
+                    <span className="text-purple-700 dark:text-purple-300 font-medium">
+                      {getReturnedLineCount(invoice)} item{getReturnedLineCount(invoice) !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="mt-4 flex space-x-2">
                 {isHospitalPharmacy ? (
@@ -909,6 +1005,25 @@ const getStatusBadge = (status: string) => {
                     >
                       {expandedDispenseOrders.has(invoice.id) ? "Hide medicines" : "Show medicines"}
                     </button>
+                    {invoice.isHeldDispense || invoice.status === "Held" ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleEditHeldDispenseClick(invoice)}
+                          className="flex-1 text-xs px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteHeldDispense(invoice)}
+                          className="flex-1 text-xs px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    ) : (
+                      <>
                     <button
                       type="button"
                       data-dispense-print-trigger
@@ -932,6 +1047,8 @@ const getStatusBadge = (status: string) => {
                       >
                         Return
                       </button>
+                    )}
+                      </>
                     )}
                   </>
                 ) : (
@@ -964,25 +1081,43 @@ const getStatusBadge = (status: string) => {
               </div>
               {isHospitalPharmacy && expandedDispenseOrders.has(invoice.id) && (
                 <div className="mt-4 space-y-2 border-t border-gray-200 dark:border-gray-600 pt-3">
-                  {(invoice.items || []).map((item) => (
+                  {(invoice.items || []).map((item) => {
+                    const returnStatus = getItemReturnStatus(item);
+                    const returnLabel = getItemReturnLabel(returnStatus);
+                    return (
                     <div
                       key={`${invoice.id}-${item.so_detail || item.item_code}`}
-                      className="flex justify-between gap-3 text-sm"
+                      className={`flex justify-between gap-3 text-sm rounded-md p-2 ${
+                        returnStatus === "full"
+                          ? "bg-purple-50 dark:bg-purple-900/20"
+                          : returnStatus === "partial"
+                            ? "bg-orange-50 dark:bg-orange-900/20"
+                            : ""
+                      }`}
                     >
                       <div className="min-w-0">
-                        <div className="font-medium text-gray-900 dark:text-white truncate">
-                          {item.item_name || item.name}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="font-medium text-gray-900 dark:text-white truncate">
+                            {item.item_name || item.name}
+                          </div>
+                          {returnLabel && (
+                            <span className={getItemReturnBadgeClass(returnStatus)}>{returnLabel}</span>
+                          )}
                         </div>
                         <div className="text-xs text-gray-500">
                           {item.item_code}
                           {item.batch_no ? ` · Batch ${item.batch_no}` : ""}
+                          {(item.returned_qty ?? 0) > 0 ? ` · Returned ${item.returned_qty}` : ""}
                         </div>
                       </div>
                       <div className="text-right text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                        {item.qty ?? item.quantity} × {formatCurrency(item.rate ?? 0, invoice.currency)}
+                        {isHospitalPharmacy
+                          ? (item.qty ?? item.quantity)
+                          : `${item.qty ?? item.quantity} × ${formatCurrency(item.rate ?? 0, invoice.currency)}`}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1128,7 +1263,9 @@ const getStatusBadge = (status: string) => {
 
   const handleGoToCart = async (invoice: SalesInvoice) => {
     try {
-      const success = await addDraftInvoiceToCart(invoice.id);
+      const success = invoice.isHeldDispense
+        ? await addHeldDispenseOrderToCart(invoice.id)
+        : await addDraftInvoiceToCart(invoice.id);
       if (success) {
         setShowEditOptions(false);
         setSelectedDraftInvoice(null);
@@ -1140,6 +1277,28 @@ const getStatusBadge = (status: string) => {
     } catch (error: any) {
       console.error("Error going to cart:", error);
       toast.error(error.message || "Failed to add items to cart");
+    }
+  };
+
+  const handleEditHeldDispenseClick = (invoice: SalesInvoice) => {
+    if (!invoice.isHeldDispense && invoice.status !== "Held") {
+      toast.error("Only held dispense orders can be edited");
+      return;
+    }
+    setSelectedDraftInvoice(invoice);
+    setShowEditOptions(true);
+  };
+
+  const handleDeleteHeldDispense = async (invoice: SalesInvoice) => {
+    try {
+      await deleteDraftHospitalSalesOrder(invoice.id);
+      if (getOriginalHeldDispenseOrderId() === invoice.id) {
+        clearHeldDispenseOrderCache();
+      }
+      toast.success(`Held order ${invoice.id} deleted successfully`);
+      refetch();
+    } catch (error: unknown) {
+      toast.error(extractErrorFromException(error, "Failed to delete held order"));
     }
   };
 
@@ -1659,7 +1818,11 @@ const getStatusBadge = (status: string) => {
               />
               <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Edit Draft Invoice</h2>
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {selectedDraftInvoice.isHeldDispense || selectedDraftInvoice.status === "Held"
+                      ? "Edit Held Order"
+                      : "Edit Draft Invoice"}
+                  </h2>
                   <button
                     onClick={handleCloseEditOptions}
                     className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
@@ -1668,12 +1831,16 @@ const getStatusBadge = (status: string) => {
                   </button>
                 </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
-                  Invoice: {selectedDraftInvoice.id}
+                  {selectedDraftInvoice.isHeldDispense || selectedDraftInvoice.status === "Held"
+                    ? `Order: ${selectedDraftInvoice.id}`
+                    : `Invoice: ${selectedDraftInvoice.id}`}
                 </p>
               </div>
               <div className="p-6">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-                  What would you like to do with this draft invoice?
+                  {selectedDraftInvoice.isHeldDispense || selectedDraftInvoice.status === "Held"
+                    ? "Resume this held dispense order in the cart."
+                    : "What would you like to do with this draft invoice?"}
                 </p>
                 <div className="space-y-3">
                   <button
@@ -1683,13 +1850,7 @@ const getStatusBadge = (status: string) => {
                     <ShoppingCart className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     <span className="font-medium text-blue-900 dark:text-blue-100">Go to Cart</span>
                   </button>
-                  {/* <button
-                    onClick={handleGoToPayment}
-                    className="w-full flex items-center justify-center space-x-3 p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-700 rounded-lg hover:bg-orange-100 dark:hover:bg-orange-900/40 transition-colors"
-                  >
-                    <FileText className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-                    <span className="font-medium text-orange-900 dark:text-orange-100">Submit Payment</span>
-                  </button> */}
+                  {!(selectedDraftInvoice.isHeldDispense || selectedDraftInvoice.status === "Held") && (
                   <button
                     onClick={() => handleSubmitDirect(selectedDraftInvoice)}
                     className="w-full flex items-center justify-center space-x-3 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors"
@@ -1697,6 +1858,7 @@ const getStatusBadge = (status: string) => {
                     <Check className="w-5 h-5 text-green-600 dark:text-green-400" />
                     <span className="font-medium text-green-900 dark:text-green-100">Submit</span>
                   </button>
+                  )}
                 </div>
               </div>
             </div>

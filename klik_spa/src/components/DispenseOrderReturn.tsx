@@ -6,6 +6,7 @@ import type { SalesInvoice } from "../../types";
 import { createDispenseReturn } from "../services/salesOrder";
 
 interface DispenseReturnLine {
+  line_key: string;
   item_code: string;
   item_name: string;
   so_detail?: string;
@@ -15,6 +16,15 @@ interface DispenseReturnLine {
   returned_qty: number;
   available_qty: number;
   return_qty: number;
+}
+
+function getDispenseLineKey(item: {
+  so_detail?: string;
+  dn_detail?: string;
+  item_code?: string;
+  id?: string;
+}) {
+  return item.dn_detail || item.so_detail || item.item_code || item.id || "";
 }
 
 interface DispenseOrderReturnProps {
@@ -44,6 +54,7 @@ export default function DispenseOrderReturn({
           item.available_qty ?? Math.max(0, qty - returnedQty)
         );
         return {
+          line_key: getDispenseLineKey(item),
           item_code: item.item_code || item.id,
           item_name: item.item_name || item.name,
           so_detail: item.so_detail,
@@ -60,10 +71,10 @@ export default function DispenseOrderReturn({
     setReturnItems(items);
   }, [isOpen, order]);
 
-  const handleReturnQtyChange = (itemCode: string, newQty: number) => {
+  const handleReturnQtyChange = (lineKey: string, newQty: number) => {
     setReturnItems((prev) =>
       prev.map((item) => {
-        if (item.item_code !== itemCode) return item;
+        if (item.line_key !== lineKey) return item;
         const validQty = Math.max(
           0,
           Math.min(Math.round(newQty * 1000) / 1000, item.available_qty)
@@ -86,7 +97,14 @@ export default function DispenseOrderReturn({
   const handleSubmitReturn = async () => {
     if (!order) return;
 
-    const itemsToReturn = returnItems.filter((item) => item.return_qty > 0);
+    const itemsToReturn = returnItems
+      .filter((item) => item.return_qty > 0)
+      .map((item) => ({
+        item_code: item.item_code,
+        so_detail: item.so_detail,
+        dn_detail: item.dn_detail,
+        return_qty: item.return_qty,
+      }));
     if (itemsToReturn.length === 0) {
       toast.error("Please select at least one item to return");
       return;
@@ -172,7 +190,7 @@ export default function DispenseOrderReturn({
               <div className="space-y-3">
                 {returnItems.map((item) => (
                   <div
-                    key={`${item.item_code}-${item.so_detail || item.dn_detail || ""}`}
+                    key={item.line_key}
                     className="flex items-center justify-between gap-4 p-3 rounded-lg border border-gray-200 dark:border-gray-700"
                   >
                     <div className="min-w-0 flex-1">
@@ -187,7 +205,7 @@ export default function DispenseOrderReturn({
                       <button
                         type="button"
                         onClick={() =>
-                          handleReturnQtyChange(item.item_code, item.return_qty - 1)
+                          handleReturnQtyChange(item.line_key, item.return_qty - 1)
                         }
                         className="w-8 h-8 rounded-md border border-gray-200 dark:border-gray-600 flex items-center justify-center"
                       >
@@ -201,7 +219,7 @@ export default function DispenseOrderReturn({
                         value={item.return_qty}
                         onChange={(e) =>
                           handleReturnQtyChange(
-                            item.item_code,
+                            item.line_key,
                             Number(e.target.value) || 0
                           )
                         }
@@ -210,7 +228,7 @@ export default function DispenseOrderReturn({
                       <button
                         type="button"
                         onClick={() =>
-                          handleReturnQtyChange(item.item_code, item.return_qty + 1)
+                          handleReturnQtyChange(item.line_key, item.return_qty + 1)
                         }
                         className="w-8 h-8 rounded-md border border-gray-200 dark:border-gray-600 flex items-center justify-center"
                       >

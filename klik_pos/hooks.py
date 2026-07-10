@@ -85,6 +85,11 @@ fixtures = [
      "Sales Order-custom_is_pos",
      "POS Profile-custom_print_delivery_receipt",
      "Sales Order-custom_internal_employee_dispensing",
+     "Sales Order-custom_pos_hold_data",
+     "Sales Order Item-custom_dosage",
+     "Sales Order Item-custom_prescription_frequency",
+     "Sales Order Item-custom_dispensing_lot",
+     "Sales Order Item-custom_batch",
      "Sales Invoice-custom_employee",
      "Sales Invoice-custom_internal_employee_dispensing",
 				),
@@ -94,10 +99,10 @@ fixtures = [
  {
 	 "doctype": "Delivery Channel",
 	"filters":[
-		
+
 	]
  }
- 
+
 ]
 
 doc_events = {
@@ -116,7 +121,7 @@ doc_events = {
 			"klik_pos.api.sales_invoice.finalize_paid_amount",
 			"klik_pos.api.delivery_compensation.create_compensation_for_sales_invoice",
 		],
-		
+
 		# "before_save": [
 		# 	"klik_pos.api.sales_invoice.sync_return_payments_before_save",
 		# ],

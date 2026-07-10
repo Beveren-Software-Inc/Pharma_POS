@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { CartItem, GiftCoupon } from '../../types'
 import type { Customer } from '../types/customer'
+import type { Patient } from '../services/patientService'
 import { toast } from 'react-toastify'
 import { clearDraftInvoiceCache } from '../utils/draftInvoiceCache'
 import { updateItemPricesForCustomer, getItemPriceForCustomer, applyPricingRulesToCart } from '../services/dynamicPricing'
@@ -48,12 +49,15 @@ function preserveBatchAndSerial(merged: CartItem[], currentCart: CartItem[]): Ca
 }
 
 // Helper to merge ERPNext pricing rule results (including free items) back into the POS cart
+function hasUserEditedRate(item: CartItem): boolean {
+  return !!(item as CartItem & { rate_edited?: boolean }).rate_edited;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mergePricingResultsWithFreeItems(baseCartItems: CartItem[], pricingResults: any[]): CartItem[] {
   // Update base items with discounts / pricing rule info
   const updatedBaseItems: CartItem[] = baseCartItems.map((item) => {
-    if ((item as CartItem & { is_pharmacy_service?: boolean; rate_edited?: boolean }).is_pharmacy_service
-      && (item as CartItem & { rate_edited?: boolean }).rate_edited) {
+    if (hasUserEditedRate(item)) {
       return item
     }
     const pricingRuleItem = pricingResults.find((pr) => pr.id === item.id)
@@ -113,6 +117,7 @@ interface CartState {
   cartItems: CartItem[]
   appliedCoupons: GiftCoupon[]
   selectedCustomer: Customer | null
+  selectedPatient: Patient | null
   /** Points to redeem at checkout (loyalty); null = not redeeming */
   redeemLoyaltyPoints: number | null
   /** General additional amount (e.g. syringe, misc charges) - only when POS allows */
@@ -132,6 +137,7 @@ interface CartState {
   applyCoupon: (coupon: GiftCoupon) => void
   removeCoupon: (couponCode: string) => void
   setSelectedCustomer: (customer: Customer | null) => Promise<void>
+  setSelectedPatient: (patient: Patient | null) => void
   setRedeemLoyaltyPoints: (points: number | null) => void
   setGeneralAdditionalAmount: (amount: number) => void
   setAdditionalRemark: (remark: string | null) => void
@@ -145,6 +151,7 @@ export const useCartStore = create<CartState>()(
       cartItems: [],
       appliedCoupons: [],
       selectedCustomer: null,
+      selectedPatient: null,
       redeemLoyaltyPoints: null,
       generalAdditionalAmount: 0,
       additionalRemark: null,
@@ -401,6 +408,7 @@ export const useCartStore = create<CartState>()(
           cartItems: [],
           appliedCoupons: [],
           selectedCustomer: null,
+          selectedPatient: null,
           redeemLoyaltyPoints: null,
           generalAdditionalAmount: 0,
           additionalRemark: null,
@@ -434,7 +442,7 @@ export const useCartStore = create<CartState>()(
       setSelectedCustomer: async (customer) => {
         set((state) => ({
           selectedCustomer: customer,
-          ...(customer ? {} : { redeemLoyaltyPoints: null })
+          ...(customer ? {} : { selectedPatient: null, redeemLoyaltyPoints: null }),
         }));
 
         // Apply pricing rules when customer changes (pricing rules can be customer-specific)
@@ -443,6 +451,8 @@ export const useCartStore = create<CartState>()(
           await state.updatePricesForCustomer(customer?.id);
         }
       },
+
+      setSelectedPatient: (patient) => set(() => ({ selectedPatient: patient })),
 
       updatePricesForCustomer: async (customerId) => {
         const state = get();
@@ -462,8 +472,7 @@ export const useCartStore = create<CartState>()(
 
           // Update cart items with new base prices, but preserve existing price if UOM is set and price seems correct
           let updatedItems = baseCartItems.map(item => {
-            if ((item as CartItem & { is_pharmacy_service?: boolean; rate_edited?: boolean }).is_pharmacy_service
-              && (item as CartItem & { rate_edited?: boolean }).rate_edited) {
+            if (hasUserEditedRate(item)) {
               return item;
             }
             const priceUpdate = priceUpdates[item.id];

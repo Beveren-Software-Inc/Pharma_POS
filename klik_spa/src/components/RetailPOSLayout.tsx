@@ -17,6 +17,7 @@ import { useCartStore } from "../stores/cartStore"
 import { toast } from "react-toastify"
 import { getItemPriceForCustomer } from "../services/dynamicPricing"
 import { findLastCartLineForItem, getCartLineUpdateId } from "../utils/duplicateCartItems"
+import { resolveHospitalCartUom } from "../utils/hospitalCartUom"
 
 export default function RetailPOSLayout() {
   const [selectedCategory, setSelectedCategory] = useState("all")
@@ -58,15 +59,24 @@ export default function RetailPOSLayout() {
     posDetails?.custom_is_pharmacy === true ||
     posDetails?.custom_is_pharmacy === "1"
 
+  const isHospitalPharmacy =
+    posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1"
+
   const pharmacyDefaultUom =
     typeof posDetails?.custom_pharmacy_default_uom === "string"
       ? posDetails.custom_pharmacy_default_uom.trim()
       : ""
 
-  const resolveUomForCart = (item: MenuItem) => {
+  const resolveUomForCart = useCallback(async (item: MenuItem): Promise<string> => {
+    const fallback = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : (item.uom || "")
+    if (isHospitalPharmacy) {
+      return resolveHospitalCartUom(item.id, fallback || item.uom)
+    }
     if (isPharmacy && pharmacyDefaultUom) return pharmacyDefaultUom
-    return item.uom
-  }
+    return item.uom || fallback
+  }, [isHospitalPharmacy, isPharmacy, pharmacyDefaultUom])
 
   // Use media query to detect mobile/tablet screens
   const isMobile = useMediaQuery("(max-width: 1024px)")
@@ -143,10 +153,10 @@ export default function RetailPOSLayout() {
         id: existingItem.id,
       };
     }
-    const uomToUse = resolveUomForCart(item)
+    const uomToUse = await resolveUomForCart(item)
     let priceToUse = item.price
-    if (isPharmacy && pharmacyDefaultUom && !selectedCustomer && pharmacyDefaultUom !== item.uom) {
-      const priceInfo = await getItemPriceForCustomer(item.id, undefined, pharmacyDefaultUom)
+    if ((isPharmacy || isHospitalPharmacy) && uomToUse && uomToUse !== item.uom && !selectedCustomer) {
+      const priceInfo = await getItemPriceForCustomer(item.id, undefined, uomToUse)
       if (priceInfo?.success && priceInfo.price > 0) {
         priceToUse = priceInfo.price
       }
@@ -169,13 +179,13 @@ export default function RetailPOSLayout() {
       updateQuantity(lineId, quantity);
     }
     return added ? { cartLineId: (added as { cartLineId?: string }).cartLineId, id: added.id } : undefined
-  }, [cartItems, updateQuantity, addToCart, isPharmacy, pharmacyDefaultUom, selectedCustomer])
+  }, [cartItems, updateQuantity, addToCart, isPharmacy, isHospitalPharmacy, selectedCustomer, resolveUomForCart])
 
   // Separate function for adding items to cart (used by both click and barcode). Returns a Promise so barcode scanner can wait for add before dispatching batch/serial.
-  const addItemToCart = (
+  const addItemToCart = async (
     item: MenuItem,
     options?: { forceNewLine?: boolean }
-  ): void | Promise<unknown> => {
+  ): Promise<void | { cartLineId?: string; id: string }> => {
     if (!options?.forceNewLine) {
       const existingItem = findLastCartLineForItem(cartItems, item.id);
 
@@ -184,42 +194,42 @@ export default function RetailPOSLayout() {
         return;
       }
     }
-    const uomToUse = resolveUomForCart(item)
-    const shouldFetchPrice = isPharmacy && pharmacyDefaultUom && !selectedCustomer && pharmacyDefaultUom !== item.uom
+    const uomToUse = await resolveUomForCart(item)
+    const shouldFetchPrice =
+      (isPharmacy || isHospitalPharmacy) && uomToUse && uomToUse !== item.uom && !selectedCustomer
 
     if (shouldFetchPrice) {
-      return getItemPriceForCustomer(item.id, undefined, pharmacyDefaultUom)
-        .then((priceInfo) => {
-          const priceToUse = (priceInfo?.success && priceInfo.price > 0) ? priceInfo.price : item.price
-          return addToCart({
-            id: item.id,
-            name: item.name,
-            category: item.category,
-            price: priceToUse,
-            image: item.image,
-            available: item.available,
-            uom: uomToUse,
-            item_code: item.id,
-            item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
-            has_serial_no: item.has_serial_no,
-            has_batch_no: item.has_batch_no,
-          })
+      try {
+        const priceInfo = await getItemPriceForCustomer(item.id, undefined, uomToUse)
+        const priceToUse = (priceInfo?.success && priceInfo.price > 0) ? priceInfo.price : item.price
+        return addToCart({
+          id: item.id,
+          name: item.name,
+          category: item.category,
+          price: priceToUse,
+          image: item.image,
+          available: item.available,
+          uom: uomToUse,
+          item_code: item.id,
+          item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
+          has_serial_no: item.has_serial_no,
+          has_batch_no: item.has_batch_no,
         })
-        .catch(() => {
-          return addToCart({
-            id: item.id,
-            name: item.name,
-            category: item.category,
-            price: item.price,
-            image: item.image,
-            available: item.available,
-            uom: uomToUse,
-            item_code: item.id,
-            item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
-            has_serial_no: item.has_serial_no,
-            has_batch_no: item.has_batch_no,
-          })
+      } catch {
+        return addToCart({
+          id: item.id,
+          name: item.name,
+          category: item.category,
+          price: item.price,
+          image: item.image,
+          available: item.available,
+          uom: uomToUse,
+          item_code: item.id,
+          item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
+          has_serial_no: item.has_serial_no,
+          has_batch_no: item.has_batch_no,
         })
+      }
     }
     return addToCart({
       id: item.id,

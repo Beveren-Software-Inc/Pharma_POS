@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { formatCurrency } from "../utils/currency";
 import { usePOSDetails } from "../hooks/usePOSProfile";
@@ -22,9 +22,11 @@ import {
 } from "lucide-react";
 
 import InvoiceViewModal from "../components/InvoiceViewModal";
+import DispenseVisitTypeBadge from "../components/DispenseVisitTypeBadge";
 import SingleInvoiceReturn from "../components/SingleInvoiceReturn";
 import type { SalesInvoice } from "../../types";
 import { useCustomerInvoices } from "../hooks/useCustomerInvoices";
+import { usePosDispenseHistory } from "../hooks/usePosDispenseHistory";
 import { toast } from "react-toastify";
 import { extractErrorFromException } from "../utils/errorExtraction";
 import { createSalesReturn, submitDraftInvoice } from "../services/salesInvoice";
@@ -36,6 +38,16 @@ import { isToday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
 import AddCustomerModal from "../components/AddCustomerModal";
 import BottomNavigation from "../components/BottomNavigation";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { getPartyLabels } from "../utils/partyLabels";
+import PatientDocumentsSection from "../components/PatientDocumentsSection";
+import {
+  getPatientDisplayName,
+  getPatientFileNo,
+  getPatientDocuments,
+  resolvePatientForCustomer,
+  type Patient,
+  type PatientUploadDocument,
+} from "../services/patientService";
 
 export default function CustomerDetailsPage() {
   const navigate = useNavigate();
@@ -62,8 +74,93 @@ export default function CustomerDetailsPage() {
   const { id: customerId } = useParams();
   // @ts-expect-error just ignore
   const { customer, isLoadingC, errorC } = useCustomerDetails(customerId);
-  const { invoices, isLoading, error, hasMore, totalLoaded, loadMore } = useCustomerInvoices(customer?.name || "");
   const { posDetails } = usePOSDetails();
+  const isHospitalPharmacy =
+    posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1";
+  const party = getPartyLabels(isHospitalPharmacy);
+
+  const [resolvedPatient, setResolvedPatient] = useState<Patient | null>(null);
+  const [patientDocuments, setPatientDocuments] = useState<PatientUploadDocument[]>([]);
+  const [loadingPatientDetails, setLoadingPatientDetails] = useState(false);
+
+  const retailInvoicesHook = useCustomerInvoices(
+    !isHospitalPharmacy ? customer?.id || customer?.name || "" : ""
+  );
+  const dispenseHistoryHook = usePosDispenseHistory(
+    isHospitalPharmacy && customer ? (customer.id || customer.name) : "",
+    undefined,
+    isHospitalPharmacy && Boolean(customer?.id || customer?.name)
+  );
+
+  const {
+    invoices,
+    isLoading,
+    error,
+    hasMore,
+    totalLoaded,
+    loadMore,
+  } = isHospitalPharmacy ? dispenseHistoryHook : retailInvoicesHook;
+
+  useEffect(() => {
+    if (!isHospitalPharmacy || !customer) {
+      setResolvedPatient(null);
+      setPatientDocuments([]);
+      return;
+    }
+
+    const customerKey = customer.id || (customer as { name?: string }).name || "";
+    if (!customerKey) {
+      setResolvedPatient(null);
+      setPatientDocuments([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadPatientDetails = async () => {
+      setLoadingPatientDetails(true);
+      try {
+        let patient = await resolvePatientForCustomer(customerKey);
+        if (!patient && customer.name && customer.name !== customerKey) {
+          patient = await resolvePatientForCustomer(customer.name);
+        }
+
+        const docResult = await getPatientDocuments(customerKey, { byCustomer: true });
+        if (!patient && docResult.patient) {
+          patient = await resolvePatientForCustomer(docResult.patient);
+        }
+
+        if (cancelled) return;
+        setResolvedPatient(patient);
+        setPatientDocuments(docResult.documents);
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to load patient details:", err);
+          setPatientDocuments([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingPatientDetails(false);
+        }
+      }
+    };
+
+    void loadPatientDetails();
+    return () => {
+      cancelled = true;
+    };
+  }, [isHospitalPharmacy, customer?.id, customer?.name]);
+
+  const displayName =
+    isHospitalPharmacy && resolvedPatient
+      ? getPatientDisplayName(resolvedPatient)
+      : customer?.customer_name || customer?.name || "";
+
+  const displayId =
+    isHospitalPharmacy && resolvedPatient
+      ? getPatientFileNo(resolvedPatient) || customer?.name || ""
+      : customer?.name || "";
 
 
   const filterInvoiceByDate = (invoiceDateStr: string) => {
@@ -91,8 +188,18 @@ export default function CustomerDetailsPage() {
   const customerInvoices = useMemo(() => {
     if (isLoading || error || !customer) return [];
 
+    const customerKey = customer.id || customer.name;
+    const customerDisplayName = customer.name || (customer as { customer_name?: string }).customer_name || customerKey;
+
     return invoices.filter((invoice) => {
-      // Invoices are already filtered by customer in the hook, so we only apply other filters
+      if (isHospitalPharmacy) {
+        const matchesParty =
+          invoice.customer === customerKey ||
+          invoice.customer === customerDisplayName ||
+          (invoice.customer_name || "").toLowerCase() === customerDisplayName.toLowerCase();
+        if (!matchesParty) return false;
+      }
+
       const matchesSearch =
         searchQuery === "" ||
         invoice.id.toLowerCase().includes(searchQuery.toLowerCase());
@@ -103,7 +210,16 @@ export default function CustomerDetailsPage() {
 
       return matchesSearch && matchesStatus && matchesDate;
     });
-  }, [invoices, searchQuery, statusFilter, dateFilter, isLoading, error, customer]);
+  }, [
+    invoices,
+    searchQuery,
+    statusFilter,
+    dateFilter,
+    isLoading,
+    error,
+    customer,
+    isHospitalPharmacy,
+  ]);
 
   // Debug log for filtered results
   console.log('CustomerPageDetails: Filtered customer invoices:', {
@@ -311,7 +427,7 @@ export default function CustomerDetailsPage() {
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-beveren-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600 dark:text-gray-300">Loading customer details...</p>
+          <p className="mt-4 text-gray-600 dark:text-gray-300">{party.loadingDetails}</p>
         </div>
       </div>
     );
@@ -322,9 +438,9 @@ export default function CustomerDetailsPage() {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="bg-red-50 dark:bg-red-900/20 p-6 rounded-lg max-w-md">
-          <h3 className="text-lg font-medium text-red-800 dark:text-red-200">Error loading customer</h3>
+          <h3 className="text-lg font-medium text-red-800 dark:text-red-200">{party.errorLoading}</h3>
           <p className="mt-2 text-sm text-red-700 dark:text-red-300">
-            {errorC?.message || "Failed to load customer details"}
+            {errorC?.message || `Failed to load ${party.lower} details`}
           </p>
           <button
             onClick={() => navigate(-1)}
@@ -342,9 +458,9 @@ export default function CustomerDetailsPage() {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="bg-yellow-50 dark:bg-yellow-900/20 p-6 rounded-lg max-w-md">
-          <h3 className="text-lg font-medium text-yellow-800 dark:text-yellow-200">Customer not found</h3>
+          <h3 className="text-lg font-medium text-yellow-800 dark:text-yellow-200">{party.notFound}</h3>
           <p className="mt-2 text-sm text-yellow-700 dark:text-yellow-300">
-            The requested customer could not be found.
+            {party.notFoundMessage}
           </p>
           <button
             onClick={() => navigate(-1)}
@@ -374,11 +490,10 @@ export default function CustomerDetailsPage() {
                 </button>
                 <div>
                   <h1 className="text-lg font-bold text-gray-900 dark:text-white">
-                                          {/* @ts-expect-error just ignore */}
-                    {customer.customer_name || customer.name}
+                    {displayName}
                   </h1>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
-                    Customer ID: {customer.name}
+                    {party.idLabel}: {displayId}
                   </p>
                 </div>
               </div>
@@ -391,7 +506,7 @@ export default function CustomerDetailsPage() {
                 className="flex items-center space-x-2 px-3 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors text-sm"
               >
                 <Edit className="w-4 h-4" />
-                <span>Edit</span>
+                <span>{party.edit}</span>
               </button>
             </div>
           </div>
@@ -408,8 +523,7 @@ export default function CustomerDetailsPage() {
                 </div>
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                                          {/* @ts-expect-error just ignore */}
-                    {customer.customer_name || customer.name}
+                    {displayName}
                   </h2>
                   <div className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
                     <div className="flex items-center space-x-1">
@@ -436,11 +550,11 @@ export default function CustomerDetailsPage() {
           </div>
 
           {/* Metrics Cards */}
-          <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className={`grid gap-3 mb-4 ${isHospitalPharmacy ? "grid-cols-1" : "grid-cols-2"}`}>
             <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Total Invoices</p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400">{party.totalOrdersLabel}</p>
                   <p className="text-lg font-bold text-gray-900 dark:text-white">
                     {customerMetrics.totalInvoices}
                   </p>
@@ -449,6 +563,8 @@ export default function CustomerDetailsPage() {
               </div>
             </div>
 
+            {!isHospitalPharmacy && (
+              <>
             <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
               <div className="flex items-center justify-between">
                 <div>
@@ -484,7 +600,17 @@ export default function CustomerDetailsPage() {
                 <TrendingUp className="w-6 h-6 text-blue-600" />
               </div>
             </div>
+              </>
+            )}
           </div>
+
+          {isHospitalPharmacy && (
+            <PatientDocumentsSection
+              documents={patientDocuments}
+              loading={loadingPatientDetails}
+              className="mb-4"
+            />
+          )}
 
           {/* Filters */}
           <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 mb-4">
@@ -493,7 +619,7 @@ export default function CustomerDetailsPage() {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
                 <input
                   type="text"
-                  placeholder="Search invoices..."
+                  placeholder={party.searchOrdersPlaceholder}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -529,11 +655,11 @@ export default function CustomerDetailsPage() {
             </div>
           </div>
 
-          {/* Customer Invoices Table */}
+          {/* Orders / Invoices Table */}
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                Customer Invoices ({customerInvoices.length})
+                {party.invoicesSection} ({customerInvoices.length})
               </h3>
             </div>
             <div className="overflow-x-auto">
@@ -541,11 +667,13 @@ export default function CustomerDetailsPage() {
                 <thead className="bg-gray-50 dark:bg-gray-700">
                   <tr>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      Invoice
+                      {party.orderColumn}
                     </th>
+                    {!isHospitalPharmacy && (
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Amount
                     </th>
+                    )}
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Status
                     </th>
@@ -557,8 +685,8 @@ export default function CustomerDetailsPage() {
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
                   {customerInvoices.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
-                        No invoices found for this customer
+                      <td colSpan={isHospitalPharmacy ? 3 : 4} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+                        {party.noOrdersMessage}
                       </td>
                     </tr>
                   ) : (
@@ -566,17 +694,27 @@ export default function CustomerDetailsPage() {
                       <tr key={invoice.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                         <td className="px-4 py-3 whitespace-nowrap">
                           <div>
-                            <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                            <div className="flex items-center gap-2">
+                              <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                              {isHospitalPharmacy && (
+                                <DispenseVisitTypeBadge
+                                  visitType={invoice.visitType}
+                                  referenceType={invoice.customReferenceType}
+                                />
+                              )}
+                            </div>
                             <div className="text-xs text-gray-500 dark:text-gray-400">
                               {invoice.date} {invoice.time}
                             </div>
                           </div>
                         </td>
+                        {!isHospitalPharmacy && (
                         <td className="px-4 py-3 whitespace-nowrap">
                           <div className="text-sm font-medium text-gray-900 dark:text-white">
                             {formatCurrency(invoice.totalAmount, invoice.currency)}
                           </div>
                         </td>
+                        )}
                         <td className="px-4 py-3 whitespace-nowrap">
                           <span className={getStatusBadge(invoice.status)}>{invoice.status}</span>
                         </td>
@@ -644,7 +782,7 @@ export default function CustomerDetailsPage() {
           {!hasMore && totalLoaded > 0 && (
             <div className="text-center mt-4 py-2">
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                All {totalLoaded} customer invoices loaded
+                All {totalLoaded} {isHospitalPharmacy ? "dispense orders" : "customer invoices"} loaded
               </p>
             </div>
           )}
@@ -711,11 +849,10 @@ export default function CustomerDetailsPage() {
                 </button>
                 <div>
                   <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-                                          {/* @ts-expect-error just ignore */}
-                    {customer.customer_name || customer.name}
+                    {displayName}
                   </h1>
                   <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Customer ID: {customer.name}
+                    {party.idLabel}: {displayId}
                   </p>
                 </div>
               </div>
@@ -728,7 +865,7 @@ export default function CustomerDetailsPage() {
                 className="flex items-center space-x-2 px-4 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
               >
                 <Edit className="w-4 h-4" />
-                <span>Update Customer</span>
+                <span>{party.update}</span>
               </button>
             </div>
           </div>
@@ -745,8 +882,7 @@ export default function CustomerDetailsPage() {
                   </div>
                   <div className="space-y-1">
                     <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-                                            {/* @ts-expect-error just ignore */}
-                      {customer.customer_name || customer.name}
+                      {displayName}
                     </h2>
                     <div className="flex items-center space-x-4 text-sm text-gray-600 dark:text-gray-400">
                       <div className="flex items-center space-x-1">
@@ -763,10 +899,10 @@ export default function CustomerDetailsPage() {
                       <span>{customer.territory || "No territory specified"}</span>
                     </div>
                     <div className="text-sm text-gray-600 dark:text-gray-400">
-                      <span>Customer Group: {customer.customer_group}</span>
+                      <span>{party.groupLabel}: {customer.customer_group}</span>
                     </div>
                     <div className="text-sm text-gray-600 dark:text-gray-400">
-                      <span>Type: {customer.type}</span>
+                      <span>{party.typeLabel}: {customer.type}</span>
                     </div>
                   </div>
                 </div>
@@ -801,11 +937,11 @@ export default function CustomerDetailsPage() {
             </div>
 
             {/* Metrics Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+            <div className={`grid grid-cols-1 gap-6 mb-6 ${isHospitalPharmacy ? "md:grid-cols-1" : "md:grid-cols-4"}`}>
               <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Total Invoices</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">{party.totalOrdersLabel}</p>
                     <p className="text-2xl font-bold text-gray-900 dark:text-white">
                       {customerMetrics.totalInvoices}
                     </p>
@@ -814,6 +950,8 @@ export default function CustomerDetailsPage() {
                 </div>
               </div>
 
+              {!isHospitalPharmacy && (
+                <>
               <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between">
                   <div>
@@ -849,7 +987,17 @@ export default function CustomerDetailsPage() {
                   <TrendingUp className="w-8 h-8 text-blue-600" />
                 </div>
               </div>
+                </>
+              )}
             </div>
+
+            {isHospitalPharmacy && (
+              <PatientDocumentsSection
+                documents={patientDocuments}
+                loading={loadingPatientDetails}
+                className="mb-6"
+              />
+            )}
 
             {/* Filters */}
             <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 mb-6">
@@ -858,7 +1006,7 @@ export default function CustomerDetailsPage() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
                   <input
                     type="text"
-                    placeholder="Search invoices..."
+                    placeholder={party.searchOrdersPlaceholder}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -892,11 +1040,11 @@ export default function CustomerDetailsPage() {
               </div>
             </div>
 
-            {/* Customer Invoices Table */}
+            {/* Orders / Invoices Table */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Customer Invoices ({customerInvoices.length})
+                  {party.invoicesSection} ({customerInvoices.length})
                 </h3>
               </div>
               <div className="overflow-x-auto">
@@ -904,10 +1052,10 @@ export default function CustomerDetailsPage() {
                   <thead className="bg-gray-50 dark:bg-gray-700">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Invoice
+                        {party.orderColumn}
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Customer
+                        {party.tablePartyColumn}
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Cashier
@@ -915,9 +1063,11 @@ export default function CustomerDetailsPage() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Payment
                       </th>
+                      {!isHospitalPharmacy && (
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Amount
                       </th>
+                      )}
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Status
                       </th>
@@ -934,8 +1084,8 @@ export default function CustomerDetailsPage() {
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
                     {customerInvoices.length === 0 ? (
                       <tr>
-                        <td colSpan={posDetails?.is_zatca_enabled ? 8 : 7} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
-                          No invoices found for this customer
+                        <td colSpan={isHospitalPharmacy ? (posDetails?.is_zatca_enabled ? 7 : 6) : (posDetails?.is_zatca_enabled ? 8 : 7)} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
+                          {party.noOrdersMessage}
                         </td>
                       </tr>
                     ) : (
@@ -943,7 +1093,15 @@ export default function CustomerDetailsPage() {
                         <tr key={invoice.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div>
-                              <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                              <div className="flex items-center gap-2">
+                                <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                                {isHospitalPharmacy && (
+                                  <DispenseVisitTypeBadge
+                                    visitType={invoice.visitType}
+                                    referenceType={invoice.customReferenceType}
+                                  />
+                                )}
+                              </div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">
                                 {invoice.date} {invoice.time}
                               </div>
@@ -958,6 +1116,7 @@ export default function CustomerDetailsPage() {
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span className="text-sm text-gray-900 dark:text-white">{invoice.paymentMethod}</span>
                           </td>
+                          {!isHospitalPharmacy && (
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm font-medium text-gray-900 dark:text-white">
                               {formatCurrency(invoice.totalAmount, invoice.currency)}
@@ -968,6 +1127,7 @@ export default function CustomerDetailsPage() {
                               </div>
                             )}
                           </td>
+                          )}
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span className={getStatusBadge(invoice.status)}>{invoice.status}</span>
                           </td>
@@ -1032,7 +1192,7 @@ export default function CustomerDetailsPage() {
                     <span>Loading...</span>
                   </div>
                 ) : (
-                  `Load More Customer Invoices (${totalLoaded} loaded)`
+                  `Load More (${totalLoaded} loaded)`
                 )}
               </button>
             </div>
@@ -1042,7 +1202,7 @@ export default function CustomerDetailsPage() {
           {!hasMore && totalLoaded > 0 && (
             <div className="text-center mt-6 py-4">
               <p className="text-gray-600 dark:text-gray-400">
-                All {totalLoaded} customer invoices loaded
+                All {totalLoaded} {isHospitalPharmacy ? "dispense orders" : "customer invoices"} loaded
               </p>
             </div>
           )}

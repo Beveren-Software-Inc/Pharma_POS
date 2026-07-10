@@ -3,6 +3,10 @@
 import { useEffect, useRef, useCallback } from "react"
 import ProductCard from "./ProductCard"
 import ProductLineView from "./ProductLineView"
+import PharmacyItemDetailsModal from "./PharmacyItemDetailsModal"
+import { usePOSDetails } from "../hooks/usePOSProfile"
+import { useItemHoverTooltip } from "../hooks/useItemHoverTooltip"
+import { itemHasBatchNo } from "../utils/batch"
 import type { MenuItem } from "../../types"
 
 interface ProductGridProps {
@@ -30,6 +34,36 @@ export default function ProductGrid({
   totalCount = 0,
 }: ProductGridProps) {
   const loadMoreRef = useRef<HTMLDivElement>(null)
+  const { posDetails } = usePOSDetails()
+  const isPharmacy =
+    posDetails?.custom_is_pharmacy === 1 ||
+    posDetails?.custom_is_pharmacy === true ||
+    posDetails?.custom_is_pharmacy === "1"
+  const {
+    hoverItem,
+    showTooltip,
+    itemShowsHoverTooltip,
+    openHoverTooltip,
+    closeHoverTooltip,
+    dismissHoverTooltip,
+  } = useItemHoverTooltip(isPharmacy)
+
+  const hoverModal =
+    hoverItem && (
+      <PharmacyItemDetailsModal
+        isOpen={showTooltip}
+        onClose={dismissHoverTooltip}
+        itemName={hoverItem.name}
+        itemCode={hoverItem.id}
+        hasBatchNo={itemHasBatchNo(hoverItem)}
+        custom_strength={(hoverItem as MenuItem & { custom_strength?: string }).custom_strength}
+        custom_pharmaceutical_form={(hoverItem as MenuItem & { custom_pharmaceutical_form?: string }).custom_pharmaceutical_form}
+        custom_number_of_pack={(hoverItem as MenuItem & { custom_number_of_pack?: number }).custom_number_of_pack}
+        custom_pack_size={(hoverItem as MenuItem & { custom_pack_size?: string }).custom_pack_size}
+        custom_route_of_administration={(hoverItem as MenuItem & { custom_route_of_administration?: string }).custom_route_of_administration}
+        position="center"
+      />
+    )
 
   // Intersection Observer for infinite scroll
   const handleObserver = useCallback((entries: IntersectionObserverEntry[]) => {
@@ -64,8 +98,6 @@ export default function ProductGrid({
     return (
       <div className="flex flex-col">
         <ProductLineView items={items} onAddToCart={onAddToCart} isMobile={isMobile} scannerOnly={scannerOnly} />
-
-        {/* Load more trigger and indicator */}
         {onLoadMore && (
           <div ref={loadMoreRef} className="py-4 flex justify-center">
             {isLoadingMore && (
@@ -113,9 +145,19 @@ export default function ProductGrid({
         }`}
       >
         {items.map((item) => (
-          <ProductCard key={item.id} item={item} onAddToCart={onAddToCart} isMobile={isMobile} scannerOnly={scannerOnly} />
+          <ProductCard
+            key={item.id}
+            item={item}
+            onAddToCart={onAddToCart}
+            isMobile={isMobile}
+            scannerOnly={scannerOnly}
+            enableHoverTooltip={itemShowsHoverTooltip(item)}
+            onHoverStart={() => openHoverTooltip(item)}
+            onHoverEnd={closeHoverTooltip}
+          />
         ))}
       </div>
+      {hoverModal}
 
       {/* Load more trigger and indicator */}
       {onLoadMore && (

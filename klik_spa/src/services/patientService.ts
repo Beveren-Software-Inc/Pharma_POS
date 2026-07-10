@@ -86,6 +86,8 @@ export interface InpatientMedicationOrder {
   items: InpatientMedicationOrderItem[];
   custom_reference_type?: string;
   custom_reference_name?: string;
+  visit_type?: "OP" | "IP";
+  after_discharge?: number | boolean;
 }
 
 export interface ItemAlternativeOption {
@@ -303,12 +305,60 @@ export interface PatientWarningMessage {
   warning_message_type?: string;
 }
 
+export interface PatientUploadDocument {
+  name?: string;
+  file_name?: string;
+  document_name?: string;
+  document_type?: string;
+  transaction_no?: string;
+  upload_remarks?: string;
+  document?: string;
+}
+
 export interface PatientHistorySummary {
   patient: Record<string, string | number | null | undefined>;
   visits: Array<Record<string, string | number | null | undefined>>;
   medication_orders: InpatientMedicationOrder[];
   diagnosis_entries?: PatientDiagnosisEntry[];
   warning_messages?: PatientWarningMessage[];
+  patient_documents?: PatientUploadDocument[];
+}
+
+export async function getPatientDocuments(
+  customerOrPatient: string,
+  opts?: { byCustomer?: boolean }
+): Promise<{ patient: string | null; documents: PatientUploadDocument[] }> {
+  try {
+    const params = new URLSearchParams();
+    if (opts?.byCustomer) {
+      params.set("customer", customerOrPatient);
+    } else {
+      params.set("patient", customerOrPatient);
+    }
+    const response = await fetch(
+      `/api/method/klik_pos.api.patient.get_patient_documents?${params.toString()}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to fetch patient documents");
+    }
+    const message = data?.message;
+    if (message?.success === false) {
+      throw new Error(message.message || "Failed to fetch patient documents");
+    }
+    return {
+      patient: message?.patient || null,
+      documents: message?.patient_documents || [],
+    };
+  } catch (error) {
+    console.error("Error fetching patient documents:", error);
+    return { patient: null, documents: [] };
+  }
 }
 
 export async function getPatientHistorySummary(patient: string, limit = 10): Promise<PatientHistorySummary | null> {

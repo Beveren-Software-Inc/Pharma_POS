@@ -98,8 +98,11 @@ export function usePosDispenseHistory(
                   so_detail: item.so_detail ? String(item.so_detail) : undefined,
                   dn_detail: item.dn_detail ? String(item.dn_detail) : undefined,
                   batch_no: item.batch_no ? String(item.batch_no) : undefined,
+                  return_status: item.return_status as SalesInvoiceItem["return_status"],
                 }))
               : [];
+
+            const apiStatus = row.status ? String(row.status) : DISPENSE_STATUS;
 
             return {
               id: String(row.name),
@@ -120,17 +123,29 @@ export function usePosDispenseHistory(
               payment_methods: [],
               amountPaid: 0,
               changeGiven: 0,
-              status: DISPENSE_STATUS,
+              status: apiStatus,
               refundAmount: 0,
-              notes: "",
+              notes: row.custom_remarks ? String(row.custom_remarks) : "",
               currency: String(row.currency || "USD"),
               posProfile: "",
               custom_pos_opening_entry: "",
               canReturn: Boolean(row.can_return),
               isPosDispense: true,
+              isHeldDispense: Boolean(row.is_held_dispense),
               deliveryNoteName: row.delivery_note_name
                 ? String(row.delivery_note_name)
                 : undefined,
+              returnedLineCount: Number(row.returned_line_count) || 0,
+              customReferenceType: row.custom_reference_type
+                ? String(row.custom_reference_type)
+                : undefined,
+              customReferenceName: row.custom_reference_name
+                ? String(row.custom_reference_name)
+                : undefined,
+              visitType:
+                row.visit_type === "OP" || row.visit_type === "IP"
+                  ? row.visit_type
+                  : undefined,
             } as SalesInvoice;
           }
         );
