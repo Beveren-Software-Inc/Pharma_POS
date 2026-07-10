@@ -107,10 +107,10 @@ const MEDICATION_LABEL_CSS = `
   @page { size: 2.299in 1.5in; margin: 0; }
   .label-page { width: 2.299in; height: 1.5in; padding: 5px; box-sizing: border-box; page-break-after: always; }
   .label-page:last-child { page-break-after: auto; }
-  .medication-label { width: 100%; height: 100%; border: 1px solid #000; padding: 5px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
-  .title { font-size: 8px; font-weight: 700; text-align: center; margin-bottom: 3px; }
-  .item { font-size: 8px; font-weight: 700; text-align: center; margin-bottom: 4px; }
-  .detail-row { font-size: 7px; line-height: 1.25; margin-bottom: 1px; }
+  .medication-label { width: 100%; height: 100%; border: 1px solid #000; padding: 4px 5px 5px 5px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-start; }
+  .title { font-size: 8px; font-weight: 700; text-align: center; margin: 0 0 4px 0; }
+  .item { font-size: 6px; font-weight: 700; text-align: center; margin: 0 0 4px 0; line-height: 1.15; }
+  .detail-row { font-size: 7px; line-height: 1.25; margin-bottom: 2px; }
 `;
 
 /** Shared cart line field styles — inputs and select triggers use the same size/spacing */
@@ -2601,17 +2601,12 @@ export default function OrderSummary({
 
 const pages = labels.map((label) => `
   <div class="label-page">
-    <div class="medication-label" style="
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-    ">
-      <div class="title" style="margin-bottom: 20px;">Medication Label</div>
-      <div class="item" style="margin-bottom: 15px;">${label.itemCode} - ${label.itemName}</div>
-      <div class="detail-row" style="margin-bottom: 8px;"><strong>Dosage:</strong> ${label.dosage}</div>
-      <div class="detail-row" style="margin-bottom: 8px;"><strong>Frequency:</strong> ${label.frequency}</div>
-      <div class="detail-row" style="margin-bottom: 8px;"><strong>Batch No:</strong> ${label.batchNo}</div>
+    <div class="medication-label">
+      <div class="title">Medication Label</div>
+      <div class="item">${label.itemCode} - ${label.itemName}</div>
+      <div class="detail-row"><strong>Dosage:</strong> ${label.dosage}</div>
+      <div class="detail-row"><strong>Frequency:</strong> ${label.frequency}</div>
+      <div class="detail-row"><strong>Batch No:</strong> ${label.batchNo}</div>
       <div class="detail-row"><strong>Expiry Date:</strong> ${label.expiryDate}</div>
     </div>
   </div>
