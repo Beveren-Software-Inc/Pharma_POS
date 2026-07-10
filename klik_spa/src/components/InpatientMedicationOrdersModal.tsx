@@ -2,7 +2,7 @@
 
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink } from "lucide-react";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package } from "lucide-react";
 import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument } from "../services/patientService";
 import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype, resolveMedicationItemCode, resolveMedicationDisplayName } from "../services/patientService";
 import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
@@ -491,14 +491,10 @@ function AlternativeDrugSelect({
   );
 }
 
-function formatMedicationQty(
-  item: ItemRow,
-  _hospitalMode?: boolean,
-  defaultUom?: string
-) {
+function formatMedicationQty(item: ItemRow) {
   if (item.quantity == null) return "—";
-  // Show the UOM saved on the medication order line; POS default is fallback only.
-  const uom = item.uom?.trim() || defaultUom?.trim() || "";
+  // Only show UOM when it exists on the medication order line (no POS default fallback).
+  const uom = item.uom?.trim() || "";
   return `${item.quantity}${uom ? ` ${uom}` : ""}`;
 }
 
@@ -515,7 +511,7 @@ function ItemsTable({
   onAlternativeChange,
   showDetailsOnHover,
   hospitalMode,
-  defaultUom,
+  defaultUom: _defaultUom,
 }: {
   items: ItemRow[];
   selectable?: boolean;
@@ -587,7 +583,7 @@ function ItemsTable({
                   {item.dosage || "—"}
                  </td>
                 <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {formatMedicationQty(item, hospitalMode, defaultUom)}
+                  {formatMedicationQty(item)}
                  </td>
                 <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                   {item.patient_frequency || "—"}
@@ -678,7 +674,7 @@ export default function InpatientMedicationOrdersModal({
   patientHistory = null,
   productAvailability = {},
 }: InpatientMedicationOrdersModalProps) {
-  const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history">("pending");
+  const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history" | "legacy_dispensed">("pending");
   const [alternativeDrugs, setAlternativeDrugs] = useState<Record<string, string>>({});
   const [alternativeDrugLabels, setAlternativeDrugLabels] = useState<Record<string, string>>({});
   const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
@@ -786,6 +782,7 @@ export default function InpatientMedicationOrdersModal({
     { id: "visit" as const, label: "Patient Visit", count: null, icon: UserPlus },
     { id: "history" as const, label: "Prescription History", count: historyOrders.length, icon: Clock },
     { id: "patient_history" as const, label: "Patient History", count: null, icon: History },
+    { id: "legacy_dispensed" as const, label: "Legacy Dispensed Medicine", count: null, icon: Package },
   ];
 
   return (
@@ -1312,6 +1309,14 @@ export default function InpatientMedicationOrdersModal({
             </div>
           )}
 
+          {/* ── LEGACY DISPENSED MEDICINE ── */}
+          {isHospitalMode && activeTab === "legacy_dispensed" && (
+            <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+              <Package size={40} className="mb-3 opacity-30" />
+              <p className="text-sm font-medium">Coming soon</p>
+            </div>
+          )}
+
           {/* ── VISIT ── */}
           {isHospitalMode && activeTab === "visit" && (
             <div className="max-w-lg mx-auto py-6 space-y-4">
@@ -1402,6 +1407,8 @@ export default function InpatientMedicationOrdersModal({
               ? `${selectedHistoryItems.size} item(s) selected`
               : activeTab === "patient_history"
               ? "Diagnosis, visits, warnings and allergies"
+              : activeTab === "legacy_dispensed"
+              ? "Legacy dispensed medicine — coming soon"
               : lastCreatedVisit?.name
               ? "Visit created — used when you dispense"
               : "Create a new encounter above"}
