@@ -14,6 +14,7 @@ import BottomNavigation from "./BottomNavigation"
 import type { MenuItem, CartItem } from "../../types"
 import { getItemPriceForCustomer } from "../services/dynamicPricing"
 import { findLastCartLineForItem, getCartLineUpdateId } from "../utils/duplicateCartItems"
+import { resolveHospitalCartUom } from "../utils/hospitalCartUom"
 
 interface MobilePOSLayoutProps {
   items: MenuItem[]
@@ -114,6 +115,11 @@ export default function MobilePOSLayout({
     posDetails?.custom_is_pharmacy === true ||
     posDetails?.custom_is_pharmacy === "1"
 
+  const isHospitalPharmacy =
+    posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1"
+
   const pharmacyDefaultUom =
     typeof posDetails?.custom_pharmacy_default_uom === "string"
       ? posDetails.custom_pharmacy_default_uom.trim()
@@ -128,11 +134,14 @@ export default function MobilePOSLayout({
       return
     }
 
-    const uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : item.uom
+    let uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : (item.uom || "")
+    if (isHospitalPharmacy) {
+      uomToUse = await resolveHospitalCartUom(item.id, uomToUse || item.uom)
+    }
     let priceToUse = item.price
 
-    if (isPharmacy && pharmacyDefaultUom && !selectedCustomer && pharmacyDefaultUom !== item.uom) {
-      const priceInfo = await getItemPriceForCustomer(item.id, undefined, pharmacyDefaultUom)
+    if ((isPharmacy || isHospitalPharmacy) && uomToUse && uomToUse !== item.uom && !selectedCustomer) {
+      const priceInfo = await getItemPriceForCustomer(item.id, undefined, uomToUse)
       if (priceInfo?.success && priceInfo.price > 0) {
         priceToUse = priceInfo.price
       }

@@ -1,8 +1,9 @@
 "use client"
 
 // import { useI18n } from "../hooks/useI18n"
-import { useState, useEffect, useRef } from "react"
 import { usePOSDetails } from "../hooks/usePOSProfile"
+import { useItemHoverTooltip } from "../hooks/useItemHoverTooltip"
+import { itemHasBatchNo } from "../utils/batch"
 import PharmacyItemDetailsModal from "./PharmacyItemDetailsModal"
 import type { MenuItem } from "../../types"
 
@@ -16,26 +17,17 @@ interface ProductLineViewProps {
 export default function ProductLineView({ items, onAddToCart, isMobile = false, scannerOnly = false }: ProductLineViewProps) {
   // const { t } = useI18n()
   const { posDetails } = usePOSDetails()
-  const [showPharmacyModal, setShowPharmacyModal] = useState(false)
-  const [selectedPharmacyItem, setSelectedPharmacyItem] = useState<MenuItem | null>(null)
-  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  
-  // Check if pharmacy mode is enabled
   const isPharmacy = posDetails?.custom_is_pharmacy === 1 ||
                      posDetails?.custom_is_pharmacy === true ||
                      posDetails?.custom_is_pharmacy === "1"
-  
-  // Track mouse position for better hover handling
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(window as any).lastMouseX = e.clientX
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(window as any).lastMouseY = e.clientY
-    }
-    window.addEventListener('mousemove', handleMouseMove)
-    return () => window.removeEventListener('mousemove', handleMouseMove)
-  }, [])
+  const {
+    hoverItem,
+    showTooltip,
+    itemShowsHoverTooltip,
+    openHoverTooltip,
+    closeHoverTooltip,
+    dismissHoverTooltip,
+  } = useItemHoverTooltip(isPharmacy)
 
   if (items.length === 0) {
     return (
@@ -93,17 +85,14 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
             const isDisabled = isOutOfStock || scannerOnly
             const formattedPrice = `${item.currency_symbol}${item.price.toFixed(3)}`
             
-            // Check if item has pharmacy fields
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const itemData = item as any
-            const hasPharmacyData = isPharmacy && (
-              itemData.custom_strength ||
-              itemData.custom_pharmaceutical_form ||
-              itemData.custom_number_of_pack !== null ||
-              itemData.custom_number_of_pack !== undefined ||
-              itemData.custom_pack_size ||
-              itemData.custom_route_of_administration
-            )
+            const itemData = item as MenuItem & {
+              custom_strength?: string | null
+              custom_pharmaceutical_form?: string | null
+              custom_number_of_pack?: number | null
+              custom_pack_size?: string | null
+              custom_route_of_administration?: string | null
+            }
+            const showHoverTooltip = itemShowsHoverTooltip(itemData)
 
             return (
               <div
@@ -112,43 +101,10 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
                   isDisabled ? "opacity-60" : "cursor-pointer"
                 }`}
                 onClick={() => !isDisabled && onAddToCart(item)}
-                onMouseEnter={() => {
-                  if (hasPharmacyData) {
-                    // Clear any pending timeout
-                    if (hoverTimeoutRef.current) {
-                      clearTimeout(hoverTimeoutRef.current)
-                      hoverTimeoutRef.current = null
-                    }
-                    setSelectedPharmacyItem(item)
-                    setShowPharmacyModal(true)
-                  }
-                }}
-                onMouseLeave={() => {
-                  if (hasPharmacyData) {
-                    // Clear any existing timeout
-                    if (hoverTimeoutRef.current) {
-                      clearTimeout(hoverTimeoutRef.current)
-                    }
-                    // Longer delay to allow moving to next product - tooltip stays visible
-                    hoverTimeoutRef.current = setTimeout(() => {
-                      // Check if mouse is over another product or the modal
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      const mouseX = (window as any).lastMouseX || 0
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      const mouseY = (window as any).lastMouseY || 0
-                      const hoveredElement = document.elementFromPoint(mouseX, mouseY)
-                      const isOverProduct = hoveredElement?.closest('[data-pharmacy-item]')
-                      const isOverModal = hoveredElement?.closest('.pharmacy-tooltip')
-                      
-                      // Only close if not over any product or modal
-                      if (!isOverProduct && !isOverModal) {
-                        setShowPharmacyModal(false)
-                        setSelectedPharmacyItem(null)
-                      }
-                    }, 500) // Longer delay to keep tooltip visible when moving between products
-                  }
-                }}
-                data-pharmacy-item={hasPharmacyData ? 'true' : undefined}
+                onMouseEnter={() => openHoverTooltip(itemData)}
+                onMouseLeave={closeHoverTooltip}
+                data-item-hover-target={showHoverTooltip ? "true" : undefined}
+                data-pharmacy-item={showHoverTooltip ? "true" : undefined}
               >
                 {/* Product Name */}
                 <div className={`${isMobile ? "col-span-3" : "col-span-4"} flex items-start`}>
@@ -245,25 +201,18 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
         </div>
       </div>
       
-      {/* Pharmacy Item Details Modal - List View (right side) */}
-      {selectedPharmacyItem && (
+      {hoverItem && (
         <PharmacyItemDetailsModal
-          isOpen={showPharmacyModal}
-          onClose={() => {
-            setShowPharmacyModal(false)
-            setSelectedPharmacyItem(null)
-          }}
-          itemName={selectedPharmacyItem.name}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          custom_strength={(selectedPharmacyItem as any).custom_strength}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          custom_pharmaceutical_form={(selectedPharmacyItem as any).custom_pharmaceutical_form}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          custom_number_of_pack={(selectedPharmacyItem as any).custom_number_of_pack}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          custom_pack_size={(selectedPharmacyItem as any).custom_pack_size}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          custom_route_of_administration={(selectedPharmacyItem as any).custom_route_of_administration}
+          isOpen={showTooltip}
+          onClose={dismissHoverTooltip}
+          itemName={hoverItem.name}
+          itemCode={hoverItem.id}
+          hasBatchNo={itemHasBatchNo(hoverItem)}
+          custom_strength={hoverItem.custom_strength}
+          custom_pharmaceutical_form={hoverItem.custom_pharmaceutical_form}
+          custom_number_of_pack={hoverItem.custom_number_of_pack}
+          custom_pack_size={hoverItem.custom_pack_size}
+          custom_route_of_administration={hoverItem.custom_route_of_administration}
           position="right"
         />
       )}

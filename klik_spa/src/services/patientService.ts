@@ -86,6 +86,8 @@ export interface InpatientMedicationOrder {
   items: InpatientMedicationOrderItem[];
   custom_reference_type?: string;
   custom_reference_name?: string;
+  visit_type?: "OP" | "IP";
+  after_discharge?: number | boolean;
 }
 
 export interface ItemAlternativeOption {

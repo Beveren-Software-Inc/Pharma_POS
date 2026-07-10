@@ -150,6 +150,47 @@ def _extract_medication_order_items(order_doc):
 	return items
 
 
+def _visit_type_from_reference(reference_type):
+	if not reference_type:
+		return None
+	rt = str(reference_type).strip().lower()
+	if "patient visit" in rt:
+		return "OP"
+	if "inpatient" in rt:
+		return "IP"
+	return None
+
+
+def _enrich_medication_order_summary(order, order_doc):
+	"""Attach header fields used by hospital pharmacy medication-order UI."""
+	order["healthcare_practitioner"] = (
+		getattr(order_doc, "healthcare_practitioner", None)
+		or getattr(order_doc, "practitioner", None)
+		or getattr(order_doc, "prescribing_practitioner", None)
+	)
+	order["healthcare_practitioner_name"] = (
+		getattr(order_doc, "healthcare_practitioner_name", None)
+		or getattr(order_doc, "practitioner_name", None)
+	)
+	order["after_discharge"] = int(getattr(order_doc, "after_discharge", 0) or 0)
+
+	ref_type = getattr(order_doc, "custom_reference_type", None)
+	ref_name = getattr(order_doc, "custom_reference_name", None)
+	if not ref_type or not ref_name:
+		if getattr(order_doc, "patient_encounter", None):
+			ref_type = "Patient Visit"
+			ref_name = order_doc.patient_encounter
+		elif getattr(order_doc, "inpatient_record", None):
+			ref_type = "Inpatient Admission"
+			ref_name = order_doc.inpatient_record
+
+	order["custom_reference_type"] = ref_type
+	order["custom_reference_name"] = ref_name
+	order["visit_type"] = _visit_type_from_reference(ref_type)
+	order["items"] = _extract_medication_order_items(order_doc)
+	return order
+
+
 def resolve_customer_from_patient(patient):
 	"""Map a Healthcare Patient to the linked ERPNext Customer record."""
 	if not patient or not frappe.db.exists("DocType", "Patient"):
@@ -396,25 +437,7 @@ def get_pending_inpatient_medication_orders(patient: str):
 		# For each order, get the child table items
 		for order in orders:
 			order_doc = frappe.get_doc("Patient Medication Order", order.name)
-			order["healthcare_practitioner"] = (
-				getattr(order_doc, "healthcare_practitioner", None)
-				or getattr(order_doc, "practitioner", None)
-				or getattr(order_doc, "prescribing_practitioner", None)
-			)
-			order["healthcare_practitioner_name"] = (
-				getattr(order_doc, "healthcare_practitioner_name", None)
-				or getattr(order_doc, "practitioner_name", None)
-			)
-			order["custom_reference_type"] = getattr(order_doc, "custom_reference_type", None)
-			order["custom_reference_name"] = getattr(order_doc, "custom_reference_name", None)
-			if not order["custom_reference_type"] or not order["custom_reference_name"]:
-				if getattr(order_doc, "patient_encounter", None):
-					order["custom_reference_type"] = "Patient Visit"
-					order["custom_reference_name"] = order_doc.patient_encounter
-				elif getattr(order_doc, "inpatient_record", None):
-					order["custom_reference_type"] = "Inpatient Admission"
-					order["custom_reference_name"] = order_doc.inpatient_record
-			order["items"] = _extract_medication_order_items(order_doc)
+			_enrich_medication_order_summary(order, order_doc)
 		return orders
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching Patient Medication Orders")
@@ -463,25 +486,7 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 		# Reuse existing item extraction for consistency.
 		for order in orders:
 			order_doc = frappe.get_doc("Patient Medication Order", order.name)
-			order["healthcare_practitioner"] = (
-				getattr(order_doc, "healthcare_practitioner", None)
-				or getattr(order_doc, "practitioner", None)
-				or getattr(order_doc, "prescribing_practitioner", None)
-			)
-			order["healthcare_practitioner_name"] = (
-				getattr(order_doc, "healthcare_practitioner_name", None)
-				or getattr(order_doc, "practitioner_name", None)
-			)
-			order["custom_reference_type"] = getattr(order_doc, "custom_reference_type", None)
-			order["custom_reference_name"] = getattr(order_doc, "custom_reference_name", None)
-			if not order["custom_reference_type"] or not order["custom_reference_name"]:
-				if getattr(order_doc, "patient_encounter", None):
-					order["custom_reference_type"] = "Patient Visit"
-					order["custom_reference_name"] = order_doc.patient_encounter
-				elif getattr(order_doc, "inpatient_record", None):
-					order["custom_reference_type"] = "Inpatient Admission"
-					order["custom_reference_name"] = order_doc.inpatient_record
-			order["items"] = _extract_medication_order_items(order_doc)
+			_enrich_medication_order_summary(order, order_doc)
 
 		return orders
 	except Exception as e:

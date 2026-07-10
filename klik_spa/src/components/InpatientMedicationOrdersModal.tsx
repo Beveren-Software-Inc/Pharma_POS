@@ -5,6 +5,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink } from "lucide-react";
 import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument } from "../services/patientService";
 import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype, resolveMedicationItemCode, resolveMedicationDisplayName } from "../services/patientService";
+import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
+import MedicationOrderDischargedBadge from "./MedicationOrderDischargedBadge";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -491,12 +493,12 @@ function AlternativeDrugSelect({
 
 function formatMedicationQty(
   item: ItemRow,
-  hospitalMode?: boolean,
+  _hospitalMode?: boolean,
   defaultUom?: string
 ) {
   if (item.quantity == null) return "—";
-  const uom =
-    hospitalMode && defaultUom?.trim() ? defaultUom.trim() : item.uom;
+  // Show the UOM saved on the medication order line; POS default is fallback only.
+  const uom = item.uom?.trim() || defaultUom?.trim() || "";
   return `${item.quantity}${uom ? ` ${uom}` : ""}`;
 }
 
@@ -882,7 +884,14 @@ export default function InpatientMedicationOrdersModal({
                           }`}>
                           {isSelected && <Check size={11} className="text-white" strokeWidth={3} />}
                         </div>
-                        <h3 className="font-semibold text-gray-900 dark:text-white text-sm flex-1">{order.name}</h3>
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate">{order.name}</h3>
+                          <DispenseVisitTypeBadge
+                            visitType={order.visit_type}
+                            referenceType={order.custom_reference_type}
+                          />
+                          <MedicationOrderDischargedBadge afterDischarge={order.after_discharge} />
+                        </div>
                         {order.posting_date && (
                           <span className="text-xs text-gray-400 dark:text-gray-500 tabular-nums">
                             {new Date(order.posting_date).toLocaleDateString()}
@@ -973,6 +982,11 @@ export default function InpatientMedicationOrdersModal({
                             <ChevronDown size={15} />
                           </span>
                           <span className="font-semibold text-sm text-gray-800 dark:text-white truncate">{order.name}</span>
+                          <DispenseVisitTypeBadge
+                            visitType={order.visit_type}
+                            referenceType={order.custom_reference_type}
+                          />
+                          <MedicationOrderDischargedBadge afterDischarge={order.after_discharge} />
                           {order.posting_date && (
                             <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">
                               {new Date(order.posting_date).toLocaleDateString()}

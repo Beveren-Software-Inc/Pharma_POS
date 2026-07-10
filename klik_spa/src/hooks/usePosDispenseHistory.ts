@@ -136,6 +136,16 @@ export function usePosDispenseHistory(
                 ? String(row.delivery_note_name)
                 : undefined,
               returnedLineCount: Number(row.returned_line_count) || 0,
+              customReferenceType: row.custom_reference_type
+                ? String(row.custom_reference_type)
+                : undefined,
+              customReferenceName: row.custom_reference_name
+                ? String(row.custom_reference_name)
+                : undefined,
+              visitType:
+                row.visit_type === "OP" || row.visit_type === "IP"
+                  ? row.visit_type
+                  : undefined,
             } as SalesInvoice;
           }
         );

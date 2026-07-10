@@ -1595,7 +1595,13 @@ def get_batch_nos_with_qty(item_code):
 	for b in batches:
 		qty = get_batch_qty(batch_no=b.name, warehouse=warehouse)
 		if qty > 0:
-			batch_qty_data.append({"batch_id": b.batch_id, "qty": qty})
+			batch_qty_data.append(
+				{
+					"batch_id": b.batch_id,
+					"qty": qty,
+					"expiry_date": str(b.expiry_date) if b.get("expiry_date") else None,
+				}
+			)
 
 	return batch_qty_data
 

@@ -49,12 +49,15 @@ function preserveBatchAndSerial(merged: CartItem[], currentCart: CartItem[]): Ca
 }
 
 // Helper to merge ERPNext pricing rule results (including free items) back into the POS cart
+function hasUserEditedRate(item: CartItem): boolean {
+  return !!(item as CartItem & { rate_edited?: boolean }).rate_edited;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mergePricingResultsWithFreeItems(baseCartItems: CartItem[], pricingResults: any[]): CartItem[] {
   // Update base items with discounts / pricing rule info
   const updatedBaseItems: CartItem[] = baseCartItems.map((item) => {
-    if ((item as CartItem & { is_pharmacy_service?: boolean; rate_edited?: boolean }).is_pharmacy_service
-      && (item as CartItem & { rate_edited?: boolean }).rate_edited) {
+    if (hasUserEditedRate(item)) {
       return item
     }
     const pricingRuleItem = pricingResults.find((pr) => pr.id === item.id)
@@ -469,8 +472,7 @@ export const useCartStore = create<CartState>()(
 
           // Update cart items with new base prices, but preserve existing price if UOM is set and price seems correct
           let updatedItems = baseCartItems.map(item => {
-            if ((item as CartItem & { is_pharmacy_service?: boolean; rate_edited?: boolean }).is_pharmacy_service
-              && (item as CartItem & { rate_edited?: boolean }).rate_edited) {
+            if (hasUserEditedRate(item)) {
               return item;
             }
             const priceUpdate = priceUpdates[item.id];

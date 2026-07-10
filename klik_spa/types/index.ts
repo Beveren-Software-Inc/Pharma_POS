@@ -187,6 +187,9 @@ export interface SalesInvoice {
   isHeldDispense?: boolean;
   deliveryNoteName?: string;
   returnedLineCount?: number;
+  customReferenceType?: string;
+  customReferenceName?: string;
+  visitType?: "OP" | "IP";
   invoice:[];
   cashier_name:string;
   customer_email:string;

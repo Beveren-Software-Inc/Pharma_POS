@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 import InvoiceViewModal from "../components/InvoiceViewModal";
+import DispenseVisitTypeBadge from "../components/DispenseVisitTypeBadge";
 import SingleInvoiceReturn from "../components/SingleInvoiceReturn";
 import type { SalesInvoice } from "../../types";
 import { useCustomerInvoices } from "../hooks/useCustomerInvoices";
@@ -693,7 +694,15 @@ export default function CustomerDetailsPage() {
                       <tr key={invoice.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                         <td className="px-4 py-3 whitespace-nowrap">
                           <div>
-                            <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                            <div className="flex items-center gap-2">
+                              <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                              {isHospitalPharmacy && (
+                                <DispenseVisitTypeBadge
+                                  visitType={invoice.visitType}
+                                  referenceType={invoice.customReferenceType}
+                                />
+                              )}
+                            </div>
                             <div className="text-xs text-gray-500 dark:text-gray-400">
                               {invoice.date} {invoice.time}
                             </div>
@@ -1084,7 +1093,15 @@ export default function CustomerDetailsPage() {
                         <tr key={invoice.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div>
-                              <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                              <div className="flex items-center gap-2">
+                                <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                                {isHospitalPharmacy && (
+                                  <DispenseVisitTypeBadge
+                                    visitType={invoice.visitType}
+                                    referenceType={invoice.customReferenceType}
+                                  />
+                                )}
+                              </div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">
                                 {invoice.date} {invoice.time}
                               </div>

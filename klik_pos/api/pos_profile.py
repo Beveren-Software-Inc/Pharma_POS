@@ -185,6 +185,7 @@ def get_pos_details():
 		"custom_allow_duplicate_items_in_pos": int(
 			getattr(pos, "custom_allow_duplicate_items_in_pos", 0) or 0
 		),
+		"allow_rate_change": int(getattr(pos, "allow_rate_change", 0) or 0),
 		"custom_print_delivery_receipt": int(
 			getattr(pos, "custom_print_delivery_receipt", 0) or 0
 		),

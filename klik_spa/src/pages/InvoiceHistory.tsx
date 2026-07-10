@@ -31,6 +31,7 @@ import BottomNavigation from "../components/BottomNavigation";
 import MultiInvoiceReturn from "../components/MultiInvoiceReturn";
 import SingleInvoiceReturn from "../components/SingleInvoiceReturn";
 import DispenseOrderReturn from "../components/DispenseOrderReturn";
+import DispenseVisitTypeBadge from "../components/DispenseVisitTypeBadge";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { formatCurrency } from "../utils/currency";
 import type { SalesInvoice } from "../../types";
@@ -707,7 +708,15 @@ const getStatusBadge = (status: string) => {
                             </button>
                           )}
                           <div>
-                            <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                            <div className="flex items-center gap-2">
+                              <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                              {isHospitalPharmacy && (
+                                <DispenseVisitTypeBadge
+                                  visitType={invoice.visitType}
+                                  referenceType={invoice.customReferenceType}
+                                />
+                              )}
+                            </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
                               {invoice.date} {invoice.time}
                             </div>
@@ -936,7 +945,15 @@ const getStatusBadge = (status: string) => {
               className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 hover:shadow-md transition-shadow"
             >
               <div className="flex items-center justify-between mb-3">
-                <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-medium text-gray-900 dark:text-white">{invoice.id}</div>
+                  {isHospitalPharmacy && (
+                    <DispenseVisitTypeBadge
+                      visitType={invoice.visitType}
+                      referenceType={invoice.customReferenceType}
+                    />
+                  )}
+                </div>
                 <span className={getStatusBadge(invoice.status)}>{invoice.status}</span>
               </div>
               <div className="space-y-2">

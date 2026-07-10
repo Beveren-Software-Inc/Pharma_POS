@@ -61,6 +61,7 @@ import {
   getOriginalHeldDispenseOrderId,
 } from "../utils/heldDispenseOrderCache";
 import { getPartyLabels } from "../utils/partyLabels";
+import { resolveHospitalCartUom } from "../utils/hospitalCartUom";
 import { POS_BEFORE_NAVIGATE_EVENT } from "../utils/navigation";
 
 
@@ -273,6 +274,13 @@ const DosageInput = ({ itemId, value, onChange, isMobile }: DosageInputProps) =>
   );
 };
 
+function formatBatchExpiryLabel(expiry?: string | null): string | null {
+  if (!expiry?.trim()) return null;
+  const parsed = new Date(expiry);
+  if (Number.isNaN(parsed.getTime())) return expiry.trim();
+  return parsed.toLocaleDateString();
+}
+
 // Simple UOM Select Field Component
 interface UOMSelectFieldProps {
   item: CartItem;
@@ -463,7 +471,7 @@ const UOMSelectField = ({ item, onUOMChange, isMobile, selectedCustomer }: UOMSe
 interface BatchSelectFieldProps {
   itemId: string;
   itemCode: string;
-  options: { batch_id: string; qty: number }[];
+  options: { batch_id: string; qty: number; expiry_date?: string | null }[];
   value: string;
   onChange: (value: string, availableQty: number) => void;
   isMobile?: boolean;
@@ -1167,6 +1175,11 @@ export default function OrderSummary({
   const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
                              posDetails?.custom_is_hospital_pharmacy === true ||
                              posDetails?.custom_is_hospital_pharmacy === "1";
+  const allowUserEditRate =
+    !isHospitalPharmacy &&
+    (posDetails?.allow_rate_change === 1 ||
+      posDetails?.allow_rate_change === true ||
+      posDetails?.allow_rate_change === "1");
   const { customers, isLoading, refetch: refetchCustomers } = useCustomers(
     isHospitalPharmacy ? "" : customerSearchQuery
   );
@@ -1251,6 +1264,10 @@ export default function OrderSummary({
         (item as CartItem).has_serial_no ?? product?.has_serial_no;
       const has_batch_no =
         (item as CartItem).has_batch_no ?? product?.has_batch_no;
+      let uomToUse = item.uom;
+      if (isHospitalPharmacy && item.id) {
+        uomToUse = await resolveHospitalCartUom(item.id, item.uom || product?.uom);
+      }
       await addToCart({
         id: item.id,
         name: item.name,
@@ -1258,7 +1275,7 @@ export default function OrderSummary({
         price: item.price,
         image: item.image,
         available: item.available,
-        uom: item.uom,
+        uom: uomToUse,
         item_code: item.item_code || item.id,
         item_tax_template: (item as CartItem & { item_tax_template?: string })
           .item_tax_template,
@@ -1267,7 +1284,7 @@ export default function OrderSummary({
         allowDuplicate: true,
       });
     },
-    [addToCart, products]
+    [addToCart, products, isHospitalPharmacy]
   );
 
   const getSoldLineItems = useCallback(() => {
@@ -1459,8 +1476,10 @@ export default function OrderSummary({
   >({});
 
   const [itemBatches, setItemBatches] = useState<
-    Record<string, { batch_id: string; qty: number }[]>
+    Record<string, { batch_id: string; qty: number; expiry_date?: string | null }[]>
   >({});
+
+  const [batchExpiryLookup, setBatchExpiryLookup] = useState<Record<string, string>>({});
 
   const [itemSerials, setItemSerials] = useState<
     Record<string, string[]>
@@ -1513,6 +1532,38 @@ export default function OrderSummary({
 
   // Per-line key for batch/serial/discount (same item can appear in multiple lines when allow duplicate)
   const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
+
+  const resolveBatchExpiry = useCallback(
+    (itemCode: string, batchId?: string) => {
+      if (!batchId?.trim()) return null;
+      const fromLookup = batchExpiryLookup[batchId];
+      if (fromLookup) return fromLookup;
+      const fromOptions = itemBatches[itemCode]?.find((b) => b.batch_id === batchId)?.expiry_date;
+      return fromOptions || null;
+    },
+    [batchExpiryLookup, itemBatches]
+  );
+
+  const rememberBatchExpiry = useCallback((batchId: string, expiry?: string | null) => {
+    if (!batchId?.trim() || !expiry?.trim()) return;
+    setBatchExpiryLookup((prev) =>
+      prev[batchId] === expiry ? prev : { ...prev, [batchId]: expiry }
+    );
+  }, []);
+
+  const fetchBatchExpiryIfNeeded = useCallback(
+    async (batchId: string, itemCode: string) => {
+      if (!batchId?.trim() || resolveBatchExpiry(itemCode, batchId)) return;
+      try {
+        const details = await getBatchLabelDetails([batchId]);
+        const expiry = details[batchId]?.expiry_date;
+        if (expiry) rememberBatchExpiry(batchId, expiry);
+      } catch (error) {
+        console.error("Failed to fetch batch expiry:", error);
+      }
+    },
+    [rememberBatchExpiry, resolveBatchExpiry]
+  );
 
   useEffect(() => {
     const cached = getCachedDraftInvoiceItems();
@@ -1915,18 +1966,20 @@ export default function OrderSummary({
       }
 
       const pink = isPinkMedicationLine(itemToAdd);
-      const useHospitalDefaultUom = isHospitalPharmacy && !!pharmacyDefaultUom;
-      const uomToUse = useHospitalDefaultUom
-        ? pharmacyDefaultUom
-        : itemToAdd.uom || (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : product.uom);
-      const cartQuantity = useHospitalDefaultUom
-        ? itemToAdd.quantity
-        : await convertOrderQuantityToCartUOM(
-            product.id,
-            itemToAdd.quantity,
-            itemToAdd.uom,
-            uomToUse
-          );
+      let uomToUse =
+        itemToAdd.uom || (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : product.uom);
+      if (isHospitalPharmacy) {
+        uomToUse = await resolveHospitalCartUom(product.id, uomToUse);
+      }
+      const cartQuantity =
+        !itemToAdd.uom || itemToAdd.uom === uomToUse
+          ? itemToAdd.quantity
+          : await convertOrderQuantityToCartUOM(
+              product.id,
+              itemToAdd.quantity,
+              itemToAdd.uom,
+              uomToUse
+            );
       const prescriptionDosageValue = itemToAdd.patient_frequency;
       const lineId = pink ? crypto.randomUUID() : undefined;
       const currentQty = pink ? 0 : (qtyByItem.get(product.id) ?? 0);
@@ -3494,6 +3547,11 @@ const handleSetBatch = (event: CustomEvent) => {
       serial_no: undefined,
       dispensing_lot: undefined,
     });
+    const expiry = itemBatches[itemCode]?.find((b) => b.batch_id === batchId)?.expiry_date;
+    rememberBatchExpiry(batchId, expiry);
+    if (isHospitalPharmacy && batchId) {
+      void fetchBatchExpiryIfNeeded(batchId, itemCode);
+    }
   } else {
     setPendingPreselect(prev => ({
       ...prev,
@@ -3584,7 +3642,23 @@ const handleSetSerial = (event: CustomEvent) => {
       window.removeEventListener('cart:setBatchForItem', handleSetBatch as EventListener)
       window.removeEventListener('cart:setSerialForItem', handleSetSerial as EventListener)
     };
-  }, [cartItems, itemBatches, getLineKey, updateItemMetadata, refreshDispensingLotsForItem]);
+  }, [cartItems, itemBatches, getLineKey, updateItemMetadata, refreshDispensingLotsForItem, isHospitalPharmacy, rememberBatchExpiry, fetchBatchExpiryIfNeeded]);
+
+  useEffect(() => {
+    if (!isHospitalPharmacy) return;
+
+    cartItems.forEach((item) => {
+      const lineKey = getLineKey(item);
+      const itemCode = item.item_code || item.id;
+      const batchNo =
+        itemDiscounts[lineKey]?.batchNumber?.trim() ||
+        (item as CartItem & { batch_no?: string }).batch_no?.trim() ||
+        "";
+      if (batchNo) {
+        void fetchBatchExpiryIfNeeded(batchNo, itemCode);
+      }
+    });
+  }, [cartItems, itemDiscounts, isHospitalPharmacy, getLineKey, fetchBatchExpiryIfNeeded]);
 
   // Apply any pending pre-selections when cart items change
   useEffect(() => {
@@ -4128,6 +4202,13 @@ const handleSetSerial = (event: CustomEvent) => {
                   // Merge persisted + local serials instead of overwriting
                   ...(mergedSerialNumber ? { serialNumber: mergedSerialNumber } : {}),
                 };
+                const itemCode = item.item_code || item.id;
+                const batchExpiryLabel =
+                  isHospitalPharmacy && itemDiscount.batchNumber
+                    ? formatBatchExpiryLabel(
+                        resolveBatchExpiry(itemCode, itemDiscount.batchNumber)
+                      )
+                    : null;
 
               return (
                 <div
@@ -4377,6 +4458,22 @@ const handleSetSerial = (event: CustomEvent) => {
                           )}
                         </div>
 
+                        {allowUserEditRate && !isServiceItem && (
+                          <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
+                            <div className={cartFieldCellClass}>
+                              <label className={cartFieldLabelClass}>Rate</label>
+                              <ServiceRateInput
+                                lineKey={lineKey}
+                                price={item.price}
+                                onRateChange={(key, rate) =>
+                                  updateItemMetadata(key, { price: rate, rate_edited: true })
+                                }
+                                isMobile={isMobile}
+                              />
+                            </div>
+                          </div>
+                        )}
+
                         {/* Row 2: Discount Amount | Discount (%) — hidden in hospital pharmacy */}
                         {!isHospitalPharmacy && (
                         <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
@@ -4429,12 +4526,19 @@ const handleSetSerial = (event: CustomEvent) => {
                         <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
                           <div className={cartFieldCellClass}>
                             <label className={cartFieldLabelClass}>
-                              Batch
+                              <span className="flex items-center gap-2 flex-wrap">
+                                <span>Batch</span>
+                                {batchExpiryLabel && (
+                                  <span className="text-[10px] font-normal normal-case tracking-normal text-gray-500 dark:text-gray-400">
+                                    Exp: {batchExpiryLabel}
+                                  </span>
+                                )}
+                              </span>
                             </label>
                             <BatchSelectField
                               itemId={lineKey}
-                              itemCode={item.item_code || item.id}
-                              options={itemBatches[item.item_code || item.id] || []}
+                              itemCode={itemCode}
+                              options={itemBatches[itemCode] || []}
                               value={itemDiscount.batchNumber || ""}
                               onChange={(selectedBatch, selectedQty) => {
                                 updateItemDiscount(lineKey, "batchNumber", selectedBatch)
@@ -4445,6 +4549,15 @@ const handleSetSerial = (event: CustomEvent) => {
                                   serial_no: undefined,
                                   dispensing_lot: undefined,
                                 })
+                                if (selectedBatch) {
+                                  const expiry = itemBatches[itemCode]?.find(
+                                    (b) => b.batch_id === selectedBatch
+                                  )?.expiry_date;
+                                  rememberBatchExpiry(selectedBatch, expiry);
+                                  if (isHospitalPharmacy) {
+                                    void fetchBatchExpiryIfNeeded(selectedBatch, itemCode);
+                                  }
+                                }
                               }}
                               isMobile={isMobile}
                             />

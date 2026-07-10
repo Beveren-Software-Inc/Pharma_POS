@@ -554,6 +554,43 @@ def _parse_hold_payload(raw):
 	return None
 
 
+def _visit_type_from_reference(reference_type):
+	"""Map Healthcare reference doctype to OP / IP label for dispense history."""
+	if not reference_type:
+		return None
+	rt = str(reference_type).strip().lower()
+	if "patient visit" in rt:
+		return "OP"
+	if "inpatient" in rt:
+		return "IP"
+	return None
+
+
+def _resolve_dispense_visit_type(order, hold_payload=None):
+	"""Resolve OP/IP from Sales Order reference fields or held cart payload."""
+	ref_type = getattr(order, "custom_reference_type", None) if hasattr(order, "custom_reference_type") else None
+
+	if not ref_type and hold_payload:
+		visit_ref = hold_payload.get("created_visit_ref")
+		if isinstance(visit_ref, dict) and visit_ref.get("doctype"):
+			ref_type = visit_ref.get("doctype")
+
+	if not ref_type:
+		ref_type, _ = _derive_reference_from_medication_orders(
+			ref_type,
+			getattr(order, "custom_reference_name", None) if hasattr(order, "custom_reference_name") else None,
+			_normalize_medication_orders(
+				{
+					"base_reference_name": getattr(order, "custom_base_reference_name", None)
+					if hasattr(order, "custom_base_reference_name")
+					else None
+				}
+			),
+		)
+
+	return _visit_type_from_reference(ref_type)
+
+
 @frappe.whitelist()
 def create_and_submit_hospital_sales_order(data):
 	try:
@@ -883,6 +920,14 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 		]
 		if frappe.db.has_column("Sales Order", "custom_remarks"):
 			fields.append("custom_remarks")
+		if frappe.db.has_column("Sales Order", "custom_reference_type"):
+			fields.append("custom_reference_type")
+		if frappe.db.has_column("Sales Order", "custom_reference_name"):
+			fields.append("custom_reference_name")
+		if frappe.db.has_column("Sales Order", "custom_base_reference_name"):
+			fields.append("custom_base_reference_name")
+		if frappe.db.has_column("Sales Order", "custom_pos_hold_data"):
+			fields.append("custom_pos_hold_data")
 
 		orders = frappe.get_all(
 			"Sales Order",
@@ -988,6 +1033,14 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 					"delivery_note_name": delivery_note_name,
 					"can_return": can_return,
 					"custom_remarks": getattr(order, "custom_remarks", None) or "",
+					"custom_reference_type": getattr(order, "custom_reference_type", None) or "",
+					"custom_reference_name": getattr(order, "custom_reference_name", None) or "",
+					"visit_type": _resolve_dispense_visit_type(
+						order,
+						_parse_hold_payload(getattr(order, "custom_pos_hold_data", None))
+						if hasattr(order, "custom_pos_hold_data")
+						else None,
+					),
 					"items": order_items,
 				}
 			)
