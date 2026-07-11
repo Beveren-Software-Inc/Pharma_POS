@@ -61,6 +61,7 @@ export function usePOSProfile(profileName: string): UsePOSProfileReturn {
 interface POSProfileOption {
   name: string;
   is_default: boolean;
+  custom_is_hospital_pharmacy?: number | boolean | string;
 }
 
 export function usePOSProfiles() {

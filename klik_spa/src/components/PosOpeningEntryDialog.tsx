@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, CreditCard, Banknote, Wallet, AlertCircle, CheckCircle2, ChevronDown } from 'lucide-react';
 import { formatCurrency } from '../utils/currency';
 import { useCreatePOSOpeningEntry } from '../services/opeiningEntry';
@@ -32,11 +32,15 @@ interface POSOpeningModalProps {
 }
 
 interface PosProfileSelectProps {
-  profiles: { name: string; is_default: boolean }[];
+  profiles: { name: string; is_default: boolean; custom_is_hospital_pharmacy?: number | boolean | string }[];
   value: string;
   onChange: (profileName: string) => void;
   disabled?: boolean;
   loading?: boolean;
+}
+
+function isHospitalProfileFlag(value: number | boolean | string | undefined): boolean {
+  return value === 1 || value === true || value === "1";
 }
 
 function PosProfileSelect({
@@ -132,6 +136,11 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
   // Get the active POS profile from the opening entry
   const activeProfileName = posDetails?.name as string | undefined;
 
+  const isHospitalPharmacy = useMemo(() => {
+    const selected = posProfiles?.find((p) => p.name === selectedProfile);
+    return isHospitalProfileFlag(selected?.custom_is_hospital_pharmacy);
+  }, [posProfiles, selectedProfile]);
+
   // Use payment modes hook - will fetch when selectedProfile changes
   // Use selectedProfile when opening the dialog, but activeProfileName if already open
   // This ensures users can change profiles and see the correct payment modes
@@ -140,7 +149,7 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
     modes: paymentModes,
     isLoading: paymentModesLoading,
     error: paymentModesError
-  } = usePaymentModes(profileForPaymentModes);
+  } = usePaymentModes(isHospitalPharmacy ? "" : profileForPaymentModes);
 
 
   // Payment method icons
@@ -187,6 +196,11 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
 
   // Update payment methods when payment modes are loaded
   useEffect(() => {
+    if (isHospitalPharmacy) {
+      setPaymentMethods([]);
+      return;
+    }
+
     if (selectedProfile && paymentModesLoading) {
       // Clear payment methods while loading
       setPaymentMethods([]);
@@ -210,14 +224,14 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
       }));
       setPaymentMethods(methods);
     }
-  }, [paymentModes, paymentModesLoading, selectedProfile]);
+  }, [paymentModes, paymentModesLoading, selectedProfile, isHospitalPharmacy]);
 
   // Handle payment modes error
   useEffect(() => {
-    if (paymentModesError) {
+    if (paymentModesError && !isHospitalPharmacy) {
       setError(paymentModesError);
     }
-  }, [paymentModesError]);
+  }, [paymentModesError, isHospitalPharmacy]);
 
   // Update payment method amount
   const updatePaymentAmount = (index: number, amount: number) => {
@@ -237,11 +251,13 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
       setStep('creating');
       setError('');
 
-      // Prepare opening balance data for your API
-      const openingBalance = paymentMethods.map(method => ({
-        mode_of_payment: method.mode_of_payment,
-        opening_amount: method.opening_amount || 0
-      }));
+      // Hospital: backend seeds MOP rows at 0 — no opening balances UI needed
+      const openingBalance = isHospitalPharmacy
+        ? []
+        : paymentMethods.map(method => ({
+            mode_of_payment: method.mode_of_payment,
+            opening_amount: method.opening_amount || 0
+          }));
       console.log("Opening balance data:", openingBalance, "Selected profile:", selectedProfile);
       await createOpeningEntry(openingBalance, selectedProfile || undefined);
 
@@ -307,7 +323,12 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
   if (!isOpen) return null;
 
   // Determine if we're currently loading payment modes
-  const isLoadingPaymentModes = selectedProfile && paymentModesLoading;
+  const isLoadingPaymentModes = !isHospitalPharmacy && selectedProfile && paymentModesLoading;
+  const canStartSession =
+    !!selectedProfile &&
+    !profilesLoading &&
+    !isCreating &&
+    (isHospitalPharmacy || (!isLoadingPaymentModes && paymentMethods.length > 0));
 
   return (
     <div className="fixed inset-0 bg-beveren-300 bg-opacity-10 flex items-center justify-center z-50 p-4">
@@ -339,6 +360,11 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
                   disabled={!!isLoadingPaymentModes}
                   loading={!!profilesLoading}
                 />
+                {isHospitalPharmacy && selectedProfile && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Hospital pharmacy — opening balances are not required.
+                  </p>
+                )}
               </div>
 
               {/* Payment Methods Loading State */}
@@ -349,8 +375,8 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
                 </div>
               )}
 
-              {/* Payment Methods */}
-              {!isLoadingPaymentModes && paymentMethods.length > 0 && (
+              {/* Payment Methods — hidden for hospital pharmacy */}
+              {!isHospitalPharmacy && !isLoadingPaymentModes && paymentMethods.length > 0 && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-3">
                     Opening Balances
@@ -411,13 +437,7 @@ const POSOpeningModal: React.FC<POSOpeningModalProps> = ({
                 </button>
                 <button
                   onClick={handleCreateOpeningEntry}
-                  disabled={
-                    !!profilesLoading ||
-                    !!isCreating ||
-                    !!isLoadingPaymentModes ||
-                    !selectedProfile ||
-                    paymentMethods.length === 0
-                  }
+                  disabled={!canStartSession}
                   className="flex-1 px-4 py-2 bg-white border border-beveren-600 text-beveren-700 rounded-md hover:bg-beveren-50 transition-colors disabled:border-gray-300 disabled:text-gray-400 disabled:bg-gray-50 disabled:cursor-not-allowed"
                 >
                   {profilesLoading ? 'Loading...' :
