@@ -91,13 +91,29 @@ def _build_profiles_with_defaults(profile_names, user, require_applicable_user=F
 				)
 				continue
 
-			profiles_with_default.append({"name": profile_name, "is_default": profile_data["is_default"]})
+			profiles_with_default.append(
+				{
+					"name": profile_name,
+					"is_default": profile_data["is_default"],
+					"custom_is_hospital_pharmacy": int(
+						frappe.db.get_value("POS Profile", profile_name, "custom_is_hospital_pharmacy") or 0
+					)
+					if frappe.db.has_column("POS Profile", "custom_is_hospital_pharmacy")
+					else 0,
+				}
+			)
 
 		except Exception as e:
 			frappe.logger().error(f"Error getting details for POS Profile {profile_name}: {e}")
 			# Only add profile with is_default=False if not requiring applicable user
 			if not require_applicable_user:
-				profiles_with_default.append({"name": profile_name, "is_default": False})
+				profiles_with_default.append(
+					{
+						"name": profile_name,
+						"is_default": False,
+						"custom_is_hospital_pharmacy": 0,
+					}
+				)
 
 	return profiles_with_default
 

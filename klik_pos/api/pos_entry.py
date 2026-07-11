@@ -55,6 +55,36 @@ def create_opening_entry():
 			frappe.throw(_("POS Profile could not be determined"))
 
 		balance_details = data.get("balance_details") or data.get("opening_balance", [])
+		is_hospital = False
+		if frappe.db.has_column("POS Profile", "custom_is_hospital_pharmacy"):
+			is_hospital = bool(
+				int(frappe.db.get_value("POS Profile", pos_profile, "custom_is_hospital_pharmacy") or 0)
+			)
+
+		# Hospital pharmacy: opening balances are not used — seed MOP rows at 0 from POS Profile.
+		if is_hospital and not balance_details:
+			payments = frappe.get_all(
+				"POS Payment Method",
+				filters={"parent": pos_profile},
+				fields=["mode_of_payment"],
+				order_by="idx asc",
+			)
+			balance_details = [
+				{"mode_of_payment": row.mode_of_payment, "opening_amount": 0}
+				for row in payments
+				if row.mode_of_payment
+			]
+		elif is_hospital:
+			# Force zero amounts even if the client sent values
+			balance_details = [
+				{
+					"mode_of_payment": row.get("mode_of_payment"),
+					"opening_amount": 0,
+				}
+				for row in balance_details
+				if row.get("mode_of_payment")
+			]
+
 		if not balance_details:
 			frappe.throw(_("At least one balance detail (mode of payment) is required"))
 
