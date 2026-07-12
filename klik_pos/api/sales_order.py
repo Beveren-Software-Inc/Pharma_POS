@@ -483,6 +483,12 @@ def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
 		reference_type, reference_name, medication_orders
 	)
 
+	if not (reference_name or "").strip():
+		frappe.throw(
+			"Create a Patient Visit before dispensing. "
+			"A Patient Visit or Inpatient Admission reference is required when hospital pharmacy is enabled."
+		)
+
 	if frappe.db.has_column("Sales Order", "custom_base_reference"):
 		doc.custom_base_reference = base_reference
 	if base_reference_name and frappe.db.has_column("Sales Order", "custom_base_reference_name"):
