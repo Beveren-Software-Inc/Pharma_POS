@@ -2682,7 +2682,45 @@ const pages = labels.map((label) => `
     }
   };
 
+  const getHospitalCareReference = (): { type: string; name: string } | null => {
+    if (createdVisitRef?.name) {
+      return {
+        type: createdVisitRef.doctype || "Patient Visit",
+        name: createdVisitRef.name,
+      };
+    }
+
+    const linkedOrders = Array.from(
+      new Set(
+        cartItems.flatMap((item) => {
+          const many = (item as CartItem & { medicationOrders?: string[] }).medicationOrders || [];
+          const one = (item as CartItem & { medicationOrder?: string }).medicationOrder;
+          return [...many, ...(one ? [one] : [])].filter(Boolean);
+        })
+      )
+    );
+
+    for (const orderName of linkedOrders) {
+      const sourceOrder = [...medicationOrders, ...medicationOrderHistory].find((o) => o.name === orderName);
+      if (sourceOrder?.custom_reference_name) {
+        return {
+          type: sourceOrder.custom_reference_type || "Patient Visit",
+          name: sourceOrder.custom_reference_name,
+        };
+      }
+    }
+
+    return null;
+  };
+
   const validateHospitalDispense = (): boolean => {
+    if (!getHospitalCareReference()) {
+      toast.error(
+        "Create a Patient Visit before dispensing. Open Medication Orders and create a visit first."
+      );
+      return false;
+    }
+
     const missingMedicationDetails = cartItems
       .filter((item) => !(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service)
       .map((item) => {
@@ -2745,10 +2783,9 @@ const pages = labels.map((label) => `
         })
       )
     );
-    const firstMedicationOrder = allMedicationOrders[0];
-    const sourceOrder = [...medicationOrders, ...medicationOrderHistory].find((o) => o.name === firstMedicationOrder);
-    const finalReferenceType = createdVisitRef?.doctype || sourceOrder?.custom_reference_type || "Patient Visit";
-    const finalReferenceName = createdVisitRef?.name || sourceOrder?.custom_reference_name || "";
+    const careReference = getHospitalCareReference();
+    const finalReferenceType = careReference?.type || "Patient Visit";
+    const finalReferenceName = careReference?.name || "";
 
     const patientToUse =
       selectedPatient ||
@@ -2941,6 +2978,7 @@ const pages = labels.map((label) => `
       toast.error("Add items to the cart before holding.");
       return;
     }
+    if (!validateHospitalDispense()) return;
 
     try {
       const payload = await buildHospitalDispensePayload();
