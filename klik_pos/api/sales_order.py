@@ -518,15 +518,64 @@ def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
 	return medication_orders
 
 
+def validate_dispense_quantities(items):
+	"""Block dispensing more than the prescribed quantity on a medication-order line.
+
+	Each cart line linked to a Patient Medication Order entry carries the qty being dispensed;
+	the linked entry carries the prescribed ``quantity``. Dispensing more than was prescribed
+	(e.g. 100 tablets against a script for 10) is rejected. When the prescribed quantity is
+	unknown (0 / unset) we cannot validate, so we do not block.
+	"""
+	if not items:
+		return
+	for item in items:
+		if not isinstance(item, dict):
+			continue
+		entry_name = (
+			item.get("medication_order_entry") or item.get("medicationOrderEntry") or ""
+		).strip()
+		if not entry_name:
+			continue
+		if not frappe.db.exists("Inpatient Medication Order Entry", entry_name):
+			continue
+		prescribed = flt(
+			frappe.db.get_value("Inpatient Medication Order Entry", entry_name, "quantity") or 0
+		)
+		if prescribed <= 0:
+			continue
+		dispense_qty = flt(item.get("quantity") or item.get("qty") or 0)
+		if dispense_qty - prescribed > 0.001:
+			drug = (
+				item.get("drug_name")
+				or item.get("item_name")
+				or item.get("id")
+				or item.get("item_code")
+				or entry_name
+			)
+			frappe.throw(
+				frappe._(
+					"Cannot dispense {0} unit(s) of {1}: only {2} were prescribed on this medication order."
+				).format(dispense_qty, drug, prescribed)
+			)
+
+
 def _append_hospital_sales_order_items(doc, items, pos_profile, cost_center):
+	validate_dispense_quantities(items)
 	for item in items:
 		item_code = item.get("id") or item.get("item_code")
 		if not item_code:
 			continue
+		qty = flt(item.get("quantity") or 0)
+		rate = flt(item.get("price") or item.get("rate") or 0)
+		# Skip non-positive quantities and reject negative prices (don't rely solely on core).
+		if qty <= 0:
+			continue
+		if rate < 0:
+			frappe.throw(frappe._("Item {0} has a negative price.").format(item_code))
 		row = {
 			"item_code": item_code,
-			"qty": flt(item.get("quantity") or 0),
-			"rate": flt(item.get("price") or item.get("rate") or 0),
+			"qty": qty,
+			"rate": rate,
 			"delivery_date": nowdate(),
 		}
 		if item.get("uom"):
@@ -600,6 +649,9 @@ def _resolve_dispense_visit_type(order, hold_payload=None):
 @frappe.whitelist()
 def create_and_submit_hospital_sales_order(data):
 	try:
+		from klik_pos.klik_pos.utils import require_pos_access
+		require_pos_access()
+
 		if isinstance(data, str):
 			data = json.loads(data)
 		if not data:
@@ -673,6 +725,9 @@ def create_and_submit_hospital_sales_order(data):
 def create_draft_hospital_sales_order(data):
 	"""Save a held hospital dispense cart as a draft Sales Order (not submitted)."""
 	try:
+		from klik_pos.klik_pos.utils import require_pos_access
+		require_pos_access()
+
 		if isinstance(data, str):
 			data = json.loads(data)
 		if not data:

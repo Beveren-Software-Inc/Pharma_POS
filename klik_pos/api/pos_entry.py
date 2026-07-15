@@ -229,9 +229,6 @@ def _calculate_payment_reconciliation(opening_entry, data):
 	sales amounts, and expected vs closing amounts.
 	"""
 	opening_entry_name = opening_entry.name
-	opening_start = opening_entry.period_start_date
-	opening_date = opening_start.date()
-	opening_time = opening_start.time().strftime("%H:%M:%S")
 
 	# Fetch opening balances
 	opening_modes = frappe.get_all(
@@ -241,7 +238,10 @@ def _calculate_payment_reconciliation(opening_entry, data):
 	)
 	opening_balance_map = {row.mode_of_payment: row.opening_amount for row in opening_modes}
 
-	# Aggregate sales by payment mode
+	# Aggregate sales by payment mode.
+	# Key strictly on this opening entry (same key as _calculate_closing_entry_totals). Keying on
+	# pos_profile + posting_date/time would pull in a second cashier's invoices whenever a POS
+	# profile is shared across concurrent sessions, double-counting their payments in the close.
 	sales_data = frappe.db.sql(
 		"""
 		SELECT sip.mode_of_payment,
@@ -249,15 +249,11 @@ def _calculate_payment_reconciliation(opening_entry, data):
 		       COUNT(DISTINCT si.name) as transactions
 		FROM `tabSales Invoice` si
 		JOIN `tabSales Invoice Payment` sip ON si.name = sip.parent
-		WHERE si.pos_profile = %s
+		WHERE si.custom_pos_opening_entry = %s
 		  AND si.docstatus = 1
-		  AND si.posting_date = %s
-		  AND si.posting_time >= %s
-		  AND si.custom_pos_opening_entry IS NOT NULL
-		  AND si.custom_pos_opening_entry != ''
 		GROUP BY sip.mode_of_payment
 		""",
-		(opening_entry.pos_profile, opening_date, opening_time),
+		(opening_entry_name,),
 		as_dict=True,
 	)
 	sales_map = {row.mode_of_payment: row.total_amount for row in sales_data}
