@@ -49,7 +49,7 @@ import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientLegacyDispensedMedications, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type LegacyDispensedTransaction, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, createDraftHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
@@ -1138,6 +1138,7 @@ export default function OrderSummary({
   const [patients, setPatients] = useState<Patient[]>([]);
   const [medicationOrders, setMedicationOrders] = useState<InpatientMedicationOrder[]>([]);
   const [medicationOrderHistory, setMedicationOrderHistory] = useState<InpatientMedicationOrder[]>([]);
+  const [legacyDispensedMedications, setLegacyDispensedMedications] = useState<LegacyDispensedTransaction[]>([]);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedHistoryItems, setSelectedHistoryItems] = useState<Set<string>>(new Set());
   const [isCreatingVisit, setIsCreatingVisit] = useState(false);
@@ -2187,14 +2188,16 @@ export default function OrderSummary({
     
     // Load medication orders and open modal — user adds items from there
     try {
-      const [orders, history, historySummary] = await Promise.all([
+      const [orders, history, historySummary, legacyDispensed] = await Promise.all([
         getPendingInpatientMedicationOrders(patient.name),
         getPatientMedicationOrderHistory(patient.name, 50),
         getPatientHistorySummary(patient.name, 10),
+        getPatientLegacyDispensedMedications(patient.name, 50),
       ]);
       setMedicationOrders(orders);
       setMedicationOrderHistory(history);
       setPatientHistorySummary(historySummary);
+      setLegacyDispensedMedications(legacyDispensed);
       setSelectedOrders(new Set(orders.map((o) => o.name)));
       setShowMedicationOrdersModal(true);
       if (orders.length === 0 && history.length === 0) {
@@ -2347,14 +2350,16 @@ export default function OrderSummary({
       return;
     }
     try {
-      const [orders, history, historySummary] = await Promise.all([
+      const [orders, history, historySummary, legacyDispensed] = await Promise.all([
         getPendingInpatientMedicationOrders(patientId),
         getPatientMedicationOrderHistory(patientId, 50),
         getPatientHistorySummary(patientId, 10),
+        getPatientLegacyDispensedMedications(patientId, 50),
       ]);
       setMedicationOrders(orders);
       setMedicationOrderHistory(history);
       setPatientHistorySummary(historySummary);
+      setLegacyDispensedMedications(legacyDispensed);
       setSelectedOrders(new Set(orders.map(o => o.name)));
       setShowMedicationOrdersModal(true);
       if (orders.length === 0 && history.length === 0) {
@@ -3958,6 +3963,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         setUserRemovedDefaultCustomer(true);
                         setMedicationOrders([]);
                         setMedicationOrderHistory([]);
+                        setLegacyDispensedMedications([]);
                         setSelectedOrders(new Set());
                         setSelectedHistoryItems(new Set());
                       }}
@@ -4136,6 +4142,7 @@ const handleSetSerial = (event: CustomEvent) => {
                       setUserRemovedDefaultCustomer(true);
                       setMedicationOrders([]);
                       setMedicationOrderHistory([]);
+                      setLegacyDispensedMedications([]);
                       setSelectedOrders(new Set());
                       setSelectedHistoryItems(new Set());
                       setShowCustomerDropdown(false);
@@ -5107,6 +5114,7 @@ const handleSetSerial = (event: CustomEvent) => {
         }}
         pendingOrders={medicationOrders}
         historyOrders={medicationOrderHistory}
+        legacyDispensedOrders={legacyDispensedMedications}
         selectedOrders={selectedOrders}
         onToggleOrder={(orderName) => {
           setSelectedOrders(prev => {
