@@ -1167,6 +1167,9 @@ export default function OrderSummary({
   const [lastDispensedSalesOrder, setLastDispensedSalesOrder] = useState<string | null>(null);
   const [lastDispensedLabelItems, setLastDispensedLabelItems] = useState<DispensedLabelItem[]>([]);
   const [lastDispensedCartSignature, setLastDispensedCartSignature] = useState<string | null>(null);
+  // Outpatient (Rose) pharmacies dispense through the payment flow (not a hospital sales order),
+  // so they get their own "Print Labels" affordance after a completed sale (PK-11).
+  const [showOpDispenseLabels, setShowOpDispenseLabels] = useState(false);
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { posDetails, loading: _posLoading } = usePOSDetails();
@@ -2546,10 +2549,72 @@ export default function OrderSummary({
     // Cart will be cleared when modal is closed via "New Order" button
   };
 
+  // Build medication-label rows (dosage / frequency / batch / expiry) from a set of cart lines.
+  // Shared by the hospital dispense flow and the outpatient (Rose) checkout flow.
+  const buildDispensedLabels = useCallback(
+    async (items: CartItem[]): Promise<DispensedLabelItem[]> => {
+      const labelsFromCart: DispensedLabelItem[] = items.map((item) => {
+        const lineKey = getLineKey(item);
+        const lineDiscount = ((itemDiscounts[item.id] || itemDiscounts[lineKey]) || {}) as {
+          dosage?: string;
+          prescriptionDosage?: string;
+          batchNumber?: string;
+        };
+        const dosage = lineDiscount.dosage;
+        const frequency = lineDiscount.prescriptionDosage;
+        const batchNo =
+          lineDiscount.batchNumber ||
+          (item as CartItem & { batch_no?: string }).batch_no ||
+          "N/A";
+        return {
+          itemCode: item.item_code || item.id,
+          itemName: item.name,
+          dosage:
+            dosage === null || dosage === undefined || String(dosage).trim() === ""
+              ? "N/A"
+              : String(dosage),
+          frequency: typeof frequency === "string" && frequency.trim() ? frequency : "N/A",
+          batchNo,
+          expiryDate: "N/A",
+        };
+      });
+
+      const batchNumbers = Array.from(
+        new Set(
+          labelsFromCart.map((label) => label.batchNo).filter((batchNo) => batchNo && batchNo !== "N/A")
+        )
+      );
+
+      if (batchNumbers.length > 0) {
+        try {
+          const batchDetails = await getBatchLabelDetails(batchNumbers);
+          return labelsFromCart.map((label) => {
+            const matchedBatch = batchDetails[label.batchNo];
+            return {
+              ...label,
+              expiryDate: matchedBatch?.expiry_date || "N/A",
+              batchNo: matchedBatch?.batch_no || label.batchNo,
+            };
+          });
+        } catch (batchError) {
+          console.error("Failed to fetch batch expiry details for labels:", batchError);
+          return labelsFromCart;
+        }
+      }
+      return labelsFromCart;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [itemDiscounts]
+  );
+
   const handleClosePaymentDialog = async (paymentCompleted?: boolean) => {
     setShowPaymentDialog(false);
 
     const soldItems = getSoldLineItems();
+    // Capture cart lines before the cart is cleared so we can offer label printing (OP/Rose).
+    const dispensedItemsForLabels = paymentCompleted && isPharmacy && !isHospitalPharmacy
+      ? [...cartItems]
+      : [];
 
     // Only clear cart if payment was completed
     if (paymentCompleted) {
@@ -2557,6 +2622,18 @@ export default function OrderSummary({
       handleClearCart();
     } else {
       console.log("OrderSummary: Payment was not completed - keeping cart items");
+    }
+
+    // Outpatient (Rose) pharmacy: build medication labels for the just-sold items so the
+    // pharmacist can print them, same as the hospital dispense flow (PK-11).
+    if (dispensedItemsForLabels.length > 0) {
+      try {
+        const labels = await buildDispensedLabels(dispensedItemsForLabels);
+        setLastDispensedLabelItems(labels);
+        setShowOpDispenseLabels(labels.length > 0);
+      } catch (labelError) {
+        console.error("OrderSummary: Failed to build medication labels:", labelError);
+      }
     }
 
     // Refresh stock so cashier can see updated availability
@@ -2582,6 +2659,13 @@ export default function OrderSummary({
       toast.error(`Failed to update stock: ${errorMessage}`);
     }
   };
+
+  // Hide the outpatient "Print Labels" affordance once a new order is started.
+  useEffect(() => {
+    if (cartItems.length > 0 && showOpDispenseLabels) {
+      setShowOpDispenseLabels(false);
+    }
+  }, [cartItems.length, showOpDispenseLabels]);
 
   const handleStartNewOrder = async () => {
     await handlePostSaleComplete();
@@ -2888,53 +2972,7 @@ const pages = labels.map((label) => `
       }
       const dispensedCartSignature = getCartSignature(cartItems);
 
-      const labelsFromCart: DispensedLabelItem[] = cartItems.map((item) => {
-        const lineKey = getLineKey(item);
-        const lineDiscount = ((itemDiscounts[item.id] || itemDiscounts[lineKey]) || {}) as {
-          dosage?: string;
-          prescriptionDosage?: string;
-          batchNumber?: string;
-        };
-        const dosage = lineDiscount.dosage;
-        const frequency = lineDiscount.prescriptionDosage;
-        const batchNo =
-          lineDiscount.batchNumber ||
-          (item as CartItem & { batch_no?: string }).batch_no ||
-          "N/A";
-
-        return {
-          itemCode: item.item_code || item.id,
-          itemName: item.name,
-          dosage: dosage === null || dosage === undefined || String(dosage).trim() === "" ? "N/A" : String(dosage),
-          frequency: typeof frequency === "string" && frequency.trim() ? frequency : "N/A",
-          batchNo,
-          expiryDate: "N/A",
-        };
-      });
-
-      const batchNumbers = Array.from(
-        new Set(labelsFromCart.map((label) => label.batchNo).filter((batchNo) => batchNo && batchNo !== "N/A"))
-      );
-
-      if (batchNumbers.length > 0) {
-        try {
-          const batchDetails = await getBatchLabelDetails(batchNumbers);
-          const labelsWithExpiry = labelsFromCart.map((label) => {
-            const matchedBatch = batchDetails[label.batchNo];
-            return {
-              ...label,
-              expiryDate: matchedBatch?.expiry_date || "N/A",
-              batchNo: matchedBatch?.batch_no || label.batchNo,
-            };
-          });
-          setLastDispensedLabelItems(labelsWithExpiry);
-        } catch (batchError) {
-          console.error("Failed to fetch batch expiry details for labels:", batchError);
-          setLastDispensedLabelItems(labelsFromCart);
-        }
-      } else {
-        setLastDispensedLabelItems(labelsFromCart);
-      }
+      setLastDispensedLabelItems(await buildDispensedLabels(cartItems));
 
       setLastDispensedSalesOrder(soName);
       setLastDispensedCartSignature(dispensedCartSignature);
@@ -4865,6 +4903,16 @@ const handleSetSerial = (event: CustomEvent) => {
                 Print Dispense Order
               </button>
             </div>
+          )}
+          {!isHospitalPharmacy && showOpDispenseLabels && lastDispensedLabelItems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => printMedicationLabels(lastDispensedLabelItems)}
+              className="w-full px-3 py-2 border border-beveren-600 text-beveren-600 rounded-lg font-medium hover:bg-beveren-50 transition-colors text-sm flex items-center justify-center gap-2"
+            >
+              <Printer size={15} />
+              Print Medication Labels
+            </button>
           )}
         </div>
       )}

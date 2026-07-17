@@ -6,6 +6,41 @@ from frappe import _
 _cached_pos_profiles = {}
 _cached_company_data = {}
 
+# Roles that are always allowed to use the POS write endpoints.
+_POS_ACCESS_ROLES = frozenset(
+	{
+		"System Manager",
+		"Administrator",
+		"Pharmacist",
+		"Pharmacy",
+		"Healthcare Administrator",
+		"Sales User",
+		"Sales Manager",
+		"Accounts User",
+		"Accounts Manager",
+	}
+)
+
+
+def require_pos_access():
+	"""Guard sensitive POS write endpoints against non-POS authenticated users.
+
+	Most POS APIs run with ``ignore_permissions``; this restores a coarse access check so that
+	an authenticated but non-POS account (e.g. a leaked low-privilege login) cannot bill or
+	dispense. Access is granted to POS/pharmacy/sales roles, or to any member of a POS Profile.
+	Raises ``frappe.PermissionError`` otherwise.
+	"""
+	user = frappe.session.user
+	if user == "Administrator":
+		return
+	if _POS_ACCESS_ROLES & set(frappe.get_roles(user)):
+		return
+	if frappe.db.exists("POS Profile User", {"user": user}):
+		return
+	frappe.throw(
+		_("You are not permitted to use the Point of Sale."), frappe.PermissionError
+	)
+
 
 def get_current_pos_profile():
 	"""Get the active POS Profile with identity-only caching keyed by user and opening entry.
