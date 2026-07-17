@@ -502,6 +502,104 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 		frappe.throw(f"Failed to fetch Medication Order history: {str(e)}")
 
 
+def _legacy_sales_item_to_dict(row) -> dict:
+	return {
+		"name": row.name,
+		"sr_num": row.get("sr_num"),
+		"item": row.get("item"),
+		"item_name": row.get("item_name"),
+		"item_num": row.get("item_num"),
+		"show_qty": row.get("show_qty"),
+		"show_uom": row.get("show_uom"),
+		"show_rate": row.get("show_rate"),
+		"show_amt": row.get("show_amt"),
+		"item_expiry_date": row.get("item_expiry_date"),
+		"ais_batch_num": row.get("ais_batch_num"),
+		"trans_remarks_det": row.get("trans_remarks_det"),
+		"remarks_detail": row.get("remarks_detail"),
+	}
+
+
+@frappe.whitelist()
+def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
+	"""
+	Legacy Sales Transactions (+ line items) for a patient.
+	Used by hospital pharmacy Medication Orders → Legacy Dispensed Medicine tab.
+	"""
+	try:
+		if not patient:
+			return []
+		if not frappe.db.exists("DocType", "Legacy Sales Transactions"):
+			return []
+
+		try:
+			limit = max(1, min(int(limit), 100))
+		except Exception:
+			limit = 50
+
+		# POS pharmacists may not have Desk read on this DocType — whitelist is gated by login.
+		transactions = frappe.get_all(
+			"Legacy Sales Transactions",
+			fields=[
+				"name",
+				"trans_no",
+				"trans_type_num",
+				"trans_date",
+				"date_created",
+				"branch",
+				"vch_status",
+				"patient",
+				"patient_name",
+				"patient_visit",
+				"visit_num",
+				"admission",
+				"admission_num",
+				"net_bill_amount",
+				"total_bill_amount",
+				"pink_presc_num",
+				"trans_remarks",
+			],
+			filters={"patient": patient},
+			order_by="trans_date desc, creation desc",
+			limit=limit,
+			ignore_permissions=True,
+		)
+
+		results = []
+		for txn in transactions:
+			raw_items = frappe.get_all(
+				"Legacy Sales Transaction Item",
+				filters={"parent": txn.name, "parenttype": "Legacy Sales Transactions"},
+				fields=[
+					"name",
+					"sr_num",
+					"item",
+					"item_name",
+					"item_num",
+					"show_qty",
+					"show_uom",
+					"show_rate",
+					"show_amt",
+					"item_expiry_date",
+					"ais_batch_num",
+					"trans_remarks_det",
+					"remarks_detail",
+				],
+				order_by="sr_num asc",
+				ignore_permissions=True,
+			)
+			items = [_legacy_sales_item_to_dict(row) for row in raw_items]
+			entry = dict(txn)
+			entry["items"] = items
+			entry["item_count"] = len(items)
+			results.append(entry)
+
+		return results
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Error fetching legacy dispensed medications")
+		frappe.throw(f"Failed to fetch legacy dispensed medications: {str(e)}")
+
+
 def _get_patient_diagnosis_entries(patient: str, limit: int = 25):
 	if not frappe.db.exists("DocType", "Medical Diagnosis Entry"):
 		return []

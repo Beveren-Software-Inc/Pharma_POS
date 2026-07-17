@@ -3,7 +3,7 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package } from "lucide-react";
-import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument } from "../services/patientService";
+import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem } from "../services/patientService";
 import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype, resolveMedicationItemCode, resolveMedicationDisplayName } from "../services/patientService";
 import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
 import MedicationOrderDischargedBadge from "./MedicationOrderDischargedBadge";
@@ -13,6 +13,7 @@ interface InpatientMedicationOrdersModalProps {
   onClose: () => void;
   pendingOrders: InpatientMedicationOrder[];
   historyOrders: InpatientMedicationOrder[];
+  legacyDispensedOrders?: LegacyDispensedTransaction[];
   selectedOrders: Set<string>;
   onToggleOrder: (orderName: string) => void;
   onAddToCart: (alternatives?: Record<string, string>) => void;
@@ -652,11 +653,71 @@ function getUploadDocumentLabel(doc: PatientUploadDocument): string {
   return doc.file_name?.trim() || doc.document_name?.trim() || doc.document_type?.trim() || "Document";
 }
 
+function formatLegacyAmount(value: number | string | null | undefined): string {
+  if (value == null || value === "") return "—";
+  const n = typeof value === "number" ? value : Number(value);
+  if (Number.isNaN(n)) return String(value);
+  return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+}
+
+function LegacyItemsTable({ items }: { items: LegacyDispensedMedicationItem[] }) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50 dark:bg-slate-800/80 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          <tr>
+            <th className="px-3 py-2 text-left font-semibold">#</th>
+            <th className="px-3 py-2 text-left font-semibold">Item</th>
+            <th className="px-3 py-2 text-right font-semibold">Qty</th>
+            <th className="px-3 py-2 text-left font-semibold">UOM</th>
+            <th className="px-3 py-2 text-right font-semibold">Rate</th>
+            <th className="px-3 py-2 text-right font-semibold">Amount</th>
+            <th className="px-3 py-2 text-left font-semibold">Batch</th>
+            <th className="px-3 py-2 text-left font-semibold">Expiry</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 dark:divide-slate-700 bg-white dark:bg-gray-900/40">
+          {items.map((item, idx) => (
+            <tr key={item.name || `${item.item_num || "item"}-${idx}`}>
+              <td className="px-3 py-2 text-slate-500 tabular-nums">{item.sr_num ?? idx + 1}</td>
+              <td className="px-3 py-2">
+                <div className="font-medium text-slate-900 dark:text-white">
+                  {item.item_name?.trim() || item.item || item.item_num || "—"}
+                </div>
+                {item.item_num ? (
+                  <div className="text-xs text-slate-400 font-mono mt-0.5">{item.item_num}</div>
+                ) : null}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
+                {formatLegacyAmount(item.show_qty)}
+              </td>
+              <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{item.show_uom || "—"}</td>
+              <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
+                {formatLegacyAmount(item.show_rate)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900 dark:text-white">
+                {formatLegacyAmount(item.show_amt)}
+              </td>
+              <td className="px-3 py-2 text-slate-600 dark:text-slate-300 font-mono text-xs">
+                {item.ais_batch_num || "—"}
+              </td>
+              <td className="px-3 py-2 text-slate-600 dark:text-slate-300 tabular-nums text-xs">
+                {item.item_expiry_date ? String(item.item_expiry_date).slice(0, 10) : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function InpatientMedicationOrdersModal({
   isOpen,
   onClose,
   pendingOrders,
   historyOrders,
+  legacyDispensedOrders = [],
   selectedOrders,
   onToggleOrder,
   onAddToCart,
@@ -678,6 +739,7 @@ export default function InpatientMedicationOrdersModal({
   const [alternativeDrugs, setAlternativeDrugs] = useState<Record<string, string>>({});
   const [alternativeDrugLabels, setAlternativeDrugLabels] = useState<Record<string, string>>({});
   const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
+  const [expandedLegacyOrders, setExpandedLegacyOrders] = useState<Set<string>>(new Set());
   const [expandedDiagnosisEntries, setExpandedDiagnosisEntries] = useState<Set<string>>(new Set());
   const [expandedPatientHistoryOrders, setExpandedPatientHistoryOrders] = useState<Set<string>>(new Set());
   const [openPrintMenuFor, setOpenPrintMenuFor] = useState<string | null>(null);
@@ -691,6 +753,7 @@ export default function InpatientMedicationOrdersModal({
     if (!isOpen) {
       setActiveTab("pending");
       setExpandedHistoryOrders(new Set());
+      setExpandedLegacyOrders(new Set());
       setExpandedDiagnosisEntries(new Set());
       setExpandedPatientHistoryOrders(new Set());
       setOpenPrintMenuFor(null);
@@ -699,6 +762,12 @@ export default function InpatientMedicationOrdersModal({
       setAlternativeDrugLabels({});
     }
   }, [isOpen]);
+
+  // Legacy transactions open by default (each has a child table).
+  useEffect(() => {
+    if (!isOpen) return;
+    setExpandedLegacyOrders(new Set(legacyDispensedOrders.map((t) => t.name)));
+  }, [isOpen, legacyDispensedOrders]);
 
   useEffect(() => {
     if (isOpen && isHospitalMode && patientVisitCreatedSignal > 0) {
@@ -782,7 +851,7 @@ export default function InpatientMedicationOrdersModal({
     { id: "visit" as const, label: "Patient Visit", count: null, icon: UserPlus },
     { id: "history" as const, label: "Prescription History", count: historyOrders.length, icon: Clock },
     { id: "patient_history" as const, label: "Patient History", count: null, icon: History },
-    { id: "legacy_dispensed" as const, label: "Legacy Dispensed Medicine", count: null, icon: Package },
+    { id: "legacy_dispensed" as const, label: "Legacy Dispensed Medicine", count: legacyDispensedOrders.length, icon: Package },
   ];
 
   return (
@@ -1311,10 +1380,88 @@ export default function InpatientMedicationOrdersModal({
 
           {/* ── LEGACY DISPENSED MEDICINE ── */}
           {isHospitalMode && activeTab === "legacy_dispensed" && (
-            <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
-              <Package size={40} className="mb-3 opacity-30" />
-              <p className="text-sm font-medium">Coming soon</p>
-            </div>
+            legacyDispensedOrders.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+                <Package size={40} className="mb-3 opacity-30" />
+                <p className="text-sm font-medium">No legacy dispensed medicine found.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {legacyDispensedOrders.map((txn) => {
+                  const isExpanded = expandedLegacyOrders.has(txn.name);
+                  const title = txn.trans_no || txn.name;
+                  const dateLabel = txn.trans_date
+                    ? String(txn.trans_date).slice(0, 10)
+                    : txn.date_created
+                      ? String(txn.date_created).slice(0, 10)
+                      : null;
+                  return (
+                    <div
+                      key={txn.name}
+                      className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-slate-900/20"
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedLegacyOrders((prev) => {
+                            const next = new Set(prev);
+                            next.has(txn.name) ? next.delete(txn.name) : next.add(txn.name);
+                            return next;
+                          })
+                        }
+                        className="w-full flex items-center gap-2 px-4 py-3 bg-slate-100/80 dark:bg-slate-800/50 text-left"
+                      >
+                        <span className={`text-gray-400 transition-transform duration-150 flex-shrink-0 ${isExpanded ? "rotate-0" : "-rotate-90"}`}>
+                          <ChevronDown size={15} />
+                        </span>
+                        <span className="font-semibold text-sm text-gray-800 dark:text-white truncate font-mono">
+                          {title}
+                        </span>
+                        {dateLabel ? (
+                          <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">{dateLabel}</span>
+                        ) : null}
+                        {txn.branch ? (
+                          <span className="text-xs text-gray-500 dark:text-gray-400 truncate flex-shrink-0">
+                            {txn.branch}
+                          </span>
+                        ) : null}
+                        {txn.visit_num || txn.patient_visit ? (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300 flex-shrink-0">
+                            Visit {txn.visit_num || txn.patient_visit}
+                          </span>
+                        ) : null}
+                        {txn.admission_num || txn.admission ? (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 flex-shrink-0">
+                            Adm {txn.admission_num || txn.admission}
+                          </span>
+                        ) : null}
+                        <span className="ml-auto text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
+                          {(txn.item_count ?? txn.items?.length ?? 0)} item(s)
+                          {txn.net_bill_amount != null ? ` · ${formatLegacyAmount(txn.net_bill_amount)}` : ""}
+                        </span>
+                      </button>
+
+                      {isExpanded && (txn.items?.length ?? 0) > 0 && (
+                        <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-gray-900/30">
+                          <LegacyItemsTable items={txn.items} />
+                          {txn.trans_remarks ? (
+                            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap">
+                              {txn.trans_remarks}
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
+
+                      {isExpanded && (!txn.items || txn.items.length === 0) && (
+                        <div className="px-4 py-4 border-t border-slate-200 dark:border-slate-700 text-sm text-gray-400 dark:text-gray-500 text-center bg-white/80 dark:bg-gray-900/30">
+                          No line items on this transaction.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
           )}
 
           {/* ── VISIT ── */}
@@ -1408,7 +1555,7 @@ export default function InpatientMedicationOrdersModal({
               : activeTab === "patient_history"
               ? "Diagnosis, visits, warnings and allergies"
               : activeTab === "legacy_dispensed"
-              ? "Legacy dispensed medicine — coming soon"
+              ? `${legacyDispensedOrders.length} legacy transaction(s) — read only`
               : lastCreatedVisit?.name
               ? "Visit created — used when you dispense"
               : "Create a new encounter above"}

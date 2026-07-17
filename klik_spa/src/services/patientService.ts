@@ -283,6 +283,66 @@ export async function getPatientMedicationOrderHistory(patient: string, limit = 
   }
 }
 
+export interface LegacyDispensedMedicationItem {
+  name?: string;
+  sr_num?: number | null;
+  item?: string;
+  item_name?: string;
+  item_num?: string;
+  show_qty?: number | null;
+  show_uom?: string;
+  show_rate?: number | null;
+  show_amt?: number | null;
+  item_expiry_date?: string;
+  ais_batch_num?: string;
+  trans_remarks_det?: string;
+  remarks_detail?: string;
+}
+
+export interface LegacyDispensedTransaction {
+  name: string;
+  trans_no?: string;
+  trans_type_num?: string;
+  trans_date?: string;
+  date_created?: string;
+  branch?: string;
+  vch_status?: string;
+  patient?: string;
+  patient_name?: string;
+  patient_visit?: string;
+  visit_num?: string;
+  admission?: string;
+  admission_num?: string;
+  net_bill_amount?: number | null;
+  total_bill_amount?: number | null;
+  pink_presc_num?: string;
+  trans_remarks?: string;
+  item_count?: number;
+  items: LegacyDispensedMedicationItem[];
+}
+
+export async function getPatientLegacyDispensedMedications(
+  patient: string,
+  limit = 50
+): Promise<LegacyDispensedTransaction[]> {
+  try {
+    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_legacy_dispensed_medications?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch legacy dispensed medications');
+    }
+    return data?.message || [];
+  } catch (error) {
+    console.error('Error fetching legacy dispensed medications:', error);
+    return [];
+  }
+}
+
 export interface PatientDiagnosisEntry {
   name: string;
   diagnosis?: string;
