@@ -440,7 +440,52 @@ export async function getPatientHistorySummary(patient: string, limit = 10): Pro
   }
 }
 
-export async function createPatientVisit(patient: string): Promise<{ doctype: string; name: string; docstatus?: number } | null> {
+export interface OpenPharmacyPatientVisit {
+  doctype: string;
+  name: string;
+  patient?: string;
+  patient_name?: string;
+  status?: string;
+  visit_type?: string;
+  encounter_date?: string;
+  visit_date?: string;
+  posting_date?: string;
+  practitioner_name?: string;
+  docstatus?: number;
+}
+
+export async function getOpenPharmacyPatientVisits(
+  patient: string,
+  limit = 20
+): Promise<OpenPharmacyPatientVisit[]> {
+  try {
+    const apiUrl = `/api/method/klik_pos.api.patient.get_open_pharmacy_patient_visits?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const response = await fetch(apiUrl, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || data._server_messages || "Failed to fetch open pharmacy visits");
+    }
+    if (data.exc_type || data.exception) {
+      throw new Error(data.message || data.exception || "Failed to fetch open pharmacy visits");
+    }
+    const message = data?.message;
+    if (message?.success === false) {
+      throw new Error(message.message || "Failed to fetch open pharmacy visits");
+    }
+    return (message?.visits || []) as OpenPharmacyPatientVisit[];
+  } catch (error) {
+    console.error("Error fetching open pharmacy patient visits:", error);
+    return [];
+  }
+}
+
+export async function createPatientVisit(
+  patient: string
+): Promise<{ doctype: string; name: string; docstatus?: number; visit_type?: string | null; cost_center?: string | null } | null> {
   try {
     const csrfToken = window.csrf_token;
     const response = await fetch('/api/method/klik_pos.api.patient.create_patient_visit', {

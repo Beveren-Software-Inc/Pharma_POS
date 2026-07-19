@@ -34,8 +34,8 @@ frappe.query_reports["Delivery Performance"] = {
 			fieldname: "group_by",
 			label: __("Group By"),
 			fieldtype: "Select",
-			options: "Delivery Personnel\nInvoice",
-			default: "Delivery Personnel",
+			options: "\nInvoice",
+			default: "",
 		},
 	],
 };

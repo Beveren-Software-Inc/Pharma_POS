@@ -1142,7 +1142,7 @@ export default function OrderSummary({
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedHistoryItems, setSelectedHistoryItems] = useState<Set<string>>(new Set());
   const [isCreatingVisit, setIsCreatingVisit] = useState(false);
-  const [createdVisitRef, setCreatedVisitRef] = useState<{ doctype: string; name: string } | null>(null);
+  const [createdVisitRef, setCreatedVisitRef] = useState<{ doctype: string; name: string; visit_type?: string | null } | null>(null);
   const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
   const [isDispensing, setIsDispensing] = useState(false);
   const [showClinicalAppropriatenessConfirm, setShowClinicalAppropriatenessConfirm] = useState(false);
@@ -2341,9 +2341,18 @@ export default function OrderSummary({
   };
 
   const openMedicationOrdersModal = async () => {
-    const patientToUse = selectedPatient || (selectedCustomer ? patients.find(
+    let patientToUse = selectedPatient || (selectedCustomer ? patients.find(
       p => (p.patient_name || p.name).toLowerCase() === selectedCustomer.name.toLowerCase()
     ) : null);
+
+    if (!patientToUse?.name && selectedCustomer?.id && isHospitalPharmacy) {
+      const resolved = await resolvePatientForCustomer(selectedCustomer.id);
+      if (resolved) {
+        patientToUse = resolved;
+        setSelectedPatient(resolved);
+      }
+    }
+
     const patientId = patientToUse?.name ?? selectedCustomer?.id ?? selectedCustomer?.name;
     if (!patientId) {
       toast.error("Patient not found.");
@@ -2444,7 +2453,11 @@ export default function OrderSummary({
       setIsCreatingVisit(true);
       const result = await createPatientVisit(patientId);
       if (result?.name) {
-        setCreatedVisitRef({ doctype: result.doctype, name: result.name });
+        setCreatedVisitRef({
+          doctype: result.doctype,
+          name: result.name,
+          visit_type: result.visit_type || null,
+        });
         setPatientVisitCreatedSignal((s) => s + 1);
         toast.success(`Created pharmacy visit: ${result.name}`);
       } else {
@@ -2455,6 +2468,17 @@ export default function OrderSummary({
     } finally {
       setIsCreatingVisit(false);
     }
+  };
+
+  const handleSelectPatientVisit = (visit: { doctype: string; name: string; visit_type?: string | null }) => {
+    if (!visit?.name) return;
+    setCreatedVisitRef({
+      doctype: visit.doctype || "Patient Visit",
+      name: visit.name,
+      visit_type: visit.visit_type || null,
+    });
+    setPatientVisitCreatedSignal((s) => s + 1);
+    toast.success(`Using pharmacy visit: ${visit.name}`);
   };
 
   const handleSaveCustomer = async (newCustomer: Partial<Customer> & { customer_name?: string }) => {
@@ -2721,7 +2745,7 @@ const pages = labels.map((label) => `
   const validateHospitalDispense = (): boolean => {
     if (!getHospitalCareReference()) {
       toast.error(
-        "Create a Patient Visit before dispensing. Open Medication Orders and create a visit first."
+        "Select or create a Patient Visit before dispensing. Open Medication Orders → Patient Visit."
       );
       return false;
     }
@@ -5139,9 +5163,14 @@ const handleSetSerial = (event: CustomEvent) => {
         }}
         onAddHistoryItemsToCart={handleAddHistoryItemsToCart}
         onCreateVisit={handleCreatePatientVisit}
+        onSelectVisit={handleSelectPatientVisit}
         creatingVisit={isCreatingVisit}
         patientName={selectedPatient?.patient_name || selectedPatient?.name}
-        patientId={selectedPatient?.name}
+        patientId={
+          selectedPatient?.name
+          || selectedCustomer?.id
+          || selectedCustomer?.name
+        }
         isHospitalMode={isHospitalPharmacy}
         defaultUom={pharmacyDefaultUom || undefined}
         lastCreatedVisit={createdVisitRef}

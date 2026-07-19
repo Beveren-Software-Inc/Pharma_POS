@@ -3,8 +3,8 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package } from "lucide-react";
-import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem } from "../services/patientService";
-import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype, resolveMedicationItemCode, resolveMedicationDisplayName } from "../services/patientService";
+import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, OpenPharmacyPatientVisit } from "../services/patientService";
+import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype, resolveMedicationItemCode, resolveMedicationDisplayName, getOpenPharmacyPatientVisits } from "../services/patientService";
 import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
 import MedicationOrderDischargedBadge from "./MedicationOrderDischargedBadge";
 
@@ -21,14 +21,15 @@ interface InpatientMedicationOrdersModalProps {
   onToggleHistoryItem: (itemKey: string) => void;
   onAddHistoryItemsToCart: () => void;
   onCreateVisit: () => void;
+  onSelectVisit?: (visit: { doctype: string; name: string; visit_type?: string | null }) => void;
   creatingVisit?: boolean;
   patientName?: string;
   patientId?: string;
   isHospitalMode?: boolean;
   defaultUom?: string;
-  /** Shown on Patient Visit tab after a successful create (persists while modal can reopen). */
-  lastCreatedVisit?: { doctype: string; name: string } | null;
-  /** Incremented on each successful visit create — switches modal to Patient Visit tab. */
+  /** Shown on Patient Visit tab after a successful create/select (persists while modal can reopen). */
+  lastCreatedVisit?: { doctype: string; name: string; visit_type?: string | null } | null;
+  /** Incremented on each successful visit create/select — switches modal to Patient Visit tab. */
   patientVisitCreatedSignal?: number;
   patientHistory?: PatientHistorySummary | null;
   productAvailability?: Record<string, number>;
@@ -725,6 +726,7 @@ export default function InpatientMedicationOrdersModal({
   onToggleHistoryItem,
   onAddHistoryItemsToCart,
   onCreateVisit,
+  onSelectVisit,
   creatingVisit = false,
   patientName,
   patientId,
@@ -745,9 +747,25 @@ export default function InpatientMedicationOrdersModal({
   const [openPrintMenuFor, setOpenPrintMenuFor] = useState<string | null>(null);
   const [printMenuPosition, setPrintMenuPosition] = useState<{ top: number; right: number } | null>(null);
   const [medicationOrderPrintFormats, setMedicationOrderPrintFormats] = useState<string[]>(["Standard"]);
+  const [openPharmacyVisits, setOpenPharmacyVisits] = useState<OpenPharmacyPatientVisit[]>([]);
+  const [loadingOpenVisits, setLoadingOpenVisits] = useState(false);
   const printButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const MEDICATION_ORDER_DOCTYPE = "Patient Medication Order";
+
+  const loadOpenPharmacyVisits = useCallback(async () => {
+    if (!patientId || !isHospitalMode) {
+      setOpenPharmacyVisits([]);
+      return;
+    }
+    setLoadingOpenVisits(true);
+    try {
+      const visits = await getOpenPharmacyPatientVisits(patientId);
+      setOpenPharmacyVisits(visits);
+    } finally {
+      setLoadingOpenVisits(false);
+    }
+  }, [patientId, isHospitalMode]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -760,8 +778,14 @@ export default function InpatientMedicationOrdersModal({
       setPrintMenuPosition(null);
       setAlternativeDrugs({});
       setAlternativeDrugLabels({});
+      setOpenPharmacyVisits([]);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !isHospitalMode || !patientId) return;
+    void loadOpenPharmacyVisits();
+  }, [isOpen, isHospitalMode, patientId, loadOpenPharmacyVisits, patientVisitCreatedSignal]);
 
   // Legacy transactions open by default (each has a child table).
   useEffect(() => {
@@ -1474,14 +1498,16 @@ export default function InpatientMedicationOrdersModal({
                       <CheckCircle size={22} className="text-white" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold text-emerald-900 dark:text-emerald-100">Patient visit created</p>
+                      <p className="text-sm font-bold text-emerald-900 dark:text-emerald-100">Patient visit ready</p>
                       <p className="text-xs text-emerald-800/80 dark:text-emerald-200/80 mt-1">
-                        This document is linked when you press <span className="font-semibold">Dispense</span> on the cart.
+                        This visit is linked when you press <span className="font-semibold">Dispense</span> on the cart.
                       </p>
                       <div className="mt-3 space-y-1.5 text-sm">
                         <div className="flex flex-wrap gap-x-2 gap-y-1">
                           <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700/70 dark:text-emerald-300/70">Type</span>
-                          <span className="font-mono text-emerald-900 dark:text-emerald-100">{lastCreatedVisit.doctype}</span>
+                          <span className="font-mono text-emerald-900 dark:text-emerald-100">
+                            {lastCreatedVisit.visit_type || "—"}
+                          </span>
                         </div>
                         <div className="flex flex-wrap gap-x-2 gap-y-1 items-baseline">
                           <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700/70 dark:text-emerald-300/70">Name</span>
@@ -1502,6 +1528,91 @@ export default function InpatientMedicationOrdersModal({
               )}
 
               <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-6 py-4 bg-sky-50 dark:bg-sky-900/20 border-b border-sky-100 dark:border-sky-800/30">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center">
+                      <ClipboardList size={17} className="text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-gray-900 dark:text-white text-base">
+                        Open Pharmacy visits
+                      </h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        Reuse a visit already opened by reception — avoids duplicates
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-4 py-3">
+                  {!patientId ? (
+                    <p className="text-sm text-gray-500 px-2 py-3">Select a patient to see open Pharmacy visits.</p>
+                  ) : loadingOpenVisits ? (
+                    <div className="flex items-center justify-center gap-2 py-6 text-sm text-gray-500">
+                      <span className="w-4 h-4 border-2 border-sky-600/30 border-t-sky-600 rounded-full animate-spin" />
+                      Loading open visits…
+                    </div>
+                  ) : openPharmacyVisits.length === 0 ? (
+                    <p className="text-sm text-gray-500 px-2 py-3">
+                      No open Pharmacy visits for this patient. Create one below if needed.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {openPharmacyVisits.map((visit) => {
+                        const visitDate = String(
+                          visit.encounter_date || visit.visit_date || visit.posting_date || ""
+                        ).slice(0, 10);
+                        const isSelected = lastCreatedVisit?.name === visit.name;
+                        return (
+                          <div
+                            key={visit.name}
+                            className={`rounded-xl border px-4 py-3 flex items-start gap-3 ${
+                              isSelected
+                                ? "border-emerald-400 bg-emerald-50/70 dark:border-emerald-700 dark:bg-emerald-900/20"
+                                : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/40"
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white break-all">
+                                {visit.name}
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+                                {visitDate ? <span>Date: <span className="tabular-nums font-medium text-gray-700 dark:text-gray-200">{visitDate}</span></span> : null}
+                                {visit.status ? <span>Status: <span className="font-medium text-gray-700 dark:text-gray-200">{visit.status}</span></span> : null}
+                                {visit.visit_type ? <span>Type: <span className="font-medium text-gray-700 dark:text-gray-200">{visit.visit_type}</span></span> : null}
+                              </div>
+                              {visit.practitioner_name ? (
+                                <div className="mt-1 text-xs text-gray-500">
+                                  Practitioner: <span className="font-medium text-gray-700 dark:text-gray-200">{visit.practitioner_name}</span>
+                                </div>
+                              ) : null}
+                            </div>
+                            <button
+                              type="button"
+                              disabled={!onSelectVisit || isSelected}
+                              onClick={() =>
+                                onSelectVisit?.({
+                                  doctype: visit.doctype || "Patient Visit",
+                                  name: visit.name,
+                                  visit_type: visit.visit_type || null,
+                                })
+                              }
+                              className={`flex-shrink-0 px-3 py-2 text-xs font-bold rounded-lg border-2 transition-colors ${
+                                isSelected
+                                  ? "border-emerald-500 text-emerald-700 bg-emerald-100 cursor-default"
+                                  : "border-sky-600 text-sky-700 bg-white hover:bg-sky-50 disabled:opacity-50"
+                              }`}
+                            >
+                              {isSelected ? "Selected" : "Use visit"}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div className="px-6 py-5 bg-beveren-50 dark:bg-beveren-900/20 border-b border-beveren-100 dark:border-beveren-800/30">
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-xl bg-orange-600 flex items-center justify-center">
@@ -1512,7 +1623,7 @@ export default function InpatientMedicationOrdersModal({
                         {lastCreatedVisit?.name ? "Create another visit" : "Create Patient Visit"}
                       </h3>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        Non-charging pharmacy visit (no sales order)
+                        Only if there is no open Pharmacy visit to reuse
                       </p>
                     </div>
                   </div>
@@ -1557,7 +1668,9 @@ export default function InpatientMedicationOrdersModal({
               : activeTab === "legacy_dispensed"
               ? `${legacyDispensedOrders.length} legacy transaction(s) — read only`
               : lastCreatedVisit?.name
-              ? "Visit created — used when you dispense"
+              ? "Visit linked — used when you dispense"
+              : openPharmacyVisits.length > 0
+              ? "Select an open Pharmacy visit, or create a new one"
               : "Create a new encounter above"}
           </div>
           <div className="flex items-center gap-2">
