@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_bulk_edit": 1,
  "allow_rename": 1,
  "creation": "2026-03-02 15:42:10.075404",
  "doctype": "DocType",
@@ -7,6 +8,7 @@
  "field_order": [
   "company",
   "currency",
+  "payment_percentage",
   "column_break_qicp",
   "posting_date",
   "standard_delivery_charges",
@@ -51,13 +53,19 @@
    "fieldname": "standard_delivery_charges",
    "fieldtype": "Currency",
    "label": "Standard Delivery Charges"
+  },
+  {
+   "default": "100",
+   "fieldname": "payment_percentage",
+   "fieldtype": "Percent",
+   "label": "Payment Percentage"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-03-08 12:53:30.034703",
+ "modified": "2026-07-19 10:52:27.783875",
  "modified_by": "Administrator",
  "module": "KLiK PoS",
  "name": "Delivery Charges",
