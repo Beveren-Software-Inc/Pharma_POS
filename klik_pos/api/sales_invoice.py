@@ -9,6 +9,44 @@ from datetime import datetime, timedelta, date as date_type
 
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
+
+def _medication_order_is_inpatient(mo_name):
+	"""True when a Patient Medication Order is for an inpatient (Inpatient Admission reference)."""
+	if not mo_name:
+		return False
+	row = frappe.db.get_value(
+		"Patient Medication Order", mo_name, ["reference_doctype", "inpatient_record"], as_dict=True
+	) or {}
+	return bool(row.get("inpatient_record")) or row.get("reference_doctype") == "Inpatient Admission"
+
+
+def _guard_rose_pharmacy_inpatient(medication_order, profile=None):
+	"""Rose (outpatient-only) pharmacies must not dispense/bill inpatient medication orders.
+
+	A Rose pharmacy is a pharmacy POS Profile with custom_is_hospital_pharmacy = 0. Hospital
+	pharmacies (=1) serve both OP and IP and are unaffected.
+	"""
+	if not medication_order:
+		return
+	try:
+		profile = profile or get_current_pos_profile()
+	except Exception:
+		return  # can't determine profile — fail open rather than block a valid sale
+	if not profile or not cint(getattr(profile, "custom_is_pharmacy", 0)):
+		return
+	if cint(getattr(profile, "custom_is_hospital_pharmacy", 0)):
+		return
+	mos = medication_order if isinstance(medication_order, (list, tuple, set)) else [medication_order]
+	for mo in mos:
+		if _medication_order_is_inpatient(mo):
+			frappe.throw(
+				_(
+					"This is an outpatient (Rose) pharmacy and cannot dispense inpatient medication "
+					"orders. Use a hospital pharmacy for inpatient dispensing."
+				)
+			)
+
+
 # Performance optimization: Cache frequently accessed data
 _cached_company_data = {}
 _cached_customer_data = {}
@@ -779,6 +817,10 @@ def create_and_submit_invoice(data):
         import time
         start_time = time.time()
 
+        # Coarse access gate: only POS/pharmacy/sales users (or POS Profile members) may bill.
+        from klik_pos.klik_pos.utils import require_pos_access
+        require_pos_access()
+
         if not data:
             frappe.throw("No data provided for invoice creation")
 
@@ -814,6 +856,19 @@ def create_and_submit_invoice(data):
             frappe.throw("Customer is required")
         if not items or len(items) == 0:
             frappe.throw("At least one item is required")
+
+        # Rose (outpatient-only) pharmacy must not dispense inpatient medication orders.
+        _guard_rose_pharmacy_inpatient(medication_order)
+
+        # Block dispensing more than the prescribed quantity on any linked medication-order line.
+        try:
+            from klik_pos.api.sales_order import validate_dispense_quantities
+
+            validate_dispense_quantities(items)
+        except frappe.ValidationError:
+            raise
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Dispense-quantity validation skipped")
 
         existing_doc = None
         if draft_invoice_id:
@@ -862,6 +917,30 @@ def create_and_submit_invoice(data):
 
             doc.save(ignore_permissions=True)
             doc.submit()  # ← stock validation happens here; if it throws, we rollback
+
+            # Clinical safety (BRD PHA-02): record drug-allergy / duplicate-therapy alerts on the
+            # invoice as an audit trail. Advisory only — never blocks a completed sale.
+            try:
+                from klik_pos.api.clinical_alerts import record_dispense_alerts
+                record_dispense_alerts(doc, items)
+            except Exception:
+                frappe.log_error(frappe.get_traceback(), f"Dispense safety check failed for {doc.name}")
+
+            # Controlled-drug register (BRD PHA-07): log any narcotic/psychotropic dispensed.
+            try:
+                from klik_pos.api.controlled_drugs import record_controlled_dispense
+                record_controlled_dispense(doc, items)
+            except Exception:
+                frappe.log_error(frappe.get_traceback(), f"Controlled-drug register failed for {doc.name}")
+
+            # Create the Insurance Claim for the insurance split so the payer is actually billed.
+            # Non-blocking: a claim failure is logged but does not roll back the completed sale.
+            if health_insurance and flt(insurance_amount) > 0:
+                try:
+                    from klik_pos.api.insurance_claim import create_insurance_claim_for_pos
+                    create_insurance_claim_for_pos(doc, health_insurance, flt(insurance_amount))
+                except Exception:
+                    frappe.log_error(frappe.get_traceback(), f"POS Insurance Claim creation failed for {doc.name}")
 
             payment_entry = None
             should_create_payment_entry = False
@@ -1663,8 +1742,67 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 	_add_dispensing_lot_to_item(item_data, item, pos_profile)
 	_add_dosage_to_item(item_data, item)
 	_add_item_tax_template_to_item(item_data, item, pos_profile)
+	_enforce_and_record_discount(item_data, item, pos_profile)
 
 	return item_data
+
+
+# Roles allowed to exceed a POS profile's max-discount cap.
+_DISCOUNT_OVERRIDE_ROLES = frozenset(
+	{"System Manager", "Administrator", "Healthcare Administrator"}
+)
+
+
+def _enforce_and_record_discount(item_data, item, pos_profile):
+	"""Make POS discounts transparent and (optionally) cap them.
+
+	The cart only sends a final ``price``; a discount is otherwise baked silently into the line
+	rate. Here we look up the item's list price and, when the sale is below list, record the
+	list rate on the line so ERPNext derives ``discount_amount``/``discount_percentage`` for
+	audit (grand total is unchanged — ``rate`` stays the sold price). If the POS profile sets a
+	``custom_max_discount_percent`` > 0, a larger discount is blocked unless the user holds an
+	override role.
+	"""
+	try:
+		if item.get("is_free_item"):
+			return
+		price_list = getattr(pos_profile, "selling_price_list", None)
+		if not price_list:
+			return
+		item_code = item_data.get("item_code")
+		rate = flt(item.get("price"))
+		if not item_code or rate <= 0:
+			return
+		list_rate = flt(
+			frappe.db.get_value(
+				"Item Price",
+				{"item_code": item_code, "price_list": price_list, "selling": 1},
+				"price_list_rate",
+			)
+			or 0
+		)
+		if list_rate <= 0 or rate >= list_rate:
+			return  # no discount (or a markup) — nothing to record
+
+		discount_pct = (list_rate - rate) / list_rate * 100.0
+
+		cap = flt(getattr(pos_profile, "custom_max_discount_percent", 0) or 0)
+		if cap > 0 and discount_pct > cap + 0.01:
+			if not (_DISCOUNT_OVERRIDE_ROLES & set(frappe.get_roles())):
+				frappe.throw(
+					_(
+						"Discount of {0}% on {1} exceeds the allowed {2}% for this POS profile. "
+						"A supervisor override is required."
+					).format(round(discount_pct, 2), item_code, round(cap, 2))
+				)
+
+		# Record the list rate so the discount is auditable on the invoice line.
+		item_data["price_list_rate"] = list_rate
+	except frappe.ValidationError:
+		raise
+	except Exception:
+		# Pricing lookups must never break a sale; audit is best-effort.
+		frappe.log_error(frappe.get_traceback(), "Discount audit skipped")
 
 
 def _validate_item_accounts(item_code, income_account, expense_account):

@@ -527,9 +527,18 @@ def get_dispensing_lots_for_item(item_code: str, batch_no=None):
 				"stock_uom",
 				"batch_no",
 			],
-			order_by="modified desc",
+			order_by="creation asc",
 			limit=500,
 		)
+
+		# FEFO: order dispensing lots by their batch's expiry date (earliest first); lots whose
+		# batch has no expiry sort last. Keeps oldest-expiring stock dispensed first.
+		_batch_nos = list({l.get("batch_no") for l in lots if l.get("batch_no")})
+		_expiry = {}
+		if _batch_nos:
+			for _b in frappe.get_all("Batch", filters={"name": ["in", _batch_nos]}, fields=["name", "expiry_date"]):
+				_expiry[_b.name] = _b.expiry_date
+		lots.sort(key=lambda l: (str(_expiry.get(l.get("batch_no")) or "9999-12-31"), l.get("creation") or ""))
 
 		result = []
 		for lot in lots:
@@ -1588,8 +1597,15 @@ def get_batch_nos_with_qty(item_code):
 	if not item_code or not warehouse:
 		return []
 
-	# Get all batches for the item
-	batches = frappe.get_all("Batch", filters={"item": item_code}, fields=["name", "batch_id", "expiry_date"])
+	# Get batches for the item, FEFO-ordered (earliest expiry first) and excluding already-expired
+	# batches (a batch with expiry_date in the past must not be dispensed/sold).
+	batches = frappe.get_all(
+		"Batch",
+		filters={"item": item_code},
+		or_filters=[["expiry_date", "is", "not set"], ["expiry_date", ">=", frappe.utils.today()]],
+		fields=["name", "batch_id", "expiry_date"],
+		order_by="expiry_date asc",
+	)
 
 	batch_qty_data = []
 	for b in batches:

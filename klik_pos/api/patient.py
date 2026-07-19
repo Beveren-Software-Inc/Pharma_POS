@@ -241,12 +241,7 @@ def resolve_customer_from_patient(patient):
 	if linked and frappe.db.exists("Customer", linked):
 		return linked
 
-	patient_name = frappe.db.get_value("Patient", patient, "patient_name")
-	if patient_name:
-		linked = frappe.db.get_value("Customer", {"customer_name": patient_name}, "name")
-		if linked and frappe.db.exists("Customer", linked):
-			return linked
-
+	# No name-based fallback (customer_name == patient_name can link the wrong patient/customer).
 	return None
 
 
@@ -272,13 +267,8 @@ def resolve_patient_from_customer(customer):
 	if frappe.db.exists("Patient", customer):
 		return customer
 
-	customer_name = frappe.db.get_value("Customer", customer, "customer_name")
-	if customer_name:
-		for filters in ({"patient_name": customer_name}, {"name": customer_name}):
-			linked = frappe.db.get_value("Patient", filters, "name")
-			if linked and frappe.db.exists("Patient", linked):
-				return linked
-
+	# No name-based fallback: matching Patient.patient_name to a Customer name can link the wrong
+	# patient (two patients can share a name). Only the explicit Patient.customer link is trusted.
 	return None
 
 
@@ -449,6 +439,9 @@ def get_pending_inpatient_medication_orders(patient: str):
 		
 		# Build fields list based on what's available
 		fields_to_fetch = ["name", "patient", "patient_name", "status"]
+		for f in ("inpatient_record", "reference_doctype"):
+			if f in available_fields:
+				fields_to_fetch.append(f)
 		order_by_field = None
 		
 		# Check if posting_date exists
@@ -470,7 +463,22 @@ def get_pending_inpatient_medication_orders(patient: str):
 			},
 			order_by=order_by_field if order_by_field else "name desc"
 		)
-		
+
+		# Rose (outpatient-only) pharmacy: exclude inpatient orders so they can't be dispensed here.
+		# A Rose pharmacy is a pharmacy POS Profile with custom_is_hospital_pharmacy = 0.
+		try:
+			from klik_pos.klik_pos.utils import get_current_pos_profile
+			profile = get_current_pos_profile()
+			is_rose = profile and frappe.utils.cint(getattr(profile, "custom_is_pharmacy", 0)) \
+				and not frappe.utils.cint(getattr(profile, "custom_is_hospital_pharmacy", 0))
+		except Exception:
+			is_rose = False
+		if is_rose:
+			orders = [
+				o for o in orders
+				if not (o.get("inpatient_record") or o.get("reference_doctype") == "Inpatient Admission")
+			]
+
 		# For each order, get the child table items
 		for order in orders:
 			order_doc = frappe.get_doc("Patient Medication Order", order.name)
