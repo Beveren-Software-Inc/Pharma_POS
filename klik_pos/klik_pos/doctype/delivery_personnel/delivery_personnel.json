@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_bulk_edit": 1,
  "allow_rename": 1,
  "autoname": "field:delivery_personnel",
  "creation": "2026-01-05 10:41:53.425751",
@@ -7,7 +8,9 @@
  "engine": "InnoDB",
  "field_order": [
   "delivery_personnel",
-  "delivery_via"
+  "delivery_via",
+  "column_break_vxmm",
+  "payment_percentage"
  ],
  "fields": [
   {
@@ -24,12 +27,21 @@
    "fieldtype": "Link",
    "label": "Delivery Via",
    "options": "Delivery Channel"
+  },
+  {
+   "fieldname": "payment_percentage",
+   "fieldtype": "Percent",
+   "label": "Payment Percentage"
+  },
+  {
+   "fieldname": "column_break_vxmm",
+   "fieldtype": "Column Break"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-03-08 12:47:06.583885",
+ "modified": "2026-07-19 10:45:31.810885",
  "modified_by": "Administrator",
  "module": "KLiK PoS",
  "name": "Delivery Personnel",

@@ -11,7 +11,7 @@ type HoldPayload = {
   item_discounts?: Record<string, DraftLineDiscount>;
   patient?: Patient | null;
   dispense_remarks?: string;
-  created_visit_ref?: { doctype: string; name: string } | null;
+  created_visit_ref?: { doctype: string; name: string; visit_type?: string | null } | null;
 };
 
 type DraftSalesOrderItem = {

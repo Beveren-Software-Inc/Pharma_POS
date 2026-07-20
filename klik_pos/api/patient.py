@@ -110,14 +110,51 @@ def _medication_order_entry_has_content(item_dict):
 	)
 
 
+CLOSED_PATIENT_VISIT_STATUSES = frozenset(
+	{
+		"Completed",
+		"External Referral",
+		"Cancelled",
+	}
+)
+
+PHARMACY_VISIT_TYPE_CANDIDATES = ("Pharmacy", "Pharmacy Visit")
+
+
 def _resolve_pharmacy_visit_type():
 	"""Use Pharmacy visit type for POS pharmacy encounters (non-charging)."""
-	for candidate in ("Pharmacy", "Pharmacy Visit"):
-		if frappe.db.exists("DocType", "Visit Type"):
+	for candidate in PHARMACY_VISIT_TYPE_CANDIDATES:
+		if frappe.db.exists("DocType", "Patient Visit Type"):
+			if frappe.db.exists("Patient Visit Type", candidate):
+				return candidate
+		elif frappe.db.exists("DocType", "Visit Type"):
 			if frappe.db.exists("Visit Type", candidate):
 				return candidate
-		return candidate
+		else:
+			return candidate
 	return "Pharmacy"
+
+
+def _pharmacy_visit_type_values():
+	"""Return visit type names that count as Pharmacy for open-visit lookup."""
+	types = []
+	for candidate in PHARMACY_VISIT_TYPE_CANDIDATES:
+		if frappe.db.exists("DocType", "Patient Visit Type") and frappe.db.exists(
+			"Patient Visit Type", candidate
+		):
+			types.append(candidate)
+		elif frappe.db.exists("DocType", "Visit Type") and frappe.db.exists("Visit Type", candidate):
+			types.append(candidate)
+		else:
+			types.append(candidate)
+	# Deduplicate while preserving order
+	seen = set()
+	out = []
+	for value in types:
+		if value not in seen:
+			seen.add(value)
+			out.append(value)
+	return out
 
 
 def _extract_medication_order_items(order_doc):
@@ -893,12 +930,71 @@ def get_patient_history_summary(patient: str, limit: int = 10):
 
 
 @frappe.whitelist()
+def get_open_pharmacy_patient_visits(patient: str, limit: int = 20):
+	"""
+	Return open Patient Visits for this patient with visit type Pharmacy.
+
+	Used by POS so pharmacists can reuse a visit created earlier by reception
+	instead of opening a duplicate pharmacy visit.
+	"""
+	try:
+		if not patient:
+			frappe.throw("Patient is required")
+
+		try:
+			limit = max(1, min(int(limit), 50))
+		except Exception:
+			limit = 20
+
+		if not frappe.db.exists("DocType", "Patient Visit"):
+			return {"success": True, "visits": [], "doctype": None}
+
+		meta = frappe.get_meta("Patient Visit")
+		fields = {f.fieldname for f in meta.fields}
+		fetch = ["name", "patient", "patient_name", "docstatus"]
+		for candidate in ("encounter_date", "visit_date", "posting_date", "status", "visit_type", "practitioner_name"):
+			if candidate in fields:
+				fetch.append(candidate)
+
+		filters = {
+			"patient": patient,
+			"docstatus": ["<", 2],
+		}
+		if "status" in fields:
+			filters["status"] = ["not in", list(CLOSED_PATIENT_VISIT_STATUSES)]
+
+		pharmacy_types = _pharmacy_visit_type_values()
+		# Also match common reception labels that contain "Pharmacy"
+		or_filters = None
+		if "visit_type" in fields:
+			or_filters = [["visit_type", "in", pharmacy_types], ["visit_type", "like", "%Pharmacy%"]]
+
+		order_by = "encounter_date desc, creation desc" if "encounter_date" in fields else "modified desc"
+		rows = frappe.get_all(
+			"Patient Visit",
+			filters=filters,
+			or_filters=or_filters,
+			fields=fetch,
+			order_by=order_by,
+			limit=limit,
+			ignore_permissions=True,
+		)
+		for row in rows:
+			row["doctype"] = "Patient Visit"
+
+		return {"success": True, "visits": rows, "doctype": "Patient Visit"}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Error fetching open pharmacy patient visits")
+		frappe.throw(f"Failed to fetch open pharmacy visits: {str(e)}")
+
+
+@frappe.whitelist()
 def create_patient_visit(patient: str):
 	"""
-	Create a non-charging pharmacy patient visit from POS.
+	Create and submit a non-charging pharmacy patient visit from POS.
 
-	Only inserts a Patient Visit / Patient Encounter (draft). Does not create
-	Sales Order or invoice — dispensing stock is handled separately on Dispense.
+	Does not create Sales Order or invoice — dispensing stock is handled
+	separately on Dispense.
 	"""
 	case_no = get_next_transaction_number('Patient Visit', fieldname='case_no')
 	try:
@@ -930,10 +1026,30 @@ def create_patient_visit(patient: str):
 			if date_field in fields and not getattr(doc, date_field, None):
 				setattr(doc, date_field, today)
 
+		pos_profile = None
+		cost_center = None
+		try:
+			from klik_pos.api.sales_order import _get_active_pos_profile, _resolve_pos_cost_center
+
+			pos_profile = _get_active_pos_profile()
+			if pos_profile:
+				cost_center = _resolve_pos_cost_center(pos_profile)
+		except Exception:
+			pos_profile = None
+			cost_center = None
+
 		if "company" in fields:
-			default_company = frappe.defaults.get_defaults().get("company")
-			if default_company:
-				doc.company = default_company
+			company = (
+				getattr(pos_profile, "company", None)
+				if pos_profile
+				else None
+			) or frappe.defaults.get_defaults().get("company")
+			if company:
+				doc.company = company
+
+		if "cost_center" in fields and cost_center:
+			doc.cost_center = cost_center
+
 		if "visit_type" in fields:
 			doc.visit_type = _resolve_pharmacy_visit_type()
 
@@ -941,6 +1057,8 @@ def create_patient_visit(patient: str):
 			doc.submit_orders_on_save = 0
 
 		doc.insert(ignore_permissions=True)
+		if meta.is_submittable and doc.docstatus == 0:
+			doc.submit()
 
 		return {
 			"doctype": visit_doctype,
@@ -948,6 +1066,7 @@ def create_patient_visit(patient: str):
 			"patient": patient,
 			"patient_name": patient_name,
 			"visit_type": getattr(doc, "visit_type", None),
+			"cost_center": getattr(doc, "cost_center", None),
 			"docstatus": doc.docstatus,
 		}
 	except Exception as e:
