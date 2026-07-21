@@ -111,6 +111,9 @@ doc_events = {
 			"klik_pos.api.sales_invoice.ensure_negative_payments_for_pos_return",
 		],
 		"validate": [
+			# Serene BRD pharmacy controls
+			"klik_pos.api.pharmacy_controls.validate_pharmacy_issue",  # PHA-036/039/055
+			"klik_pos.api.pharmacy_controls.stamp_discount_authoriser",  # PHA-054
 			"klik_pos.api.sales_invoice.enforce_zero_rate_for_free_items",
 			"klik_pos.api.sales_invoice.set_base_roundoff_amount",
 			"klik_pos.api.sales_invoice.set_grand_total_with_roundoff",
@@ -120,6 +123,9 @@ doc_events = {
 		"on_submit": [
 			"klik_pos.api.sales_invoice.finalize_paid_amount",
 			"klik_pos.api.delivery_compensation.create_compensation_for_sales_invoice",
+			# Serene BRD
+			"klik_pos.api.serene_pharmacy_rules.create_pharmacy_patient_visit",  # PHA-058
+			"klik_pos.api.serene_pharmacy_rules.advance_refill_schedule",  # PHA-112
 		],
 
 		# "before_save": [
@@ -131,6 +137,19 @@ doc_events = {
 			"klik_pos.api.pos_entry.validate_opening_entry",
 		],
 	},
+	# PHA-040 - unused ward medicine returns to pharmacy stock at discharge
+	"Discharge": {
+		"on_submit": [
+			"klik_pos.api.serene_pharmacy_rules.return_active_medicines_on_discharge",
+		],
+	},
+}
+
+# PHA-112 - periodic (monthly) refill reminders
+scheduler_events = {
+	"daily": [
+		"klik_pos.api.serene_pharmacy_rules.send_refill_reminders",
+	],
 }
 
 override_doctype_class = {
