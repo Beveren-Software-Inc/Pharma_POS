@@ -366,15 +366,19 @@ def get_item_by_barcode(barcode: str):
 
 @frappe.whitelist(allow_guest=True)
 def get_item_by_identifier(code: str):
-	"""Resolve an item by barcode, batch number or serial number.
+	"""Resolve an item by barcode, batch, serial, dispensing lot, or item code.
+
 	- If barcode maps to an Item Barcode row that has custom_batch set, treat it as a batch match
 	  so the POS can auto-select the correct batch for this scan.
-	Returns same structure as get_item_by_barcode."""
+	- Items without batch/serial still resolve by item code so POS can display/add them.
+	Returns same structure as get_item_by_barcode.
+	"""
 	item_tax_template = None
 	try:
 		if not code:
 			frappe.throw(_("Identifier required"))
 
+		code = code.strip()
 		pos_doc = get_current_pos_profile()
 		warehouse = pos_doc.warehouse
 		price_list = pos_doc.selling_price_list
@@ -383,9 +387,11 @@ def get_item_by_identifier(code: str):
 		matched_value = None
 
 		# 1) Try Item Barcode (and see if it is linked to a specific batch via custom_batch)
+		has_custom_batch = frappe.db.has_column("Item Barcode", "custom_batch")
+		barcode_fields = "parent as item_code" + (", custom_batch" if has_custom_batch else "")
 		item_row = frappe.db.sql(
-			"""
-			SELECT parent as item_code, custom_batch
+			f"""
+			SELECT {barcode_fields}
 			FROM `tabItem Barcode`
 			WHERE barcode = %s
 			""",
@@ -393,7 +399,7 @@ def get_item_by_identifier(code: str):
 			as_dict=True,
 		)
 		if item_row:
-			custom_batch = item_row[0].get("custom_batch")
+			custom_batch = item_row[0].get("custom_batch") if has_custom_batch else None
 			if custom_batch:
 				# Treat this as a batch match so frontend can pre-select batch
 				matched_type = "batch"
@@ -455,12 +461,28 @@ def get_item_by_identifier(code: str):
 				matched_type = "serial"
 				matched_value = code
 
+		# 5) Fall back to Item code (same as get_item_by_barcode) — no batch required
 		if not item_row:
-			frappe.throw(_("Item not found for identifier: {0}").format(code))
+			item_row = frappe.db.sql(
+				"""
+				SELECT name as item_code
+				FROM `tabItem`
+				WHERE name = %s AND disabled = 0
+				""",
+				code,
+				as_dict=True,
+			)
+			if item_row:
+				matched_type = "item_code"
+				matched_value = code
+
+		if not item_row:
+			# Soft miss: callers (typing lookup) expect null, not a 417 ValidationError
+			return None
 
 		item_code = item_row[0].get("item_code")
 		if not item_code:
-			frappe.throw(_("Invalid identifier mapping for: {0}").format(code))
+			return None
 
 		item_doc = frappe.get_doc("Item", item_code)
 		balance = fetch_item_balance(item_code, warehouse)
@@ -596,73 +618,34 @@ def _get_pos_context():
 	return pos_doc, warehouse, price_list, hide_unavailable
 
 def _fetch_batch_stock(item_codes: list, warehouse: str) -> dict:
-    """Fetch stock balances for multiple items using Stock Ledger Entry (source of truth)."""
-    if not item_codes or not warehouse:
-        return {}
+	"""Fetch current stock balances for multiple items from Bin.
 
-    stock_map = {}
+	Use Bin (same source as hide_unavailable_items), not SUM(SLE.actual_qty).
+	Stock Reconciliation can leave qty_after_transaction correct while
+	SUM(actual_qty) is 0, which incorrectly hid in-stock items from POS.
+	"""
+	if not item_codes or not warehouse:
+		return {}
 
-    try:
-        placeholders = ", ".join(["%s"] * len(item_codes))
-        sql = f"""
-            SELECT item_code, SUM(actual_qty) as actual_qty
-            FROM `tabStock Ledger Entry`
-            WHERE item_code IN ({placeholders})
-            AND warehouse = %s
-            AND is_cancelled = 0
-            GROUP BY item_code
-        """
-        params = [*item_codes, warehouse]
-        results = frappe.db.sql(sql, params, as_dict=True)
+	stock_map = {item_code: 0 for item_code in item_codes}
 
-        for row in results:
-            stock_map[row["item_code"]] = row["actual_qty"] or 0
+	try:
+		placeholders = ", ".join(["%s"] * len(item_codes))
+		sql = f"""
+			SELECT item_code, actual_qty
+			FROM `tabBin`
+			WHERE item_code IN ({placeholders})
+			AND warehouse = %s
+		"""
+		results = frappe.db.sql(sql, [*item_codes, warehouse], as_dict=True)
+		for row in results:
+			stock_map[row["item_code"]] = row["actual_qty"] or 0
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Batch stock fetch error")
+		for item_code in item_codes:
+			stock_map[item_code] = fetch_item_balance(item_code, warehouse)
 
-        # Items not in SLE have 0 stock
-        for item_code in item_codes:
-            if item_code not in stock_map:
-                stock_map[item_code] = 0
-
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "Batch stock fetch error")
-        for item_code in item_codes:
-            stock_map[item_code] = fetch_item_balance(item_code, warehouse)
-
-    return stock_map
-# def _fetch_batch_stock(item_codes: list, warehouse: str) -> dict:
-# 	"""Fetch stock balances for multiple items in optimized batch queries."""
-# 	if not item_codes or not warehouse:
-# 		return {}
-
-# 	stock_map = {}
-
-# 	# Use SQL to get stock from Bin table in batch
-# 	# try:
-# 	# 	placeholders = ", ".join(["%s"] * len(item_codes))
-# 	# 	sql = f"""
-# 	# 		SELECT item_code, actual_qty
-# 	# 		FROM `tabBin`
-# 	# 		WHERE item_code IN ({placeholders})
-# 	# 		AND warehouse = %s
-# 	# 	"""
-# 	# 	params = [*item_codes, warehouse]
-# 	# 	results = frappe.db.sql(sql, params, as_dict=True)
-
-# 	# 	for row in results:
-# 	# 		stock_map[row["item_code"]] = row["actual_qty"] or 0
-
-# 	# 	# Items not in Bin have 0 stock
-# 	# 	for item_code in item_codes:
-# 	# 		if item_code not in stock_map:
-# 	# 			stock_map[item_code] = 0
-
-# 	# except Exception:
-# 	# 	frappe.log_error(frappe.get_traceback(), "Batch stock fetch error")
-# 	# 	# Fallback to individual queries
-# 	for item_code in item_codes:
-# 		stock_map[item_code] = fetch_item_balance(item_code, warehouse)
-
-# 	return stock_map
+	return stock_map
 
 
 def _fetch_batch_prices(item_codes: list, price_list: str | None, uom_map: dict) -> dict:

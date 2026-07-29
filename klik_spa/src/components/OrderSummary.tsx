@@ -61,7 +61,13 @@ import {
   getOriginalHeldDispenseOrderId,
 } from "../utils/heldDispenseOrderCache";
 import { getPartyLabels } from "../utils/partyLabels";
-import { resolveHospitalCartUom } from "../utils/hospitalCartUom";
+import {
+  convertPrescribedQtyViaStockUom,
+  getUomConversionFactor,
+  itemSupportsUom,
+  normalizeUom,
+  resolveHospitalCartUom,
+} from "../utils/hospitalCartUom";
 import { POS_BEFORE_NAVIGATE_EVENT } from "../utils/navigation";
 
 
@@ -1957,7 +1963,11 @@ export default function OrderSummary({
       medsByItem: Map<string, Set<string>>,
       extraOrderNames: string[] = []
     ): Promise<"added" | "not_found" | "no_stock"> => {
+      const prescribedItemCode = itemToAdd.item_code;
       const effectiveItemCode = itemToAdd.alternative_item_code || itemToAdd.item_code;
+      const isAlternative =
+        !!itemToAdd.alternative_item_code &&
+        itemToAdd.alternative_item_code !== itemToAdd.item_code;
       const product = products.find(
         (p) => p.id === effectiveItemCode || p.item_code === effectiveItemCode
       );
@@ -1970,20 +1980,84 @@ export default function OrderSummary({
       }
 
       const pink = isPinkMedicationLine(itemToAdd);
-      let uomToUse =
-        itemToAdd.uom || (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : product.uom);
+      const dispenseUoms = await getItemUOMsAndPrices(product.id);
+
+      // Cart UOM: prefer UNIT for hospital; do not inherit prescribed UOM blindly onto alternatives.
+      let uomFallback: string;
+      if (isAlternative) {
+        uomFallback =
+          itemToAdd.uom ||
+          (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : "") ||
+          product.uom ||
+          dispenseUoms.base_uom;
+      } else {
+        uomFallback =
+          itemToAdd.uom ||
+          (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : product.uom) ||
+          dispenseUoms.base_uom;
+      }
+
+      let uomToUse = uomFallback || product.uom;
       if (isHospitalPharmacy) {
         uomToUse = await resolveHospitalCartUom(product.id, uomToUse);
       }
-      const cartQuantity =
-        !itemToAdd.uom || itemToAdd.uom === uomToUse
-          ? itemToAdd.quantity
-          : await convertOrderQuantityToCartUOM(
-              product.id,
-              itemToAdd.quantity,
-              itemToAdd.uom,
-              uomToUse
-            );
+
+      // Cart always keeps the prescribed numeric qty in UNIT (or resolved cart UOM).
+      let cartQuantity: number;
+      if (
+        isAlternative ||
+        !itemToAdd.uom ||
+        normalizeUom(itemToAdd.uom) === normalizeUom(uomToUse)
+      ) {
+        cartQuantity = itemToAdd.quantity;
+      } else if (itemSupportsUom(dispenseUoms.uoms, dispenseUoms.base_uom, itemToAdd.uom)) {
+        cartQuantity = await convertOrderQuantityToCartUOM(
+          product.id,
+          itemToAdd.quantity,
+          itemToAdd.uom,
+          uomToUse
+        );
+      } else {
+        cartQuantity = itemToAdd.quantity;
+      }
+
+      const conversionFactor = getUomConversionFactor(
+        dispenseUoms.uoms,
+        dispenseUoms.base_uom,
+        uomToUse
+      );
+      const stockUom = dispenseUoms.base_uom || product.uom;
+
+      // Stock validation in stock UOM. For alternatives, convert prescribed qty → stock
+      // using the *original* item factors (30 UNIT Fluanxol → 3 PACK), then compare to
+      // alternative Bin qty. Cart still stores 30 UNIT.
+      let neededStockQty = cartQuantity * conversionFactor;
+      if (isAlternative) {
+        const stockCheck = await convertPrescribedQtyViaStockUom({
+          prescribedItemCode,
+          dispenseItemCode: product.id,
+          orderQuantity: itemToAdd.quantity,
+          orderUom: itemToAdd.uom,
+          // Compare in dispense stock UOM
+          cartUom: dispenseUoms.base_uom || stockUom,
+        });
+        neededStockQty = stockCheck.cartQuantity;
+      }
+
+      if (neededStockQty > product.available) {
+        if (isAlternative) {
+          toast.error(
+            `Only ${product.available} ${stockUom} of ${product.name} available (need ${neededStockQty} ${stockUom} for this prescription)`
+          );
+        } else {
+          const availableInCartUom =
+            conversionFactor > 0 ? product.available / conversionFactor : product.available;
+          toast.error(
+            `Only ${availableInCartUom} ${uomToUse || stockUom || "units"} of ${product.name} available`
+          );
+        }
+        return "no_stock";
+      }
       const prescriptionDosageValue = itemToAdd.patient_frequency;
       const lineId = pink ? crypto.randomUUID() : undefined;
       const currentQty = pink ? 0 : (qtyByItem.get(product.id) ?? 0);
@@ -2050,7 +2124,13 @@ export default function OrderSummary({
           image: product.image || "",
           available: product.available,
           uom: uomToUse,
+          stock_uom: stockUom,
+          conversion_factor: conversionFactor,
           item_code: product.id,
+          has_batch_no: product.has_batch_no,
+          has_serial_no: product.has_serial_no,
+          // Alternative stock already validated in stock UOM via prescribed conversion.
+          ...(isAlternative ? { skip_stock_validation: true } : {}),
           ...(pink && {
             allowDuplicate: true,
             cartLineId: lineId,

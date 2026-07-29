@@ -612,13 +612,15 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
       console.log('Processing as product search:', trimmed)
       searchProducts(trimmed)
 
-      // Additionally try resolving batch/serial on Enter for user convenience
+      // Resolve barcode / batch / serial / item code on Enter (no batch required for non-batch items)
       ;(async () => {
         try {
           const res = await fetch(`/api/method/klik_pos.api.item.get_item_by_identifier?code=${encodeURIComponent(trimmed)}`)
           const data = await res.json()
           console.log('Batch/Serial lookup result:', data)
           if (data?.message?.item_code) {
+            const matchedType = data.message.matched_type
+            const matchedValue = data.message.matched_value
             const item = {
               id: data.message.item_code,
               name: data.message.item_name || data.message.item_code,
@@ -627,26 +629,33 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
               available: data.message.available || 0,
               image: data.message.image,
               sold: 0,
+              uom: data.message.stock_uom,
               has_batch_no: data.message.has_batch_no,
               has_serial_no: data.message.has_serial_no,
               item_tax_template: data.message.item_tax_template,
             } as MenuItem & { item_tax_template?: string }
-            const added = await addOrIncreaseWithQuantity(item, 1)
-            const matchedType = data.message.matched_type
-            const matchedValue = data.message.matched_value
-            const lineKey = added?.cartLineId
-            setTimeout(() => {
-              if (matchedType === 'batch' && matchedValue) {
-                window.dispatchEvent(new CustomEvent('cart:setBatchForItem', { detail: { itemCode: item.id, batchId: matchedValue, forLastAdded: true, ...(lineKey && { lineKey }) } }))
-              } else if (matchedType === 'serial' && matchedValue) {
-                window.dispatchEvent(new CustomEvent('cart:setSerialForItem', { detail: { itemCode: item.id, serialNo: matchedValue, forLastAdded: true, ...(lineKey && { lineKey }) } }))
-              }
-            }, 0)
-            setLocalSearchQuery('')
-            setPinnedItemId(null)
+
+            // Exact scan/resolve hits: add to cart. Plain item_code search: keep results visible.
+            if (matchedType && matchedType !== 'item_code') {
+              const added = await addOrIncreaseWithQuantity(item, 1)
+              const lineKey = added?.cartLineId
+              setTimeout(() => {
+                if (matchedType === 'batch' && matchedValue) {
+                  window.dispatchEvent(new CustomEvent('cart:setBatchForItem', { detail: { itemCode: item.id, batchId: matchedValue, forLastAdded: true, ...(lineKey && { lineKey }) } }))
+                } else if ((matchedType === 'serial' || matchedType === 'dispensing_lot') && matchedValue) {
+                  window.dispatchEvent(new CustomEvent('cart:setSerialForItem', { detail: { itemCode: item.id, serialNo: matchedValue, forLastAdded: true, ...(lineKey && { lineKey }) } }))
+                }
+              }, 0)
+              setLocalSearchQuery('')
+              setPinnedItemId(null)
+            } else {
+              // Item code match (no batch/serial): pin so the product grid shows it
+              setIdentifierItemId(item.id)
+              setPinnedItemId(item.id)
+            }
           }
         } catch {
-          // ignore
+          // ignore soft misses / network errors
         }
       })()
     }
@@ -702,8 +711,11 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
       try {
         const res = await fetch(`/api/method/klik_pos.api.item.get_item_by_identifier?code=${encodeURIComponent(localSearchQuery.trim())}`)
         const data = await res.json()
-        if (!cancelled && data?.message?.item_code) {
+        if (cancelled) return
+        if (data?.message?.item_code) {
           setIdentifierItemId(data.message.item_code)
+        } else {
+          setIdentifierItemId(null)
         }
       } catch {
         if (!cancelled) setIdentifierItemId(null)
