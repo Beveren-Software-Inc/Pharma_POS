@@ -299,6 +299,29 @@ export interface LegacyDispensedMedicationItem {
   remarks_detail?: string;
 }
 
+/** Legacy sales line → best-effort item code (often not a current Item). */
+export function resolveLegacyMedicationItemCode(item: LegacyDispensedMedicationItem): string {
+  return (item.item_num || item.item || "").trim();
+}
+
+export function resolveLegacyMedicationDisplayName(item: LegacyDispensedMedicationItem): string {
+  return (
+    item.item_name?.trim() ||
+    item.item?.trim() ||
+    item.item_num?.trim() ||
+    "—"
+  );
+}
+
+export function legacyMedicationLineKey(
+  txnName: string,
+  idx: number,
+  item: LegacyDispensedMedicationItem
+): string {
+  const code = resolveLegacyMedicationItemCode(item) || item.name || String(idx);
+  return `legacy::${txnName}::${idx}::${code}`;
+}
+
 export interface LegacyDispensedTransaction {
   name: string;
   trans_no?: string;

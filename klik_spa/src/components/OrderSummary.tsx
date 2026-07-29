@@ -28,6 +28,12 @@ import { useProducts } from "../hooks/useProducts";
 import { toast } from "react-toastify";
 import { extractErrorFromException } from "../utils/errorExtraction";
 import { getBatches } from "../utils/batch";
+import {
+  auditCartBatchExpiry,
+  formatBatchExpiryMessage,
+  getBatchExpiryStatus,
+  selectionExpiryToastCopy,
+} from "../utils/batchExpiry";
 import { getSerials } from "../utils/serial";
 import {
   getDispensingLots,
@@ -49,7 +55,7 @@ import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientLegacyDispensedMedications, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type LegacyDispensedTransaction, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientLegacyDispensedMedications, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, resolveLegacyMedicationItemCode, resolveLegacyMedicationDisplayName, legacyMedicationLineKey, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type LegacyDispensedTransaction, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, createDraftHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
@@ -62,11 +68,10 @@ import {
 } from "../utils/heldDispenseOrderCache";
 import { getPartyLabels } from "../utils/partyLabels";
 import {
-  convertPrescribedQtyViaStockUom,
   getUomConversionFactor,
-  itemSupportsUom,
   normalizeUom,
-  resolveHospitalCartUom,
+  resolveHospitalCartUomDetails,
+  resolveMedicationOrderUom,
 } from "../utils/hospitalCartUom";
 import { POS_BEFORE_NAVIGATE_EVENT } from "../utils/navigation";
 
@@ -285,6 +290,16 @@ function formatBatchExpiryLabel(expiry?: string | null): string | null {
   const parsed = new Date(expiry);
   if (Number.isNaN(parsed.getTime())) return expiry.trim();
   return parsed.toLocaleDateString();
+}
+
+function warnOnBatchExpirySelection(itemName: string, batchId: string, expiry?: string | null) {
+  const copy = selectionExpiryToastCopy(itemName, batchId, expiry);
+  if (!copy) return;
+  if (copy.status === "expired") {
+    toast.error(`Expired batch: ${copy.message}. Do not dispense.`);
+  } else {
+    toast.warning(`Near-expiry batch: ${copy.message}`);
+  }
 }
 
 // Simple UOM Select Field Component
@@ -510,6 +525,17 @@ const BatchSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value
     setQuery("");
   };
 
+  const formatOptionLabel = (b: { batch_id: string; qty: number; expiry_date?: string | null }) => {
+    const expiryLabel = formatBatchExpiryLabel(b.expiry_date);
+    const status = getBatchExpiryStatus(b.expiry_date);
+    const statusTag =
+      status === "expired" ? "EXPIRED" : status === "near_expiry" ? "NEAR EXPIRY" : null;
+    const parts = [`${b.batch_id} — qty ${b.qty}`];
+    if (expiryLabel) parts.push(`exp ${expiryLabel}`);
+    if (statusTag) parts.push(statusTag);
+    return parts.join(" · ");
+  };
+
   return (
     <div className="relative" ref={dropdownRef}>
       <button
@@ -534,16 +560,24 @@ const BatchSelectField = ({ itemId: _itemId, itemCode: _itemCode, options, value
             />
           </div>
           <div className="max-h-36 overflow-y-auto">
-            {filtered.length > 0 ? filtered.map((b) => (
+            {filtered.length > 0 ? filtered.map((b) => {
+              const status = getBatchExpiryStatus(b.expiry_date);
+              const tone =
+                status === "expired"
+                  ? "text-red-700 dark:text-red-300"
+                  : status === "near_expiry"
+                    ? "text-amber-700 dark:text-amber-300"
+                    : "text-gray-900 dark:text-white";
+              return (
               <button
                 key={b.batch_id}
                 type="button"
                 onClick={() => handleSelect(b.batch_id)}
-                className={`${cartFieldDropdownItemClass} ${value === b.batch_id ? 'bg-beveren-50 dark:bg-beveren-900/20 text-beveren-600 dark:text-beveren-400' : 'text-gray-900 dark:text-white'}`}
+                className={`${cartFieldDropdownItemClass} ${tone} ${value === b.batch_id ? 'bg-beveren-50 dark:bg-beveren-900/20' : ''}`}
               >
-                {b.batch_id} - {b.qty}
+                {formatOptionLabel(b)}
               </button>
-            )) : (
+            );}) : (
               <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matches</div>
             )}
           </div>
@@ -1147,6 +1181,7 @@ export default function OrderSummary({
   const [legacyDispensedMedications, setLegacyDispensedMedications] = useState<LegacyDispensedTransaction[]>([]);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedHistoryItems, setSelectedHistoryItems] = useState<Set<string>>(new Set());
+  const [selectedLegacyItems, setSelectedLegacyItems] = useState<Set<string>>(new Set());
   const [isCreatingVisit, setIsCreatingVisit] = useState(false);
   const [createdVisitRef, setCreatedVisitRef] = useState<{ doctype: string; name: string; visit_type?: string | null } | null>(null);
   const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
@@ -1275,8 +1310,16 @@ export default function OrderSummary({
       const has_batch_no =
         (item as CartItem).has_batch_no ?? product?.has_batch_no;
       let uomToUse = item.uom;
+      let conversion_factor = item.conversion_factor || 1;
+      let stock_uom = item.stock_uom || product?.stock_uom || product?.uom;
       if (isHospitalPharmacy && item.id) {
-        uomToUse = await resolveHospitalCartUom(item.id, item.uom || product?.uom);
+        const resolved = await resolveHospitalCartUomDetails(
+          item.id,
+          item.uom || product?.uom
+        );
+        uomToUse = resolved.uom;
+        conversion_factor = resolved.conversion_factor;
+        stock_uom = resolved.stock_uom;
       }
       await addToCart({
         id: item.id,
@@ -1286,6 +1329,8 @@ export default function OrderSummary({
         image: item.image,
         available: item.available,
         uom: uomToUse,
+        stock_uom,
+        conversion_factor,
         item_code: item.item_code || item.id,
         item_tax_template: (item as CartItem & { item_tax_template?: string })
           .item_tax_template,
@@ -1562,18 +1607,66 @@ export default function OrderSummary({
   }, []);
 
   const fetchBatchExpiryIfNeeded = useCallback(
-    async (batchId: string, itemCode: string) => {
-      if (!batchId?.trim() || resolveBatchExpiry(itemCode, batchId)) return;
-      try {
-        const details = await getBatchLabelDetails([batchId]);
-        const expiry = details[batchId]?.expiry_date;
-        if (expiry) rememberBatchExpiry(batchId, expiry);
-      } catch (error) {
-        console.error("Failed to fetch batch expiry:", error);
+    async (batchId: string, itemCode: string, itemName?: string) => {
+      if (!batchId?.trim()) return;
+      let expiry = resolveBatchExpiry(itemCode, batchId);
+      if (!expiry) {
+        try {
+          const details = await getBatchLabelDetails([batchId]);
+          expiry = details[batchId]?.expiry_date || null;
+          if (expiry) rememberBatchExpiry(batchId, expiry);
+        } catch (error) {
+          console.error("Failed to fetch batch expiry:", error);
+          return;
+        }
       }
+      warnOnBatchExpirySelection(itemName || itemCode, batchId, expiry);
     },
     [rememberBatchExpiry, resolveBatchExpiry]
   );
+
+  const collectCartBatchExpiryLines = useCallback(() => {
+    return cartItems
+      .filter((item) => !(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service)
+      .map((item) => {
+        const lineKey = getLineKey(item);
+        const itemCode = item.item_code || item.id;
+        const batchId =
+          itemDiscounts[lineKey]?.batchNumber ||
+          (item as CartItem & { batch_no?: string }).batch_no ||
+          "";
+        return {
+          itemName: item.name || itemCode,
+          itemCode,
+          batchId,
+          expiryHint: resolveBatchExpiry(itemCode, batchId),
+        };
+      });
+  }, [cartItems, itemDiscounts, resolveBatchExpiry]);
+
+  /** Block expired batches; confirm before continuing if any are near expiry. */
+  const confirmCartBatchExpiry = useCallback(async (): Promise<boolean> => {
+    try {
+      const { expired, nearExpiry } = await auditCartBatchExpiry(collectCartBatchExpiryLines());
+      if (expired.length > 0) {
+        toast.error(
+          `Cannot dispense expired stock:\n${expired.map((l) => `• ${formatBatchExpiryMessage(l)}`).join("\n")}`
+        );
+        return false;
+      }
+      if (nearExpiry.length > 0) {
+        const details = nearExpiry.map((l) => `• ${formatBatchExpiryMessage(l)}`).join("\n");
+        return window.confirm(
+          `Near-expiry medicine in cart (within 90 days):\n${details}\n\nContinue anyway?`
+        );
+      }
+      return true;
+    } catch (error) {
+      console.error("Batch expiry check failed:", error);
+      // Fail open only for lookup errors; backend still blocks expired on submit.
+      return true;
+    }
+  }, [collectCartBatchExpiryLines]);
 
   useEffect(() => {
     const cached = getCachedDraftInvoiceItems();
@@ -1963,7 +2056,6 @@ export default function OrderSummary({
       medsByItem: Map<string, Set<string>>,
       extraOrderNames: string[] = []
     ): Promise<"added" | "not_found" | "no_stock"> => {
-      const prescribedItemCode = itemToAdd.item_code;
       const effectiveItemCode = itemToAdd.alternative_item_code || itemToAdd.item_code;
       const isAlternative =
         !!itemToAdd.alternative_item_code &&
@@ -1981,81 +2073,43 @@ export default function OrderSummary({
 
       const pink = isPinkMedicationLine(itemToAdd);
       const dispenseUoms = await getItemUOMsAndPrices(product.id);
+      const stockUom = dispenseUoms.base_uom || product.uom;
 
-      // Cart UOM: prefer UNIT for hospital; do not inherit prescribed UOM blindly onto alternatives.
-      let uomFallback: string;
-      if (isAlternative) {
-        uomFallback =
-          itemToAdd.uom ||
-          (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : "") ||
-          product.uom ||
-          dispenseUoms.base_uom;
+      // Doctor UOM: only PACK stays PACK; UNIT/Milligram/Tablet/etc. → treat as UNIT for cart.
+      const orderUomForCart = resolveMedicationOrderUom(itemToAdd.uom);
+      const unitNameOnItem =
+        dispenseUoms.uoms.find((row) => normalizeUom(row.uom) === "UNIT")?.uom?.trim() || "UNIT";
+
+      let uomToUse: string;
+      if (orderUomForCart === "PACK") {
+        uomToUse =
+          dispenseUoms.uoms.find((row) => normalizeUom(row.uom) === "PACK")?.uom?.trim() ||
+          stockUom ||
+          "PACK";
+      } else if (isHospitalPharmacy) {
+        const resolved = await resolveHospitalCartUomDetails(product.id, unitNameOnItem);
+        uomToUse = resolved.uom;
       } else {
-        uomFallback =
-          itemToAdd.uom ||
-          (isPharmacy && pharmacyDefaultUom ? pharmacyDefaultUom : product.uom) ||
-          dispenseUoms.base_uom;
+        uomToUse = unitNameOnItem;
       }
 
-      let uomToUse = uomFallback || product.uom;
-      if (isHospitalPharmacy) {
-        uomToUse = await resolveHospitalCartUom(product.id, uomToUse);
-      }
+      // Always keep prescribed numeric qty (30 Milligram → 30 UNIT on cart).
+      const cartQuantity = itemToAdd.quantity;
 
-      // Cart always keeps the prescribed numeric qty in UNIT (or resolved cart UOM).
-      let cartQuantity: number;
-      if (
-        isAlternative ||
-        !itemToAdd.uom ||
-        normalizeUom(itemToAdd.uom) === normalizeUom(uomToUse)
-      ) {
-        cartQuantity = itemToAdd.quantity;
-      } else if (itemSupportsUom(dispenseUoms.uoms, dispenseUoms.base_uom, itemToAdd.uom)) {
-        cartQuantity = await convertOrderQuantityToCartUOM(
-          product.id,
-          itemToAdd.quantity,
-          itemToAdd.uom,
-          uomToUse
-        );
-      } else {
-        cartQuantity = itemToAdd.quantity;
-      }
-
+      // Validate stock using the *dispensed* item's conversion for the cart UOM (UNIT/PACK),
+      // never the doctor's free-text UOM (Milligram has no Item UOM factor).
+      // product.available is always in stock UOM (PACK), not cart UOM.
       const conversionFactor = getUomConversionFactor(
         dispenseUoms.uoms,
         dispenseUoms.base_uom,
         uomToUse
       );
-      const stockUom = dispenseUoms.base_uom || product.uom;
-
-      // Stock validation in stock UOM. For alternatives, convert prescribed qty → stock
-      // using the *original* item factors (30 UNIT Fluanxol → 3 PACK), then compare to
-      // alternative Bin qty. Cart still stores 30 UNIT.
-      let neededStockQty = cartQuantity * conversionFactor;
-      if (isAlternative) {
-        const stockCheck = await convertPrescribedQtyViaStockUom({
-          prescribedItemCode,
-          dispenseItemCode: product.id,
-          orderQuantity: itemToAdd.quantity,
-          orderUom: itemToAdd.uom,
-          // Compare in dispense stock UOM
-          cartUom: dispenseUoms.base_uom || stockUom,
-        });
-        neededStockQty = stockCheck.cartQuantity;
-      }
+      const neededStockQty = cartQuantity * conversionFactor;
 
       if (neededStockQty > product.available) {
-        if (isAlternative) {
-          toast.error(
-            `Only ${product.available} ${stockUom} of ${product.name} available (need ${neededStockQty} ${stockUom} for this prescription)`
-          );
-        } else {
-          const availableInCartUom =
-            conversionFactor > 0 ? product.available / conversionFactor : product.available;
-          toast.error(
-            `Only ${availableInCartUom} ${uomToUse || stockUom || "units"} of ${product.name} available`
-          );
-        }
+        toast.error(
+          `Only ${product.available} ${stockUom || "PACK"} of ${product.name} available (need ${cartQuantity} ${uomToUse || "UNIT"} = ${neededStockQty} ${stockUom || "PACK"} for this prescription)`
+        );
         return "no_stock";
       }
       const prescriptionDosageValue = itemToAdd.patient_frequency;
@@ -2129,7 +2183,7 @@ export default function OrderSummary({
           item_code: product.id,
           has_batch_no: product.has_batch_no,
           has_serial_no: product.has_serial_no,
-          // Alternative stock already validated in stock UOM via prescribed conversion.
+          // Stock already validated above using dispensed item UNIT/PACK conversion.
           ...(isAlternative ? { skip_stock_validation: true } : {}),
           ...(pink && {
             allowDuplicate: true,
@@ -2157,11 +2211,8 @@ export default function OrderSummary({
     },
     [
       products,
-      isPharmacy,
       isHospitalPharmacy,
-      pharmacyDefaultUom,
       selectedCustomer,
-      convertOrderQuantityToCartUOM,
       onUpdateQuantity,
       addToCartWithQuantity,
       updateItemDiscount,
@@ -2520,6 +2571,120 @@ export default function OrderSummary({
     } catch {
       toast.dismiss(loadingToast);
       toast.error("Failed to add history items to cart.");
+    }
+  };
+
+  const handleAddLegacyItemsToCart = async (alternatives?: Record<string, string>) => {
+    if (selectedLegacyItems.size === 0) {
+      toast.warning("Please select at least one legacy item.");
+      return;
+    }
+
+    const itemsToAdd: MedicationOrderLineInput[] = [];
+    const availability = productAvailability();
+    let validationFailed = false;
+
+    for (const txn of legacyDispensedMedications) {
+      for (let idx = 0; idx < (txn.items || []).length; idx++) {
+        const item = txn.items[idx];
+        const lineKey = legacyMedicationLineKey(txn.name, idx, item);
+        if (!selectedLegacyItems.has(lineKey)) continue;
+
+        const legacyCode = resolveLegacyMedicationItemCode(item);
+        const displayName = resolveLegacyMedicationDisplayName(item);
+        const alternativeCode = alternatives?.[lineKey]?.trim();
+        const effectiveCode = alternativeCode || legacyCode;
+
+        if (!effectiveCode) {
+          toast.error(`Select an alternative drug for ${displayName}.`);
+          validationFailed = true;
+          break;
+        }
+
+        const avail = availability[effectiveCode];
+        if (avail === undefined) {
+          if (!alternativeCode) {
+            toast.error(
+              `${displayName} uses legacy code ${legacyCode || "—"}. Select an alternative drug.`
+            );
+            validationFailed = true;
+            break;
+          }
+          toast.error(`Alternative ${effectiveCode} not found in product list.`);
+          validationFailed = true;
+          break;
+        }
+
+        const qty = Number(item.show_qty ?? 1) || 1;
+        if (avail <= 0 || avail < qty) {
+          if (!alternativeCode) {
+            toast.error(`Insufficient stock for ${displayName}. Select an alternative drug.`);
+            validationFailed = true;
+            break;
+          }
+        }
+
+        // Dispense the mapped POS item; keep legacy code as original when an alt was chosen.
+        itemsToAdd.push({
+          item_code: alternativeCode ? legacyCode || alternativeCode : effectiveCode,
+          quantity: qty,
+          uom: item.show_uom || undefined,
+          drug_name: displayName || undefined,
+          alternative_item_code: alternativeCode || undefined,
+          line_key: lineKey,
+          reference_no: txn.trans_no || txn.name,
+        });
+      }
+      if (validationFailed) break;
+    }
+
+    if (validationFailed || itemsToAdd.length === 0) {
+      return;
+    }
+
+    const loadingToast = toast.loading(`Adding ${itemsToAdd.length} legacy item(s) to cart...`);
+    try {
+      let addedCount = 0;
+      let notFoundCount = 0;
+      let noStockCount = 0;
+      const qtyByItem = new Map<string, number>();
+      const medsByItem = new Map<string, Set<string>>();
+      cartItems.forEach((ci) => {
+        qtyByItem.set(ci.id, ci.quantity);
+        const existing = (ci as unknown as { medicationOrders?: string[] }).medicationOrders;
+        if (Array.isArray(existing) && existing.length) {
+          medsByItem.set(ci.id, new Set(existing));
+        }
+      });
+
+      for (const itemToAdd of itemsToAdd) {
+        const result = await addMedicationOrderLineToCart(itemToAdd, qtyByItem, medsByItem);
+        if (result === "added") addedCount++;
+        else if (result === "no_stock") noStockCount++;
+        else notFoundCount++;
+      }
+
+      toast.dismiss(loadingToast);
+
+      if (noStockCount > 0) {
+        toast.error(`${noStockCount} item(s) have no stock. Select alternative drugs where needed.`);
+        return;
+      }
+
+      if (addedCount > 0 && notFoundCount === 0) {
+        toast.success(`Successfully added ${addedCount} legacy item(s) to cart.`);
+      } else if (addedCount > 0) {
+        toast.warning(`Added ${addedCount} item(s). ${notFoundCount} item(s) not found.`);
+      } else {
+        toast.error("No legacy items were added.");
+      }
+
+      setShowMedicationOrdersModal(false);
+      setSelectedLegacyItems(new Set());
+    } catch (error) {
+      console.error("Error adding legacy items to cart:", error);
+      toast.dismiss(loadingToast);
+      toast.error("Failed to add legacy items to cart.");
     }
   };
 
@@ -3100,10 +3265,12 @@ const pages = labels.map((label) => `
       return;
     }
     if (!isHospitalPharmacy) {
+      if (!(await confirmCartBatchExpiry())) return;
       setShowPaymentDialog(true);
       return;
     }
     if (!validateHospitalDispense()) return;
+    if (!(await confirmCartBatchExpiry())) return;
     setShowClinicalAppropriatenessConfirm(true);
   };
 
@@ -3126,6 +3293,7 @@ const pages = labels.map((label) => `
       return;
     }
     if (!validateHospitalDispense()) return;
+    if (!(await confirmCartBatchExpiry())) return;
 
     try {
       const payload = await buildHospitalDispensePayload();
@@ -3729,8 +3897,14 @@ const handleSetBatch = (event: CustomEvent) => {
     });
     const expiry = itemBatches[itemCode]?.find((b) => b.batch_id === batchId)?.expiry_date;
     rememberBatchExpiry(batchId, expiry);
-    if (isHospitalPharmacy && batchId) {
-      void fetchBatchExpiryIfNeeded(batchId, itemCode);
+    const cartLine = useCartStore.getState().cartItems.find(
+      (ci) => getLineKey(ci) === lineKey
+    );
+    const itemName = cartLine?.name || itemCode;
+    if (expiry) {
+      warnOnBatchExpirySelection(itemName, batchId, expiry);
+    } else if (batchId) {
+      void fetchBatchExpiryIfNeeded(batchId, itemCode, itemName);
     }
   } else {
     setPendingPreselect(prev => ({
@@ -4736,8 +4910,14 @@ const handleSetSerial = (event: CustomEvent) => {
                                     (b) => b.batch_id === selectedBatch
                                   )?.expiry_date;
                                   rememberBatchExpiry(selectedBatch, expiry);
-                                  if (isHospitalPharmacy) {
-                                    void fetchBatchExpiryIfNeeded(selectedBatch, itemCode);
+                                  if (expiry) {
+                                    warnOnBatchExpirySelection(item.name || itemCode, selectedBatch, expiry);
+                                  } else {
+                                    void fetchBatchExpiryIfNeeded(
+                                      selectedBatch,
+                                      itemCode,
+                                      item.name || itemCode
+                                    );
                                   }
                                 }
                               }}
@@ -5263,6 +5443,7 @@ const handleSetSerial = (event: CustomEvent) => {
           setShowMedicationOrdersModal(false);
           setSelectedOrders(new Set());
           setSelectedHistoryItems(new Set());
+          setSelectedLegacyItems(new Set());
         }}
         pendingOrders={medicationOrders}
         historyOrders={medicationOrderHistory}
@@ -5290,6 +5471,16 @@ const handleSetSerial = (event: CustomEvent) => {
           });
         }}
         onAddHistoryItemsToCart={handleAddHistoryItemsToCart}
+        selectedLegacyItems={selectedLegacyItems}
+        onToggleLegacyItem={(itemKey) => {
+          setSelectedLegacyItems((prev) => {
+            const next = new Set(prev);
+            if (next.has(itemKey)) next.delete(itemKey);
+            else next.add(itemKey);
+            return next;
+          });
+        }}
+        onAddLegacyItemsToCart={handleAddLegacyItemsToCart}
         onCreateVisit={handleCreatePatientVisit}
         onSelectVisit={handleSelectPatientVisit}
         creatingVisit={isCreatingVisit}

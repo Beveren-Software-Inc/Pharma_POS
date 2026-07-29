@@ -15,6 +15,29 @@ function getConversionFactor(item: CartItem): number {
   return Number.isFinite(cf) && cf > 0 ? cf : 1;
 }
 
+function formatQty(n: number): string {
+  if (!Number.isFinite(n)) return String(n);
+  const rounded = Math.round(n * 1000) / 1000;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
+function stockShortageMessage(item: CartItem, maxQty: number): string {
+  const cartUom = item.uom || "units";
+  const stockUom = (item as CartItem & { stock_uom?: string }).stock_uom;
+  const available = item.available;
+  const cf = getConversionFactor(item);
+  const maxLabel = formatQty(maxQty);
+  if (
+    stockUom &&
+    available != null &&
+    stockUom.toUpperCase() !== cartUom.toUpperCase() &&
+    cf !== 1
+  ) {
+    return `Only ${maxLabel} ${cartUom} of ${item.name} available (${formatQty(Number(available))} ${stockUom})`;
+  }
+  return `Only ${maxLabel} ${cartUom} of ${item.name} available`;
+}
+
 function getMaxQtyInItemUOM(item: CartItem): number | null {
   if ((item as CartItem & { skip_stock_validation?: boolean }).skip_stock_validation) {
     return null;
@@ -22,7 +45,6 @@ function getMaxQtyInItemUOM(item: CartItem): number | null {
   const available = item.available;
   if (available === undefined || available === null) return null;
   const cf = getConversionFactor(item);
-  console.log(`Calculating max quantity for ${item.name} (available: ${available}, conversion factor: ${cf})`);
   // available is in stock/base UOM; convert to selected item UOM quantity.
   return available / cf;
 }
@@ -176,7 +198,7 @@ export const useCartStore = create<CartState>()(
         if (existingItem) {
           const maxQty = getMaxQtyInItemUOM(existingItem);
           if (maxQty !== null && existingItem.quantity >= maxQty) {
-            toast.error(`Only ${maxQty} ${existingItem.uom || item.uom || 'units'} of ${item.name} available`);
+            toast.error(stockShortageMessage(existingItem, maxQty));
             return;
           }
 
@@ -242,14 +264,14 @@ export const useCartStore = create<CartState>()(
         // Check if item has available quantity
         const maxQty = getMaxQtyInItemUOM(item as CartItem);
         if (maxQty !== null && maxQty < quantity) {
-          toast.error(`Only ${maxQty} ${item.uom || 'units'} of ${item.name} available`);
+          toast.error(stockShortageMessage(item as CartItem, maxQty));
           return;
         }
 
         if (existingItem) {
           const maxQty = getMaxQtyInItemUOM(existingItem);
           if (maxQty !== null && (existingItem.quantity + quantity) > maxQty) {
-            toast.error(`Only ${maxQty} ${existingItem.uom || item.uom || 'units'} of ${item.name} available`);
+            toast.error(stockShortageMessage(existingItem, maxQty));
             return;
           }
 
@@ -326,7 +348,7 @@ export const useCartStore = create<CartState>()(
         const item = state.cartItems.find(matchLine);
         const maxQty = item ? getMaxQtyInItemUOM(item) : null;
         if (item && maxQty !== null && quantity > maxQty) {
-          toast.error(`Only ${maxQty} ${item.uom || 'units'} of ${item.name} available`);
+          toast.error(stockShortageMessage(item, maxQty));
           return;
         }
 

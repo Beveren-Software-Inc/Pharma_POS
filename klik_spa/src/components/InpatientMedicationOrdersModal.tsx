@@ -4,7 +4,16 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package } from "lucide-react";
 import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, OpenPharmacyPatientVisit } from "../services/patientService";
-import { searchPosStockItemsForAlternative, getPrintFormatsForDoctype, resolveMedicationItemCode, resolveMedicationDisplayName, getOpenPharmacyPatientVisits } from "../services/patientService";
+import {
+  searchPosStockItemsForAlternative,
+  getPrintFormatsForDoctype,
+  resolveMedicationItemCode,
+  resolveMedicationDisplayName,
+  resolveLegacyMedicationItemCode,
+  resolveLegacyMedicationDisplayName,
+  legacyMedicationLineKey,
+  getOpenPharmacyPatientVisits,
+} from "../services/patientService";
 import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
 import MedicationOrderDischargedBadge from "./MedicationOrderDischargedBadge";
 
@@ -20,6 +29,9 @@ interface InpatientMedicationOrdersModalProps {
   selectedHistoryItems: Set<string>;
   onToggleHistoryItem: (itemKey: string) => void;
   onAddHistoryItemsToCart: () => void;
+  selectedLegacyItems?: Set<string>;
+  onToggleLegacyItem?: (itemKey: string) => void;
+  onAddLegacyItemsToCart?: (alternatives?: Record<string, string>) => void;
   onCreateVisit: () => void;
   onSelectVisit?: (visit: { doctype: string; name: string; visit_type?: string | null }) => void;
   creatingVisit?: boolean;
@@ -311,12 +323,12 @@ function AlternativeDrugSearchModal({
   }, [isOpen, query]);
 
   useEffect(() => {
-    if (!isOpen || !drugCode) return;
+    if (!isOpen) return;
 
     let cancelled = false;
     setLoading(true);
 
-    void searchPosStockItemsForAlternative(debouncedQuery, drugCode).then((results) => {
+    void searchPosStockItemsForAlternative(debouncedQuery, drugCode || undefined).then((results) => {
       if (cancelled) return;
       setOptions(results);
       setLoading(false);
@@ -325,7 +337,7 @@ function AlternativeDrugSearchModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, drugCode, debouncedQuery]);
+  }, [isOpen, debouncedQuery, drugCode]);
 
   if (!isOpen) return null;
 
@@ -389,8 +401,14 @@ function AlternativeDrugSearchModal({
                     : "hover:bg-gray-50 dark:hover:bg-gray-800"
                 }`}
               >
-                <div className="text-sm font-medium text-gray-700 dark:text-gray-300">No alternative</div>
-                <div className="text-xs text-gray-500 mt-0.5">Use the prescribed drug only</div>
+                <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {value ? "Remove alternative" : "No alternative"}
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  {value
+                    ? "Clear the mapped drug and use the original line only"
+                    : "Use the prescribed / original drug only"}
+                </div>
               </button>
               {options.length > 0 ? (
                 options.map((opt) => (
@@ -426,7 +444,7 @@ function AlternativeDrugSearchModal({
   return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
 }
 
-// ── Alternative drug cell: compact label + search icon → modal ───────────────
+// ── Alternative drug cell: compact label + search / clear ────────────────────
 function AlternativeDrugSelect({
   drugCode,
   drugName,
@@ -443,35 +461,34 @@ function AlternativeDrugSelect({
   onChange: (value: string, itemName?: string) => void;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
-
-  if (!drugCode) {
-    return <span className="text-gray-300">—</span>;
-  }
-
+  const searchKey = (drugCode || "").trim() || "__legacy__";
   const displayLabel = value ? selectedLabel || value : "";
 
   return (
     <>
-      <div className="flex items-center gap-1.5 min-w-[100px] max-w-[200px]">
-        <span
-          className={`flex-1 truncate text-xs ${
-            value
-              ? "text-gray-800 dark:text-gray-200 font-medium"
-              : lowStock
-              ? "text-red-600 dark:text-red-400"
-              : "text-gray-400 dark:text-gray-500"
-          }`}
-          title={value ? `${displayLabel} (${value})` : undefined}
-        >
-          {value ? displayLabel : lowStock ? "Required" : "—"}
-        </span>
+      {/* Fixed width so one long alt name cannot stretch the column for other rows */}
+      <div className="flex items-center gap-1 w-[152px] max-w-[152px]">
         <button
           type="button"
           onClick={() => setModalOpen(true)}
-          title={value ? "Change alternative drug" : "Search alternative drug"}
+          className={`flex-1 min-w-0 overflow-hidden text-left truncate text-xs rounded-md px-1.5 py-1 border transition-colors ${
+            value
+              ? "border-orange-200 dark:border-orange-800 bg-orange-50/60 dark:bg-orange-900/15 text-gray-800 dark:text-gray-200 font-medium hover:bg-orange-50 dark:hover:bg-orange-900/25"
+              : lowStock
+              ? "border-transparent text-amber-700 dark:text-amber-400 hover:bg-amber-50/40 dark:hover:bg-amber-900/10"
+              : "border-transparent text-gray-400 dark:text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800"
+          }`}
+          title={value ? `${displayLabel} (${value}) — click to change` : "Search alternative drug"}
+        >
+          {value ? displayLabel : lowStock ? "Required" : "—"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setModalOpen(true)}
+          title={value ? "Change alternative" : "Search alternative drug"}
           className={`flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-md border transition-colors ${
             lowStock && !value
-              ? "border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 text-red-600 hover:bg-red-100"
+              ? "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700"
               : value
               ? "border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/20 text-orange-600 hover:bg-orange-100"
               : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700"
@@ -479,12 +496,25 @@ function AlternativeDrugSelect({
         >
           <Search size={14} />
         </button>
+        {value ? (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            title="Remove alternative"
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-500 hover:text-red-600 hover:border-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+          >
+            <X size={14} />
+          </button>
+        ) : (
+          // Keep search button position aligned across rows when no clear button
+          <span className="flex-shrink-0 w-7 h-7" aria-hidden />
+        )}
       </div>
 
       <AlternativeDrugSearchModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        drugCode={drugCode}
+        drugCode={searchKey}
         drugName={drugName}
         value={value}
         onChange={onChange}
@@ -544,7 +574,9 @@ function ItemsTable({
             <th className="px-3 py-2 text-left">Type</th>
             <th className="px-3 py-2 text-center">PRN</th>
             {productAvailability && <th className="px-3 py-2 text-left">Stock</th>}
-            {onAlternativeChange && <th className="px-3 py-2 text-left">Alt. Drug</th>}
+            {onAlternativeChange && (
+              <th className="px-2 py-2 text-left w-[160px] min-w-[160px] max-w-[160px]">Alt. Drug</th>
+            )}
            </tr>
         </thead>
         <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
@@ -605,7 +637,10 @@ function ItemsTable({
                   </td>
                 )}
                 {onAlternativeChange && (
-                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                  <td
+                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <AlternativeDrugSelect
                       drugCode={lineCode}
                       drugName={medicationLineLabel(item)}
@@ -661,12 +696,33 @@ function formatLegacyAmount(value: number | string | null | undefined): string {
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 }
 
-function LegacyItemsTable({ items }: { items: LegacyDispensedMedicationItem[] }) {
+function LegacyItemsTable({
+  items,
+  txnName,
+  selectable,
+  selectedKeys,
+  onToggle,
+  productAvailability,
+  alternativeDrugs,
+  alternativeDrugLabels,
+  onAlternativeChange,
+}: {
+  items: LegacyDispensedMedicationItem[];
+  txnName: string;
+  selectable?: boolean;
+  selectedKeys?: Set<string>;
+  onToggle?: (key: string) => void;
+  productAvailability?: Record<string, number>;
+  alternativeDrugs?: Record<string, string>;
+  alternativeDrugLabels?: Record<string, string>;
+  onAlternativeChange?: (key: string, value: string, itemName?: string) => void;
+}) {
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
       <table className="min-w-full text-sm">
         <thead className="bg-slate-50 dark:bg-slate-800/80 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
           <tr>
+            {selectable && <th className="px-3 py-2 w-8" />}
             <th className="px-3 py-2 text-left font-semibold">#</th>
             <th className="px-3 py-2 text-left font-semibold">Item</th>
             <th className="px-3 py-2 text-right font-semibold">Qty</th>
@@ -675,38 +731,104 @@ function LegacyItemsTable({ items }: { items: LegacyDispensedMedicationItem[] })
             <th className="px-3 py-2 text-right font-semibold">Amount</th>
             <th className="px-3 py-2 text-left font-semibold">Batch</th>
             <th className="px-3 py-2 text-left font-semibold">Expiry</th>
+            {productAvailability && <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">Stock</th>}
+            {onAlternativeChange && (
+              <th className="px-2 py-2 text-left font-semibold w-[160px] min-w-[160px] max-w-[160px]">
+                Alt. Drug
+              </th>
+            )}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100 dark:divide-slate-700 bg-white dark:bg-gray-900/40">
-          {items.map((item, idx) => (
-            <tr key={item.name || `${item.item_num || "item"}-${idx}`}>
-              <td className="px-3 py-2 text-slate-500 tabular-nums">{item.sr_num ?? idx + 1}</td>
-              <td className="px-3 py-2">
-                <div className="font-medium text-slate-900 dark:text-white">
-                  {item.item_name?.trim() || item.item || item.item_num || "—"}
-                </div>
-                {item.item_num ? (
-                  <div className="text-xs text-slate-400 font-mono mt-0.5">{item.item_num}</div>
-                ) : null}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
-                {formatLegacyAmount(item.show_qty)}
-              </td>
-              <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{item.show_uom || "—"}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
-                {formatLegacyAmount(item.show_rate)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900 dark:text-white">
-                {formatLegacyAmount(item.show_amt)}
-              </td>
-              <td className="px-3 py-2 text-slate-600 dark:text-slate-300 font-mono text-xs">
-                {item.ais_batch_num || "—"}
-              </td>
-              <td className="px-3 py-2 text-slate-600 dark:text-slate-300 tabular-nums text-xs">
-                {item.item_expiry_date ? String(item.item_expiry_date).slice(0, 10) : "—"}
-              </td>
-            </tr>
-          ))}
+          {items.map((item, idx) => {
+            const itemKey = legacyMedicationLineKey(txnName, idx, item);
+            const lineCode = resolveLegacyMedicationItemCode(item);
+            const altCode = alternativeDrugs?.[itemKey]?.trim() || "";
+            const checked = selectedKeys?.has(itemKey) ?? false;
+            const stockCode = altCode || lineCode;
+            const avail = stockCode ? productAvailability?.[stockCode] : undefined;
+            const qty = Number(item.show_qty || 1) || 1;
+            // Legacy codes often are not current Items — treat missing/zero stock as needing an alternative.
+            const needsAlternative =
+              !altCode && (avail === undefined || avail <= 0 || avail < qty);
+            const lowStock = !!altCode && avail !== undefined && (avail <= 0 || avail < qty);
+            return (
+              <tr
+                key={item.name || `${item.item_num || "item"}-${idx}`}
+                onClick={selectable && onToggle ? () => onToggle(itemKey) : undefined}
+                className={`transition-colors ${selectable ? "cursor-pointer" : ""} ${
+                  checked
+                    ? "bg-orange-50 dark:bg-orange-900/20"
+                    : selectable
+                      ? "hover:bg-orange-50/50 dark:hover:bg-orange-900/10"
+                      : ""
+                }`}
+              >
+                {selectable && (
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggle?.(itemKey)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                    />
+                  </td>
+                )}
+                <td className="px-3 py-2 text-slate-500 tabular-nums">{item.sr_num ?? idx + 1}</td>
+                <td className="px-3 py-2">
+                  <div className="font-medium text-slate-900 dark:text-white">
+                    {resolveLegacyMedicationDisplayName(item)}
+                  </div>
+                  {lineCode ? (
+                    <div className="text-xs text-slate-400 font-mono mt-0.5">{lineCode}</div>
+                  ) : null}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
+                  {formatLegacyAmount(item.show_qty)}
+                </td>
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{item.show_uom || "—"}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
+                  {formatLegacyAmount(item.show_rate)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900 dark:text-white">
+                  {formatLegacyAmount(item.show_amt)}
+                </td>
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300 font-mono text-xs">
+                  {item.ais_batch_num || "—"}
+                </td>
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300 tabular-nums text-xs">
+                  {item.item_expiry_date ? String(item.item_expiry_date).slice(0, 10) : "—"}
+                </td>
+                {productAvailability && (
+                  <td
+                    className={`px-3 py-2 whitespace-nowrap ${
+                      lowStock
+                        ? "text-red-600 font-semibold"
+                        : "text-gray-500 dark:text-gray-400"
+                    }`}
+                  >
+                    {avail === undefined ? (altCode ? "N/A" : "Map alt") : avail}
+                  </td>
+                )}
+                {onAlternativeChange && (
+                  <td
+                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <AlternativeDrugSelect
+                      drugCode={lineCode || undefined}
+                      drugName={resolveLegacyMedicationDisplayName(item)}
+                      value={altCode}
+                      selectedLabel={alternativeDrugLabels?.[itemKey]}
+                      lowStock={needsAlternative || lowStock}
+                      onChange={(next, itemName) => onAlternativeChange?.(itemKey, next, itemName)}
+                    />
+                  </td>
+                )}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -725,6 +847,9 @@ export default function InpatientMedicationOrdersModal({
   selectedHistoryItems,
   onToggleHistoryItem,
   onAddHistoryItemsToCart,
+  selectedLegacyItems = new Set(),
+  onToggleLegacyItem,
+  onAddLegacyItemsToCart,
   onCreateVisit,
   onSelectVisit,
   creatingVisit = false,
@@ -740,6 +865,8 @@ export default function InpatientMedicationOrdersModal({
   const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history" | "legacy_dispensed">("pending");
   const [alternativeDrugs, setAlternativeDrugs] = useState<Record<string, string>>({});
   const [alternativeDrugLabels, setAlternativeDrugLabels] = useState<Record<string, string>>({});
+  const [legacyAlternativeDrugs, setLegacyAlternativeDrugs] = useState<Record<string, string>>({});
+  const [legacyAlternativeDrugLabels, setLegacyAlternativeDrugLabels] = useState<Record<string, string>>({});
   const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
   const [expandedLegacyOrders, setExpandedLegacyOrders] = useState<Set<string>>(new Set());
   const [expandedDiagnosisEntries, setExpandedDiagnosisEntries] = useState<Set<string>>(new Set());
@@ -778,6 +905,8 @@ export default function InpatientMedicationOrdersModal({
       setPrintMenuPosition(null);
       setAlternativeDrugs({});
       setAlternativeDrugLabels({});
+      setLegacyAlternativeDrugs({});
+      setLegacyAlternativeDrugLabels({});
       setOpenPharmacyVisits([]);
     }
   }, [isOpen]);
@@ -1021,7 +1150,12 @@ export default function InpatientMedicationOrdersModal({
                             alternativeDrugs={alternativeDrugs}
                             alternativeDrugLabels={alternativeDrugLabels}
                             onAlternativeChange={(key, value, itemName) => {
-                              setAlternativeDrugs((prev) => ({ ...prev, [key]: value }));
+                              setAlternativeDrugs((prev) => {
+                                const next = { ...prev };
+                                if (value) next[key] = value;
+                                else delete next[key];
+                                return next;
+                              });
                               setAlternativeDrugLabels((prev) => {
                                 const next = { ...prev };
                                 if (value && itemName) next[key] = itemName;
@@ -1467,7 +1601,30 @@ export default function InpatientMedicationOrdersModal({
 
                       {isExpanded && (txn.items?.length ?? 0) > 0 && (
                         <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-gray-900/30">
-                          <LegacyItemsTable items={txn.items} />
+                          <LegacyItemsTable
+                            items={txn.items}
+                            txnName={txn.name}
+                            selectable={!!onToggleLegacyItem}
+                            selectedKeys={selectedLegacyItems}
+                            onToggle={onToggleLegacyItem}
+                            productAvailability={productAvailability}
+                            alternativeDrugs={legacyAlternativeDrugs}
+                            alternativeDrugLabels={legacyAlternativeDrugLabels}
+                            onAlternativeChange={(key, value, itemName) => {
+                              setLegacyAlternativeDrugs((prev) => {
+                                const next = { ...prev };
+                                if (value) next[key] = value;
+                                else delete next[key];
+                                return next;
+                              });
+                              setLegacyAlternativeDrugLabels((prev) => {
+                                const next = { ...prev };
+                                if (value && itemName) next[key] = itemName;
+                                else delete next[key];
+                                return next;
+                              });
+                            }}
+                          />
                           {txn.trans_remarks ? (
                             <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap">
                               {txn.trans_remarks}
@@ -1666,7 +1823,7 @@ export default function InpatientMedicationOrdersModal({
               : activeTab === "patient_history"
               ? "Diagnosis, visits, warnings and allergies"
               : activeTab === "legacy_dispensed"
-              ? `${legacyDispensedOrders.length} legacy transaction(s) — read only`
+              ? `${selectedLegacyItems.size} legacy item(s) selected`
               : lastCreatedVisit?.name
               ? "Visit linked — used when you dispense"
               : openPharmacyVisits.length > 0
@@ -1696,6 +1853,15 @@ export default function InpatientMedicationOrdersModal({
                 className="px-5 py-2 text-sm font-bold text-orange-600 bg-white border-2 border-orange-600 rounded-lg hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-[0.99]"
               >
                 Add Selected {selectedHistoryItems.size > 0 && `(${selectedHistoryItems.size})`}
+              </button>
+            )}
+            {isHospitalMode && activeTab === "legacy_dispensed" && onAddLegacyItemsToCart && (
+              <button
+                onClick={() => onAddLegacyItemsToCart(legacyAlternativeDrugs)}
+                disabled={selectedLegacyItems.size === 0}
+                className="px-5 py-2 text-sm font-bold text-orange-600 bg-white border-2 border-orange-600 rounded-lg hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-[0.99]"
+              >
+                Add Selected {selectedLegacyItems.size > 0 && `(${selectedLegacyItems.size})`}
               </button>
             )}
           </div>

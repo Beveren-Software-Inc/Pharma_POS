@@ -1,6 +1,7 @@
 import { getItemUOMsAndPrices } from "../services/uomService";
 
 const UNIT_UOM_KEY = "UNIT";
+const PACK_UOM_KEY = "PACK";
 const unitUomAvailabilityCache = new Map<string, boolean>();
 
 export function normalizeUom(value?: string | null): string {
@@ -10,6 +11,18 @@ export function normalizeUom(value?: string | null): string {
 function findUnitUomName(uoms: Array<{ uom?: string }>): string | null {
   const match = uoms.find((row) => normalizeUom(row.uom) === UNIT_UOM_KEY);
   return match?.uom?.trim() || null;
+}
+
+/**
+ * Medication-order UOM for cart/stock:
+ * - PACK stays PACK
+ * - UNIT stays UNIT
+ * - anything else (Milligram, Tablet, etc.) is treated as UNIT
+ */
+export function resolveMedicationOrderUom(orderUom?: string | null): "UNIT" | "PACK" {
+  const key = normalizeUom(orderUom);
+  if (key === PACK_UOM_KEY) return "PACK";
+  return "UNIT";
 }
 
 /** ERPNext: conversion_factor = stock_uom qty per 1 of this UOM. */
@@ -94,20 +107,62 @@ export async function itemHasUnitUom(itemCode: string): Promise<boolean> {
   }
 }
 
+export type CartUomResolution = {
+  uom: string;
+  conversion_factor: number;
+  stock_uom: string;
+};
+
 /** Hospital pharmacy: prefer UNIT when the item supports it. */
 export async function resolveHospitalCartUom(
   itemCode: string,
   fallbackUom?: string
 ): Promise<string> {
+  const resolved = await resolveHospitalCartUomDetails(itemCode, fallbackUom);
+  return resolved.uom;
+}
+
+/**
+ * Resolve cart UOM plus ERPNext conversion_factor (stock qty per 1 cart UOM).
+ * product.available is always in stock_uom; cart max qty = available / conversion_factor.
+ */
+export async function resolveHospitalCartUomDetails(
+  itemCode: string,
+  fallbackUom?: string
+): Promise<CartUomResolution> {
   const fallback = (fallbackUom || "").trim();
   try {
-    const { uoms } = await getItemUOMsAndPrices(itemCode);
+    const { uoms, base_uom } = await getItemUOMsAndPrices(itemCode);
     const unitName = findUnitUomName(uoms);
-    const hasUnit = !!unitName;
-    unitUomAvailabilityCache.set(itemCode, hasUnit);
-    if (unitName) return unitName;
+    unitUomAvailabilityCache.set(itemCode, !!unitName);
+    const uom = (unitName || fallback || base_uom || "").trim();
+    return {
+      uom,
+      conversion_factor: getUomConversionFactor(uoms, base_uom, uom),
+      stock_uom: base_uom || fallback || uom,
+    };
   } catch {
-    if (normalizeUom(fallback) === UNIT_UOM_KEY) return fallback;
+    const uom =
+      normalizeUom(fallback) === UNIT_UOM_KEY ? fallback : fallback;
+    return { uom, conversion_factor: 1, stock_uom: uom };
   }
-  return fallback;
+}
+
+/** Resolve any requested cart UOM (pharmacy default / hospital) with conversion. */
+export async function resolveCartUomDetails(
+  itemCode: string,
+  preferredUom?: string
+): Promise<CartUomResolution> {
+  const preferred = (preferredUom || "").trim();
+  try {
+    const { uoms, base_uom } = await getItemUOMsAndPrices(itemCode);
+    const uom = preferred || base_uom;
+    return {
+      uom,
+      conversion_factor: getUomConversionFactor(uoms, base_uom, uom),
+      stock_uom: base_uom || uom,
+    };
+  } catch {
+    return { uom: preferred, conversion_factor: 1, stock_uom: preferred };
+  }
 }

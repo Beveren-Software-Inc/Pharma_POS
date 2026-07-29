@@ -17,7 +17,11 @@ import { useCartStore } from "../stores/cartStore"
 import { toast } from "react-toastify"
 import { getItemPriceForCustomer } from "../services/dynamicPricing"
 import { findLastCartLineForItem, getCartLineUpdateId } from "../utils/duplicateCartItems"
-import { resolveHospitalCartUom } from "../utils/hospitalCartUom"
+import {
+  resolveCartUomDetails,
+  resolveHospitalCartUomDetails,
+  type CartUomResolution,
+} from "../utils/hospitalCartUom"
 
 export default function RetailPOSLayout() {
   const [selectedCategory, setSelectedCategory] = useState("all")
@@ -31,7 +35,7 @@ export default function RetailPOSLayout() {
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
 
   // Use cart store instead of local state
-  const { cartItems, addToCart, updateQuantity, removeItem, clearCart, selectedCustomer } = useCartStore()
+  const { cartItems, addToCart, updateQuantity, removeItem, clearCart, selectedCustomer, updateItemMetadata } = useCartStore()
 
   // Use professional data management with pagination
   const {
@@ -69,13 +73,16 @@ export default function RetailPOSLayout() {
       ? posDetails.custom_pharmacy_default_uom.trim()
       : ""
 
-  const resolveUomForCart = useCallback(async (item: MenuItem): Promise<string> => {
+  const resolveUomForCart = useCallback(async (item: MenuItem): Promise<CartUomResolution> => {
     const fallback = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : (item.uom || "")
     if (isHospitalPharmacy) {
-      return resolveHospitalCartUom(item.id, fallback || item.uom)
+      return resolveHospitalCartUomDetails(item.id, fallback || item.uom)
     }
-    if (isPharmacy && pharmacyDefaultUom) return pharmacyDefaultUom
-    return item.uom || fallback
+    if (isPharmacy && pharmacyDefaultUom) {
+      return resolveCartUomDetails(item.id, pharmacyDefaultUom)
+    }
+    const uom = item.uom || fallback
+    return resolveCartUomDetails(item.id, uom)
   }, [isHospitalPharmacy, isPharmacy, pharmacyDefaultUom])
 
   // Use media query to detect mobile/tablet screens
@@ -143,17 +150,35 @@ export default function RetailPOSLayout() {
     return { isScale: true as const, baseBarcode: base, quantity: qty }
   }, [scalePrefix])
 
+  /** Ensure existing cart lines get stock_uom / conversion_factor when hospital defaults to UNIT. */
+  const ensureCartLineUomConversion = useCallback(async (item: MenuItem, existingItem: CartItem) => {
+    const lineId = getCartLineUpdateId(existingItem)
+    const needsConversion =
+      !existingItem.conversion_factor ||
+      !existingItem.stock_uom ||
+      (Number(existingItem.conversion_factor) === 1 &&
+        (existingItem.uom || "").toUpperCase() !== (existingItem.stock_uom || existingItem.uom || "").toUpperCase())
+    if (!needsConversion) return
+    const resolved = await resolveUomForCart(item)
+    updateItemMetadata(lineId, {
+      conversion_factor: resolved.conversion_factor,
+      stock_uom: resolved.stock_uom,
+      ...(existingItem.uom ? {} : { uom: resolved.uom }),
+    })
+  }, [resolveUomForCart, updateItemMetadata])
+
   /** Returns the newly added cart item when a new line was created (for batch/serial targeting). */
   const addOrIncreaseWithQuantity = useCallback(async (item: MenuItem, quantity: number): Promise<{ cartLineId?: string; id: string } | void> => {
     const existingItem = findLastCartLineForItem(cartItems, item.id);
     if (existingItem) {
+      await ensureCartLineUomConversion(item, existingItem)
       updateQuantity(getCartLineUpdateId(existingItem), existingItem.quantity + quantity);
       return {
         cartLineId: (existingItem as { cartLineId?: string }).cartLineId,
         id: existingItem.id,
       };
     }
-    const uomToUse = await resolveUomForCart(item)
+    const { uom: uomToUse, conversion_factor, stock_uom } = await resolveUomForCart(item)
     let priceToUse = item.price
     if ((isPharmacy || isHospitalPharmacy) && uomToUse && uomToUse !== item.uom && !selectedCustomer) {
       const priceInfo = await getItemPriceForCustomer(item.id, undefined, uomToUse)
@@ -169,6 +194,8 @@ export default function RetailPOSLayout() {
       image: item.image,
       available: item.available,
       uom: uomToUse,
+      stock_uom,
+      conversion_factor,
       item_code: item.id,
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,
@@ -179,7 +206,7 @@ export default function RetailPOSLayout() {
       updateQuantity(lineId, quantity);
     }
     return added ? { cartLineId: (added as { cartLineId?: string }).cartLineId, id: added.id } : undefined
-  }, [cartItems, updateQuantity, addToCart, isPharmacy, isHospitalPharmacy, selectedCustomer, resolveUomForCart])
+  }, [cartItems, updateQuantity, addToCart, isPharmacy, isHospitalPharmacy, selectedCustomer, resolveUomForCart, ensureCartLineUomConversion])
 
   // Separate function for adding items to cart (used by both click and barcode). Returns a Promise so barcode scanner can wait for add before dispatching batch/serial.
   const addItemToCart = async (
@@ -190,48 +217,16 @@ export default function RetailPOSLayout() {
       const existingItem = findLastCartLineForItem(cartItems, item.id);
 
       if (existingItem) {
+        await ensureCartLineUomConversion(item, existingItem)
         updateQuantity(getCartLineUpdateId(existingItem), existingItem.quantity + 1);
         return;
       }
     }
-    const uomToUse = await resolveUomForCart(item)
+    const { uom: uomToUse, conversion_factor, stock_uom } = await resolveUomForCart(item)
     const shouldFetchPrice =
       (isPharmacy || isHospitalPharmacy) && uomToUse && uomToUse !== item.uom && !selectedCustomer
 
-    if (shouldFetchPrice) {
-      try {
-        const priceInfo = await getItemPriceForCustomer(item.id, undefined, uomToUse)
-        const priceToUse = (priceInfo?.success && priceInfo.price > 0) ? priceInfo.price : item.price
-        return addToCart({
-          id: item.id,
-          name: item.name,
-          category: item.category,
-          price: priceToUse,
-          image: item.image,
-          available: item.available,
-          uom: uomToUse,
-          item_code: item.id,
-          item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
-          has_serial_no: item.has_serial_no,
-          has_batch_no: item.has_batch_no,
-        })
-      } catch {
-        return addToCart({
-          id: item.id,
-          name: item.name,
-          category: item.category,
-          price: item.price,
-          image: item.image,
-          available: item.available,
-          uom: uomToUse,
-          item_code: item.id,
-          item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
-          has_serial_no: item.has_serial_no,
-          has_batch_no: item.has_batch_no,
-        })
-      }
-    }
-    return addToCart({
+    const cartPayload = {
       id: item.id,
       name: item.name,
       category: item.category,
@@ -239,11 +234,24 @@ export default function RetailPOSLayout() {
       image: item.image,
       available: item.available,
       uom: uomToUse,
+      stock_uom,
+      conversion_factor,
       item_code: item.id,
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,
       has_batch_no: item.has_batch_no,
-    })
+    }
+
+    if (shouldFetchPrice) {
+      try {
+        const priceInfo = await getItemPriceForCustomer(item.id, undefined, uomToUse)
+        const priceToUse = (priceInfo?.success && priceInfo.price > 0) ? priceInfo.price : item.price
+        return addToCart({ ...cartPayload, price: priceToUse })
+      } catch {
+        return addToCart(cartPayload)
+      }
+    }
+    return addToCart(cartPayload)
   }
 
   const handleUpdateQuantity = (id: string, quantity: number) => {

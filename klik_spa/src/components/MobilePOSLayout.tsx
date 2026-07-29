@@ -14,7 +14,7 @@ import BottomNavigation from "./BottomNavigation"
 import type { MenuItem, CartItem } from "../../types"
 import { getItemPriceForCustomer } from "../services/dynamicPricing"
 import { findLastCartLineForItem, getCartLineUpdateId } from "../utils/duplicateCartItems"
-import { resolveHospitalCartUom } from "../utils/hospitalCartUom"
+import { resolveHospitalCartUomDetails, resolveCartUomDetails } from "../utils/hospitalCartUom"
 
 interface MobilePOSLayoutProps {
   items: MenuItem[]
@@ -134,10 +134,11 @@ export default function MobilePOSLayout({
       return
     }
 
-    let uomToUse = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : (item.uom || "")
-    if (isHospitalPharmacy) {
-      uomToUse = await resolveHospitalCartUom(item.id, uomToUse || item.uom)
-    }
+    const fallback = (isPharmacy && pharmacyDefaultUom) ? pharmacyDefaultUom : (item.uom || "")
+    const resolved = isHospitalPharmacy
+      ? await resolveHospitalCartUomDetails(item.id, fallback || item.uom)
+      : await resolveCartUomDetails(item.id, fallback || item.uom)
+    const uomToUse = resolved.uom
     let priceToUse = item.price
 
     if ((isPharmacy || isHospitalPharmacy) && uomToUse && uomToUse !== item.uom && !selectedCustomer) {
@@ -155,6 +156,8 @@ export default function MobilePOSLayout({
       image: item.image || '',
       available: item.available,
       uom: uomToUse,
+      stock_uom: resolved.stock_uom,
+      conversion_factor: resolved.conversion_factor,
       item_code: item.id,
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,

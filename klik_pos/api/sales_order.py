@@ -664,6 +664,10 @@ def create_and_submit_hospital_sales_order(data):
 		if not items:
 			frappe.throw("At least one item is required")
 
+		from klik_pos.api.batch_expiry import validate_pos_items_batch_expiry
+
+		validate_pos_items_batch_expiry(items)
+
 		pos_profile = _get_active_pos_profile()
 		if not _to_bool(getattr(pos_profile, "custom_is_hospital_pharmacy", 0)):
 			frappe.throw("Hospital pharmacy flow is not enabled on current POS Profile.")
@@ -739,6 +743,10 @@ def create_draft_hospital_sales_order(data):
 			frappe.throw("Customer is required")
 		if not items:
 			frappe.throw("At least one item is required")
+
+		from klik_pos.api.batch_expiry import validate_pos_items_batch_expiry
+
+		validate_pos_items_batch_expiry(items)
 
 		pos_profile = _get_active_pos_profile()
 		if not _to_bool(getattr(pos_profile, "custom_is_hospital_pharmacy", 0)):
