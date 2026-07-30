@@ -518,7 +518,8 @@ export default function PaymentDialog({
         const rate = template ? (itemTaxTemplateRates[template] ?? 0) : 0;
         taxAmount += (itemTotal * rate) / 100;
       });
-      taxAmount = parseFloat(taxAmount.toFixed(3));
+      // Use half-up rounding (not toFixed) so 1.4295 → 1.430 and matches cart checkout
+      taxAmount = roundCurrency(taxAmount);
       // Include tax on free items and delivery charge tax (derived from inclusive-excl difference)
       const deliveryTaxPortion = Math.max(0, deliveryChargeInclusive - deliveryChargeExclusive);
       const totalTaxAmount = taxAmount + (freeItemTaxAmount || 0) + deliveryTaxPortion;
@@ -550,12 +551,12 @@ export default function PaymentDialog({
     if (isInclusive) {
       // For inclusive tax: tax is already included in the taxable amount
       taxAmount = (taxableAmount * taxRate) / (100 + taxRate);
-      taxAmount = parseFloat(taxAmount.toFixed(3));
+      taxAmount = roundCurrency(taxAmount);
       grandTotal = taxableAmount;
     } else {
       // For exclusive tax: tax is added to the taxable amount
       taxAmount = (taxableAmount * taxRate) / 100;
-      taxAmount = parseFloat(taxAmount.toFixed(3)); // Ensure 3 decimal places (e.g. BHD)
+      taxAmount = roundCurrency(taxAmount); // Half-up to 3 dp (e.g. BHD); matches cart checkout
       grandTotal = taxableAmount + taxAmount;
     }
 
