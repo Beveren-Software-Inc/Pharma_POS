@@ -24,6 +24,8 @@ import {
   ChevronDown,
   ChevronRight,
   Printer,
+  CalendarDays,
+  MessageCircle,
 } from "lucide-react";
 
 import InvoiceViewModal from "../components/InvoiceViewModal";
@@ -56,7 +58,8 @@ import {
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { isToday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
 import { exportInvoicesToCSV, getExportFilename, type ExportableInvoice } from "../utils/exportUtils";
-import { getPrintFormatsForDoctype } from "../services/patientService";
+import { getPrintFormatsForDoctype, getSubscriptionMedicationPlans, resolveSubscriptionItemCode, resolveSubscriptionItemDisplayName, type SubscriptionMedicationPlan } from "../services/patientService";
+import SendSubscriptionMedicationWhatsAppModal from "../components/SendSubscriptionMedicationWhatsAppModal";
 import {
   getItemReturnBadgeClass,
   getItemReturnLabel,
@@ -96,6 +99,12 @@ export default function InvoiceHistoryPage() {
   const [dispensePrintMenuPosition, setDispensePrintMenuPosition] = useState<{ top: number; right: number } | null>(null);
   const dispensePrintButtonRef = useRef<HTMLButtonElement | null>(null);
   const [salesOrderPrintFormats, setSalesOrderPrintFormats] = useState<string[]>(["Standard"]);
+
+  // Monthly Medication (Subscription Medication Plan) — hospital only
+  const [monthlyMedicationPlans, setMonthlyMedicationPlans] = useState<SubscriptionMedicationPlan[]>([]);
+  const [loadingMonthlyMedication, setLoadingMonthlyMedication] = useState(false);
+  const [expandedMonthlyPlans, setExpandedMonthlyPlans] = useState<Set<string>>(new Set());
+  const [reminderPlan, setReminderPlan] = useState<SubscriptionMedicationPlan | null>(null);
 
   // Delete confirmation states
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -162,7 +171,10 @@ export default function InvoiceHistoryPage() {
   }, [showEditOptions, showCustomerSelection, showMultiReturn]);
 
   const tabs = isHospitalPharmacy
-    ? [{ id: "all", name: "Dispensed Medicine", icon: FileText, color: "text-green-600" }]
+    ? [
+        { id: "all", name: "Dispensed Medicine", icon: FileText, color: "text-green-600" },
+        { id: "monthly", name: "Monthly Medication", icon: CalendarDays, color: "text-teal-600" },
+      ]
     : [
     { id: "all", name: "All Invoices", icon: FileText, color: "text-gray-600" },
     { id: "Draft", name: "Draft", icon: FilePlus, color: "text-gray-500" },
@@ -180,6 +192,32 @@ export default function InvoiceHistoryPage() {
       setSalesOrderPrintFormats(res.formats);
     });
   }, [isHospitalPharmacy]);
+
+  useEffect(() => {
+    if (!isHospitalPharmacy) {
+      setMonthlyMedicationPlans([]);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      setLoadingMonthlyMedication(true);
+      try {
+        const plans = await getSubscriptionMedicationPlans({
+          search: searchTerm.trim() || undefined,
+          limit: 100,
+        });
+        if (cancelled) return;
+        setMonthlyMedicationPlans(plans);
+        setExpandedMonthlyPlans(new Set(plans.map((p) => p.name)));
+      } finally {
+        if (!cancelled) setLoadingMonthlyMedication(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [isHospitalPharmacy, searchTerm]);
 
   useLayoutEffect(() => {
     if (!openDispensePrintFor || !dispensePrintButtonRef.current) return;
@@ -409,6 +447,9 @@ const getStatusBadge = (status: string) => {
   // Get count for each status - filtered by cashier, date, and payment (but not status)
   // This ensures tab counts reflect the current filter selections
   const getStatusCount = (status: string) => {
+    if (status === "monthly") {
+      return monthlyMedicationPlans.length;
+    }
     // First apply all filters except status
     const invoicesFilteredByOtherFilters = invoices.filter((invoice) => {
       const matchesPayment = isHospitalPharmacy || paymentFilter === "all" || invoice.paymentMethod === paymentFilter;
@@ -471,17 +512,26 @@ const getStatusBadge = (status: string) => {
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
           <input
             type="text"
-            placeholder={isHospitalPharmacy ? "Search dispense orders..." : "Search invoices..."}
+            placeholder={
+              isHospitalPharmacy
+                ? activeTab === "monthly"
+                  ? "Search monthly medication plans..."
+                  : "Search dispense orders..."
+                : "Search invoices..."
+            }
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
           />
-          {isLoading && invoices.length > 0 && (
+          {((activeTab === "monthly" && loadingMonthlyMedication) ||
+            (activeTab !== "monthly" && isLoading && invoices.length > 0)) && (
             <div className="absolute right-3 top-1/2 -translate-y-1/2">
               <div className="animate-spin h-4 w-4 border-2 border-b-transparent border-beveren-500 rounded-full"></div>
             </div>
           )}
         </div>
+        {activeTab !== "monthly" && (
+          <>
         <select
           value={dateFilter}
           onChange={(e) => setDateFilter(e.target.value)}
@@ -526,8 +576,10 @@ const getStatusBadge = (status: string) => {
           ))}
         </select>
         )}
+          </>
+        )}
       </div>
-        {hasMore && (
+        {activeTab !== "monthly" && hasMore && (
           <div className="mt-3 text-center">
             <p className="text-xs text-gray-500 dark:text-gray-400">
               Search works on all invoices in the database. Load more invoices to see additional results.
@@ -603,6 +655,170 @@ const getStatusBadge = (status: string) => {
         </div>
       </div>
       </>
+      )}
+    </div>
+  );
+
+  const renderMonthlyMedicationPlans = () => (
+    <div className="w-full max-w-none bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+      <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+          Monthly Medication ({monthlyMedicationPlans.length})
+        </h3>
+        {loadingMonthlyMedication ? (
+          <span className="text-xs text-gray-400">Loading…</span>
+        ) : null}
+      </div>
+
+      {loadingMonthlyMedication && monthlyMedicationPlans.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-teal-600 mb-3" />
+          <p className="text-sm">Loading monthly medication plans…</p>
+        </div>
+      ) : monthlyMedicationPlans.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-gray-400 dark:text-gray-500">
+          <CalendarDays className="w-10 h-10 mb-3 opacity-30" />
+          <p className="text-sm font-medium">No monthly medication plans found.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-100 dark:divide-gray-700">
+          {monthlyMedicationPlans.map((plan) => {
+            const isExpanded = expandedMonthlyPlans.has(plan.name);
+            const startLabel = plan.start_date ? String(plan.start_date).slice(0, 10) : null;
+            const nextLabel = plan.next_run_date ? String(plan.next_run_date).slice(0, 10) : null;
+            return (
+              <div key={plan.name} className="bg-white dark:bg-gray-800">
+                <div className="w-full flex items-center gap-3 px-6 py-4 transition-colors hover:bg-teal-50/70 dark:hover:bg-teal-950/30">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedMonthlyPlans((prev) => {
+                        const next = new Set(prev);
+                        next.has(plan.name) ? next.delete(plan.name) : next.add(plan.name);
+                        return next;
+                      })
+                    }
+                    className="flex items-center gap-3 min-w-0 flex-1 text-left rounded-lg"
+                  >
+                    <span className={`text-teal-500 transition-transform ${isExpanded ? "rotate-0" : "-rotate-90"}`}>
+                      <ChevronDown className="w-4 h-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-sm text-gray-900 dark:text-white font-mono truncate">
+                          {plan.name}
+                        </span>
+                        {plan.frequency ? (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300">
+                            {plan.frequency}
+                          </span>
+                        ) : null}
+                        {plan.status ? (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                            {plan.status}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        <span>
+                          Patient:{" "}
+                          <span className="text-gray-700 dark:text-gray-300">
+                            {plan.patient_name || plan.patient || "—"}
+                          </span>
+                        </span>
+                        {(plan.practitioner_name || plan.practitioner) ? (
+                          <span>
+                            Practitioner:{" "}
+                            <span className="text-gray-700 dark:text-gray-300">
+                              {plan.practitioner_name || plan.practitioner}
+                            </span>
+                          </span>
+                        ) : null}
+                        {startLabel ? <span>Start {startLabel}</span> : null}
+                        {nextLabel ? <span>Next {nextLabel}</span> : null}
+                      </div>
+                    </div>
+                    <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
+                      {(plan.item_count ?? plan.medications?.length ?? 0)} med(s)
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    title="Send WhatsApp reminder"
+                    onClick={() => setReminderPlan(plan)}
+                    className="flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700 transition-colors"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    Reminder
+                  </button>
+                </div>
+
+                {isExpanded && (
+                  <div className="px-6 pb-4">
+                    {(plan.medications?.length ?? 0) === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-3">No medications on this plan.</p>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-teal-200 dark:border-teal-800/50">
+                        <table className="min-w-full text-sm">
+                          <thead className="bg-teal-50 dark:bg-teal-900/30 text-xs uppercase tracking-wide text-teal-700/80 dark:text-teal-300/80">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-semibold">Drug</th>
+                              <th className="px-3 py-2 text-left font-semibold">Dosage</th>
+                              <th className="px-3 py-2 text-right font-semibold">Qty / cycle</th>
+                              <th className="px-3 py-2 text-left font-semibold">Frequency</th>
+                              <th className="px-3 py-2 text-center font-semibold">Active</th>
+                              <th className="px-3 py-2 text-left font-semibold">Instructions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-teal-100 dark:divide-teal-900/40 bg-white dark:bg-gray-900/40">
+                            {plan.medications.map((item, idx) => {
+                              const code = resolveSubscriptionItemCode(item);
+                              const inactive = item.is_active === 0;
+                              return (
+                                <tr
+                                  key={item.name || `${code}-${idx}`}
+                                  className={inactive ? "opacity-50" : undefined}
+                                >
+                                  <td className="px-3 py-2">
+                                    <div className="font-medium text-slate-900 dark:text-white">
+                                      {resolveSubscriptionItemDisplayName(item)}
+                                    </div>
+                                    {code ? (
+                                      <div className="text-xs text-slate-400 font-mono mt-0.5">{code}</div>
+                                    ) : null}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                    {item.dosage != null && item.dosage !== "" ? String(item.dosage) : "—"}
+                                  </td>
+                                  <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
+                                    {item.qty_per_cycle ?? 1}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                    {item.patient_frequency || "—"}
+                                  </td>
+                                  <td className="px-3 py-2 text-center">
+                                    {inactive ? (
+                                      <span className="text-[10px] font-semibold text-gray-400">Off</span>
+                                    ) : (
+                                      <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">On</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600 dark:text-slate-300 max-w-xs truncate">
+                                    {item.instructions || "—"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -1499,8 +1715,14 @@ const getStatusBadge = (status: string) => {
           </div>
 
           {renderFilters()}
-          {renderSummaryCards()}
-          {renderInvoicesTable()}
+          {activeTab === "monthly" ? (
+            renderMonthlyMedicationPlans()
+          ) : (
+            <>
+              {renderSummaryCards()}
+              {renderInvoicesTable()}
+            </>
+          )}
         </div>
 
         {/* Invoice View Modal */}
@@ -1602,6 +1824,18 @@ const getStatusBadge = (status: string) => {
 
         {/* Bottom Navigation */}
         <BottomNavigation />
+
+        {reminderPlan && (
+          <SendSubscriptionMedicationWhatsAppModal
+            plan={reminderPlan}
+            onClose={() => setReminderPlan(null)}
+            onSuccess={() => {
+              toast.success(
+                `WhatsApp reminder sent to ${reminderPlan.patient_name || reminderPlan.patient || reminderPlan.name}`
+              );
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -1675,11 +1909,17 @@ const getStatusBadge = (status: string) => {
           {/* Filters */}
           {renderFilters()}
 
-          {/* Summary Cards */}
-          {renderSummaryCards()}
+          {activeTab === "monthly" ? (
+            renderMonthlyMedicationPlans()
+          ) : (
+            <>
+              {/* Summary Cards */}
+              {renderSummaryCards()}
 
-          {/* Invoices Table/Grid */}
-          {renderInvoicesTable()}
+              {/* Invoices Table/Grid */}
+              {renderInvoicesTable()}
+            </>
+          )}
         </div>
 
         {/* Invoice View Modal */}
@@ -1865,6 +2105,18 @@ const getStatusBadge = (status: string) => {
           </div>
         )}
       </div>
+
+      {reminderPlan && (
+        <SendSubscriptionMedicationWhatsAppModal
+          plan={reminderPlan}
+          onClose={() => setReminderPlan(null)}
+          onSuccess={() => {
+            toast.success(
+              `WhatsApp reminder sent to ${reminderPlan.patient_name || reminderPlan.patient || reminderPlan.name}`
+            );
+          }}
+        />
+      )}
     </div>
   );
 }

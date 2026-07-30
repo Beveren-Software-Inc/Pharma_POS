@@ -55,7 +55,7 @@ import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientLegacyDispensedMedications, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, resolveLegacyMedicationItemCode, resolveLegacyMedicationDisplayName, legacyMedicationLineKey, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type LegacyDispensedTransaction, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientLegacyDispensedMedications, getSubscriptionMedicationPlans, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, resolveLegacyMedicationItemCode, resolveLegacyMedicationDisplayName, legacyMedicationLineKey, resolveSubscriptionItemCode, resolveSubscriptionItemDisplayName, subscriptionMedicationLineKey, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type LegacyDispensedTransaction, type SubscriptionMedicationPlan, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, createDraftHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
@@ -1179,9 +1179,11 @@ export default function OrderSummary({
   const [medicationOrders, setMedicationOrders] = useState<InpatientMedicationOrder[]>([]);
   const [medicationOrderHistory, setMedicationOrderHistory] = useState<InpatientMedicationOrder[]>([]);
   const [legacyDispensedMedications, setLegacyDispensedMedications] = useState<LegacyDispensedTransaction[]>([]);
+  const [subscriptionMedicationPlans, setSubscriptionMedicationPlans] = useState<SubscriptionMedicationPlan[]>([]);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedHistoryItems, setSelectedHistoryItems] = useState<Set<string>>(new Set());
   const [selectedLegacyItems, setSelectedLegacyItems] = useState<Set<string>>(new Set());
+  const [selectedSubscriptionItems, setSelectedSubscriptionItems] = useState<Set<string>>(new Set());
   const [isCreatingVisit, setIsCreatingVisit] = useState(false);
   const [createdVisitRef, setCreatedVisitRef] = useState<{ doctype: string; name: string; visit_type?: string | null } | null>(null);
   const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
@@ -2322,17 +2324,20 @@ export default function OrderSummary({
     
     // Load medication orders and open modal — user adds items from there
     try {
-      const [orders, history, historySummary, legacyDispensed] = await Promise.all([
+      const [orders, history, historySummary, legacyDispensed, subscriptionPlans] = await Promise.all([
         getPendingInpatientMedicationOrders(patient.name),
         getPatientMedicationOrderHistory(patient.name, 50),
         getPatientHistorySummary(patient.name, 10),
         getPatientLegacyDispensedMedications(patient.name, 50),
+        getSubscriptionMedicationPlans({ patient: patient.name, limit: 50 }),
       ]);
       setMedicationOrders(orders);
       setMedicationOrderHistory(history);
       setPatientHistorySummary(historySummary);
       setLegacyDispensedMedications(legacyDispensed);
+      setSubscriptionMedicationPlans(subscriptionPlans);
       setSelectedOrders(new Set(orders.map((o) => o.name)));
+      setSelectedSubscriptionItems(new Set());
       setShowMedicationOrdersModal(true);
       if (orders.length === 0 && history.length === 0) {
         toast.info("No medication orders found for this patient.");
@@ -2493,17 +2498,20 @@ export default function OrderSummary({
       return;
     }
     try {
-      const [orders, history, historySummary, legacyDispensed] = await Promise.all([
+      const [orders, history, historySummary, legacyDispensed, subscriptionPlans] = await Promise.all([
         getPendingInpatientMedicationOrders(patientId),
         getPatientMedicationOrderHistory(patientId, 50),
         getPatientHistorySummary(patientId, 10),
         getPatientLegacyDispensedMedications(patientId, 50),
+        getSubscriptionMedicationPlans({ patient: patientId, limit: 50 }),
       ]);
       setMedicationOrders(orders);
       setMedicationOrderHistory(history);
       setPatientHistorySummary(historySummary);
       setLegacyDispensedMedications(legacyDispensed);
+      setSubscriptionMedicationPlans(subscriptionPlans);
       setSelectedOrders(new Set(orders.map(o => o.name)));
+      setSelectedSubscriptionItems(new Set());
       setShowMedicationOrdersModal(true);
       if (orders.length === 0 && history.length === 0) {
         toast.info("No medication orders found for this patient.");
@@ -2685,6 +2693,126 @@ export default function OrderSummary({
       console.error("Error adding legacy items to cart:", error);
       toast.dismiss(loadingToast);
       toast.error("Failed to add legacy items to cart.");
+    }
+  };
+
+  const handleAddSubscriptionItemsToCart = async (alternatives?: Record<string, string>) => {
+    if (selectedSubscriptionItems.size === 0) {
+      toast.warning("Please select at least one monthly medication item.");
+      return;
+    }
+
+    const itemsToAdd: MedicationOrderLineInput[] = [];
+    const availability = productAvailability();
+    let validationFailed = false;
+
+    for (const plan of subscriptionMedicationPlans) {
+      for (let idx = 0; idx < (plan.medications || []).length; idx++) {
+        const item = plan.medications[idx];
+        const lineKey = subscriptionMedicationLineKey(plan.name, idx, item);
+        if (!selectedSubscriptionItems.has(lineKey)) continue;
+
+        if (item.is_active === 0) {
+          toast.error(`${resolveSubscriptionItemDisplayName(item)} is inactive on the plan.`);
+          validationFailed = true;
+          break;
+        }
+
+        const planCode = resolveSubscriptionItemCode(item);
+        const displayName = resolveSubscriptionItemDisplayName(item);
+        const alternativeCode = alternatives?.[lineKey]?.trim();
+        const effectiveCode = alternativeCode || planCode;
+
+        if (!effectiveCode) {
+          toast.error(`Select an alternative drug for ${displayName}.`);
+          validationFailed = true;
+          break;
+        }
+
+        const avail = availability[effectiveCode];
+        if (avail === undefined) {
+          if (!alternativeCode) {
+            toast.error(
+              `${displayName} uses code ${planCode || "—"}. Select an alternative drug.`
+            );
+            validationFailed = true;
+            break;
+          }
+          toast.error(`Alternative ${effectiveCode} not found in product list.`);
+          validationFailed = true;
+          break;
+        }
+
+        const qty = Number(item.qty_per_cycle ?? 1) || 1;
+        if (avail <= 0 || avail < qty) {
+          if (!alternativeCode) {
+            toast.error(`Insufficient stock for ${displayName}. Select an alternative drug.`);
+            validationFailed = true;
+            break;
+          }
+        }
+
+        itemsToAdd.push({
+          item_code: alternativeCode ? planCode || alternativeCode : effectiveCode,
+          quantity: qty,
+          dosage: item.dosage != null && item.dosage !== "" ? String(item.dosage) : undefined,
+          patient_frequency: item.patient_frequency || undefined,
+          drug_name: displayName || undefined,
+          alternative_item_code: alternativeCode || undefined,
+          line_key: lineKey,
+          reference_no: plan.name,
+        });
+      }
+      if (validationFailed) break;
+    }
+
+    if (validationFailed || itemsToAdd.length === 0) {
+      return;
+    }
+
+    const loadingToast = toast.loading(`Adding ${itemsToAdd.length} monthly medication item(s) to cart...`);
+    try {
+      let addedCount = 0;
+      let notFoundCount = 0;
+      let noStockCount = 0;
+      const qtyByItem = new Map<string, number>();
+      const medsByItem = new Map<string, Set<string>>();
+      cartItems.forEach((ci) => {
+        qtyByItem.set(ci.id, ci.quantity);
+        const existing = (ci as unknown as { medicationOrders?: string[] }).medicationOrders;
+        if (Array.isArray(existing) && existing.length) {
+          medsByItem.set(ci.id, new Set(existing));
+        }
+      });
+
+      for (const itemToAdd of itemsToAdd) {
+        const result = await addMedicationOrderLineToCart(itemToAdd, qtyByItem, medsByItem);
+        if (result === "added") addedCount++;
+        else if (result === "no_stock") noStockCount++;
+        else notFoundCount++;
+      }
+
+      toast.dismiss(loadingToast);
+
+      if (noStockCount > 0) {
+        toast.error(`${noStockCount} item(s) have no stock. Select alternative drugs where needed.`);
+        return;
+      }
+
+      if (addedCount > 0 && notFoundCount === 0) {
+        toast.success(`Successfully added ${addedCount} monthly medication item(s) to cart.`);
+      } else if (addedCount > 0) {
+        toast.warning(`Added ${addedCount} item(s). ${notFoundCount} item(s) not found.`);
+      } else {
+        toast.error("No monthly medication items were added.");
+      }
+
+      setShowMedicationOrdersModal(false);
+      setSelectedSubscriptionItems(new Set());
+    } catch (error) {
+      console.error("Error adding monthly medication items to cart:", error);
+      toast.dismiss(loadingToast);
+      toast.error("Failed to add monthly medication items to cart.");
     }
   };
 
@@ -5444,10 +5572,12 @@ const handleSetSerial = (event: CustomEvent) => {
           setSelectedOrders(new Set());
           setSelectedHistoryItems(new Set());
           setSelectedLegacyItems(new Set());
+          setSelectedSubscriptionItems(new Set());
         }}
         pendingOrders={medicationOrders}
         historyOrders={medicationOrderHistory}
         legacyDispensedOrders={legacyDispensedMedications}
+        subscriptionPlans={subscriptionMedicationPlans}
         selectedOrders={selectedOrders}
         onToggleOrder={(orderName) => {
           setSelectedOrders(prev => {
@@ -5481,6 +5611,16 @@ const handleSetSerial = (event: CustomEvent) => {
           });
         }}
         onAddLegacyItemsToCart={handleAddLegacyItemsToCart}
+        selectedSubscriptionItems={selectedSubscriptionItems}
+        onToggleSubscriptionItem={(itemKey) => {
+          setSelectedSubscriptionItems((prev) => {
+            const next = new Set(prev);
+            if (next.has(itemKey)) next.delete(itemKey);
+            else next.add(itemKey);
+            return next;
+          });
+        }}
+        onAddSubscriptionItemsToCart={handleAddSubscriptionItemsToCart}
         onCreateVisit={handleCreatePatientVisit}
         onSelectVisit={handleSelectPatientVisit}
         creatingVisit={isCreatingVisit}

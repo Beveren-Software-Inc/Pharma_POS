@@ -366,6 +366,231 @@ export async function getPatientLegacyDispensedMedications(
   }
 }
 
+export interface SubscriptionMedicationPlanItem {
+  name?: string;
+  medication_order_entry?: string;
+  drug?: string;
+  drug_name?: string;
+  dosage?: number | string | null;
+  dosage_form?: string;
+  instructions?: string;
+  patient_frequency?: string;
+  date?: string | null;
+  time?: string | null;
+  qty_per_cycle?: number | null;
+  is_active?: number;
+  old_med_no?: string;
+  old_medication_name?: string;
+}
+
+export interface SubscriptionMedicationPlan {
+  name: string;
+  patient?: string;
+  patient_name?: string;
+  practitioner?: string;
+  practitioner_name?: string;
+  company?: string;
+  frequency?: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  next_run_date?: string | null;
+  status?: string;
+  item_count?: number;
+  medications: SubscriptionMedicationPlanItem[];
+}
+
+export function resolveSubscriptionItemCode(item: SubscriptionMedicationPlanItem): string {
+  return (item.drug || item.old_med_no || "").trim();
+}
+
+export function resolveSubscriptionItemDisplayName(item: SubscriptionMedicationPlanItem): string {
+  return (
+    item.drug_name?.trim() ||
+    item.old_medication_name?.trim() ||
+    resolveSubscriptionItemCode(item) ||
+    "—"
+  );
+}
+
+export function subscriptionMedicationLineKey(
+  planName: string,
+  idx: number,
+  item: SubscriptionMedicationPlanItem
+): string {
+  const code = resolveSubscriptionItemCode(item) || item.name || String(idx);
+  return `smp::${planName}::${idx}::${code}`;
+}
+
+export async function getSubscriptionMedicationPlans(args?: {
+  patient?: string;
+  search?: string;
+  limit?: number;
+  start?: number;
+}): Promise<SubscriptionMedicationPlan[]> {
+  try {
+    const params = new URLSearchParams();
+    if (args?.patient?.trim()) params.set("patient", args.patient.trim());
+    if (args?.search?.trim()) params.set("search", args.search.trim());
+    params.set("limit", String(args?.limit ?? 50));
+    params.set("start", String(args?.start ?? 0));
+    const apiUrl = `/api/method/klik_pos.api.patient.get_subscription_medication_plans?${params.toString()}`;
+    const response = await fetch(apiUrl, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to fetch subscription medication plans");
+    }
+    return data?.message || [];
+  } catch (error) {
+    console.error("Error fetching subscription medication plans:", error);
+    return [];
+  }
+}
+
+function extractFrappeErrorMessage(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") return fallback;
+  const payload = data as {
+    message?: unknown;
+    exc?: string;
+    _server_messages?: string;
+  };
+  if (typeof payload.message === "string" && payload.message.trim()) {
+    return payload.message;
+  }
+  if (payload._server_messages) {
+    try {
+      const messages = JSON.parse(payload._server_messages) as string[];
+      for (const raw of messages) {
+        try {
+          const parsed = JSON.parse(raw) as { message?: string };
+          if (parsed?.message) return parsed.message;
+        } catch {
+          if (raw) return raw;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return fallback;
+}
+
+function getCsrfToken(): string {
+  if (typeof window === "undefined") return "";
+  return (
+    (window as unknown as { csrf_token?: string }).csrf_token ||
+    (window as unknown as { frappe?: { csrf_token?: string } }).frappe?.csrf_token ||
+    ""
+  );
+}
+
+export interface WhatsAppTemplateOption {
+  name: string;
+  template_name: string;
+  actual_name?: string;
+  purpose?: string;
+  header_type?: string;
+  header_text?: string;
+  body_text?: string;
+  footer_text?: string;
+  field_names?: string;
+  language_code?: string;
+  variable_count?: number;
+}
+
+export interface SubscriptionMedicationWhatsAppPreview {
+  plan: string;
+  patient?: string;
+  patient_name?: string;
+  phone_number?: string;
+  country?: string;
+  country_isd?: string;
+  templates: WhatsAppTemplateOption[];
+  selected_template?: string | null;
+  parameters: string[];
+  preview: {
+    header?: string;
+    body?: string;
+    footer?: string;
+    template_name?: string;
+    actual_name?: string;
+  } | null;
+  fallback_body?: string;
+}
+
+export async function getSubscriptionMedicationWhatsAppPreview(
+  planName: string,
+  templateName?: string
+): Promise<SubscriptionMedicationWhatsAppPreview> {
+  const csrf = getCsrfToken();
+  const response = await fetch(
+    "/api/method/healthcare.healthcare.doctype.subscription_medication_plan.subscription_medication_plan.get_subscription_medication_whatsapp_preview",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(csrf ? { "X-Frappe-CSRF-Token": csrf } : {}),
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        name: planName,
+        ...(templateName ? { template_name: templateName } : {}),
+      }),
+    }
+  );
+  const data = await response.json();
+  if (!response.ok || data?.exc || data?.exc_type) {
+    throw new Error(extractFrappeErrorMessage(data, "Failed to load WhatsApp preview"));
+  }
+  return data?.message as SubscriptionMedicationWhatsAppPreview;
+}
+
+/** Send WhatsApp (Digital Connect) reminder for a Subscription Medication Plan. */
+export async function sendSubscriptionMedicationReminder(
+  planName: string,
+  channel: "whatsapp" | "sms" | "email" = "whatsapp",
+  options?: {
+    phone_number?: string;
+    template_name?: string;
+    template_parameters?: string | string[];
+  }
+): Promise<{ sent: boolean; channel: string; patient?: string; plan?: string }> {
+  const csrf = getCsrfToken();
+  const response = await fetch(
+    "/api/method/healthcare.healthcare.doctype.subscription_medication_plan.subscription_medication_plan.send_subscription_medication_reminder",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(csrf ? { "X-Frappe-CSRF-Token": csrf } : {}),
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        name: planName,
+        channel,
+        phone_number: options?.phone_number || undefined,
+        template_name: options?.template_name || undefined,
+        template_parameters: Array.isArray(options?.template_parameters)
+          ? JSON.stringify(options?.template_parameters)
+          : options?.template_parameters,
+      }),
+    }
+  );
+  const data = await response.json();
+  if (!response.ok || data?.exc || data?.exc_type) {
+    throw new Error(extractFrappeErrorMessage(data, "Failed to send reminder"));
+  }
+  return (
+    (data?.message as { sent: boolean; channel: string; patient?: string; plan?: string }) || {
+      sent: true,
+      channel,
+    }
+  );
+}
+
 export interface PatientDiagnosisEntry {
   name: string;
   diagnosis?: string;

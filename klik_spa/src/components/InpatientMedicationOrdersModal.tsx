@@ -2,8 +2,8 @@
 
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package } from "lucide-react";
-import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, OpenPharmacyPatientVisit } from "../services/patientService";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package, CalendarDays, MessageCircle } from "lucide-react";
+import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, SubscriptionMedicationPlan, SubscriptionMedicationPlanItem, OpenPharmacyPatientVisit } from "../services/patientService";
 import {
   searchPosStockItemsForAlternative,
   getPrintFormatsForDoctype,
@@ -12,10 +12,15 @@ import {
   resolveLegacyMedicationItemCode,
   resolveLegacyMedicationDisplayName,
   legacyMedicationLineKey,
+  resolveSubscriptionItemCode,
+  resolveSubscriptionItemDisplayName,
+  subscriptionMedicationLineKey,
   getOpenPharmacyPatientVisits,
 } from "../services/patientService";
+import { toast } from "react-toastify";
 import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
 import MedicationOrderDischargedBadge from "./MedicationOrderDischargedBadge";
+import SendSubscriptionMedicationWhatsAppModal from "./SendSubscriptionMedicationWhatsAppModal";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -23,6 +28,7 @@ interface InpatientMedicationOrdersModalProps {
   pendingOrders: InpatientMedicationOrder[];
   historyOrders: InpatientMedicationOrder[];
   legacyDispensedOrders?: LegacyDispensedTransaction[];
+  subscriptionPlans?: SubscriptionMedicationPlan[];
   selectedOrders: Set<string>;
   onToggleOrder: (orderName: string) => void;
   onAddToCart: (alternatives?: Record<string, string>) => void;
@@ -32,6 +38,9 @@ interface InpatientMedicationOrdersModalProps {
   selectedLegacyItems?: Set<string>;
   onToggleLegacyItem?: (itemKey: string) => void;
   onAddLegacyItemsToCart?: (alternatives?: Record<string, string>) => void;
+  selectedSubscriptionItems?: Set<string>;
+  onToggleSubscriptionItem?: (itemKey: string) => void;
+  onAddSubscriptionItemsToCart?: (alternatives?: Record<string, string>) => void;
   onCreateVisit: () => void;
   onSelectVisit?: (visit: { doctype: string; name: string; visit_type?: string | null }) => void;
   creatingVisit?: boolean;
@@ -835,12 +844,145 @@ function LegacyItemsTable({
   );
 }
 
+function SubscriptionItemsTable({
+  items,
+  planName,
+  selectable,
+  selectedKeys,
+  onToggle,
+  productAvailability,
+  alternativeDrugs,
+  alternativeDrugLabels,
+  onAlternativeChange,
+}: {
+  items: SubscriptionMedicationPlanItem[];
+  planName: string;
+  selectable?: boolean;
+  selectedKeys?: Set<string>;
+  onToggle?: (key: string) => void;
+  productAvailability?: Record<string, number>;
+  alternativeDrugs?: Record<string, string>;
+  alternativeDrugLabels?: Record<string, string>;
+  onAlternativeChange?: (key: string, value: string, itemName?: string) => void;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-teal-200 dark:border-teal-800/50">
+      <table className="min-w-full text-sm">
+        <thead className="bg-teal-50 dark:bg-teal-900/30 text-xs uppercase tracking-wide text-teal-700/80 dark:text-teal-300/80">
+          <tr>
+            {selectable && <th className="px-3 py-2 w-8" />}
+            <th className="px-3 py-2 text-left font-semibold">Drug</th>
+            <th className="px-3 py-2 text-left font-semibold">Dosage</th>
+            <th className="px-3 py-2 text-right font-semibold">Qty / cycle</th>
+            <th className="px-3 py-2 text-left font-semibold">Frequency</th>
+            <th className="px-3 py-2 text-center font-semibold">Active</th>
+            {productAvailability && <th className="px-3 py-2 text-left font-semibold">Stock</th>}
+            {onAlternativeChange && (
+              <th className="px-2 py-2 text-left font-semibold w-[160px] min-w-[160px] max-w-[160px]">
+                Alt. Drug
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-teal-100 dark:divide-teal-900/40 bg-white dark:bg-gray-900/40">
+          {items.map((item, idx) => {
+            const itemKey = subscriptionMedicationLineKey(planName, idx, item);
+            const lineCode = resolveSubscriptionItemCode(item);
+            const altCode = alternativeDrugs?.[itemKey]?.trim() || "";
+            const checked = selectedKeys?.has(itemKey) ?? false;
+            const stockCode = altCode || lineCode;
+            const avail = stockCode ? productAvailability?.[stockCode] : undefined;
+            const qty = Number(item.qty_per_cycle || 1) || 1;
+            const needsAlternative =
+              !altCode && (avail === undefined || avail <= 0 || avail < qty);
+            const lowStock = !!altCode && avail !== undefined && (avail <= 0 || avail < qty);
+            const inactive = item.is_active === 0;
+            return (
+              <tr
+                key={item.name || `${lineCode}-${idx}`}
+                onClick={selectable && onToggle && !inactive ? () => onToggle(itemKey) : undefined}
+                className={`transition-colors ${selectable && !inactive ? "cursor-pointer" : ""} ${
+                  inactive
+                    ? "opacity-50"
+                    : checked
+                      ? "bg-orange-50 dark:bg-orange-900/20"
+                      : selectable
+                        ? "hover:bg-orange-50/50 dark:hover:bg-orange-900/10"
+                        : ""
+                }`}
+              >
+                {selectable && (
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={inactive}
+                      onChange={() => onToggle?.(itemKey)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer disabled:cursor-not-allowed"
+                    />
+                  </td>
+                )}
+                <td className="px-3 py-2">
+                  <div className="font-medium text-slate-900 dark:text-white">
+                    {resolveSubscriptionItemDisplayName(item)}
+                  </div>
+                  {lineCode ? (
+                    <div className="text-xs text-slate-400 font-mono mt-0.5">{lineCode}</div>
+                  ) : null}
+                </td>
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                  {item.dosage != null && item.dosage !== "" ? String(item.dosage) : "—"}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
+                  {item.qty_per_cycle ?? 1}
+                </td>
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                  {item.patient_frequency || "—"}
+                </td>
+                <td className="px-3 py-2 text-center">
+                  {inactive ? (
+                    <span className="text-[10px] font-semibold text-gray-400">Off</span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">On</span>
+                  )}
+                </td>
+                {productAvailability && (
+                  <td className="px-3 py-2 whitespace-nowrap text-gray-500 dark:text-gray-400">
+                    {avail === undefined ? (altCode ? "N/A" : "Map alt") : avail}
+                  </td>
+                )}
+                {onAlternativeChange && (
+                  <td
+                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <AlternativeDrugSelect
+                      drugCode={lineCode || undefined}
+                      drugName={resolveSubscriptionItemDisplayName(item)}
+                      value={altCode}
+                      selectedLabel={alternativeDrugLabels?.[itemKey]}
+                      lowStock={needsAlternative || lowStock}
+                      onChange={(next, itemName) => onAlternativeChange?.(itemKey, next, itemName)}
+                    />
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function InpatientMedicationOrdersModal({
   isOpen,
   onClose,
   pendingOrders,
   historyOrders,
   legacyDispensedOrders = [],
+  subscriptionPlans = [],
   selectedOrders,
   onToggleOrder,
   onAddToCart,
@@ -850,6 +992,9 @@ export default function InpatientMedicationOrdersModal({
   selectedLegacyItems = new Set(),
   onToggleLegacyItem,
   onAddLegacyItemsToCart,
+  selectedSubscriptionItems = new Set(),
+  onToggleSubscriptionItem,
+  onAddSubscriptionItemsToCart,
   onCreateVisit,
   onSelectVisit,
   creatingVisit = false,
@@ -862,13 +1007,17 @@ export default function InpatientMedicationOrdersModal({
   patientHistory = null,
   productAvailability = {},
 }: InpatientMedicationOrdersModalProps) {
-  const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history" | "legacy_dispensed">("pending");
+  const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history" | "legacy_dispensed" | "monthly_medication">("pending");
   const [alternativeDrugs, setAlternativeDrugs] = useState<Record<string, string>>({});
   const [alternativeDrugLabels, setAlternativeDrugLabels] = useState<Record<string, string>>({});
   const [legacyAlternativeDrugs, setLegacyAlternativeDrugs] = useState<Record<string, string>>({});
   const [legacyAlternativeDrugLabels, setLegacyAlternativeDrugLabels] = useState<Record<string, string>>({});
+  const [subscriptionAlternativeDrugs, setSubscriptionAlternativeDrugs] = useState<Record<string, string>>({});
+  const [subscriptionAlternativeDrugLabels, setSubscriptionAlternativeDrugLabels] = useState<Record<string, string>>({});
   const [expandedHistoryOrders, setExpandedHistoryOrders] = useState<Set<string>>(new Set());
   const [expandedLegacyOrders, setExpandedLegacyOrders] = useState<Set<string>>(new Set());
+  const [expandedSubscriptionPlans, setExpandedSubscriptionPlans] = useState<Set<string>>(new Set());
+  const [reminderPlan, setReminderPlan] = useState<SubscriptionMedicationPlan | null>(null);
   const [expandedDiagnosisEntries, setExpandedDiagnosisEntries] = useState<Set<string>>(new Set());
   const [expandedPatientHistoryOrders, setExpandedPatientHistoryOrders] = useState<Set<string>>(new Set());
   const [openPrintMenuFor, setOpenPrintMenuFor] = useState<string | null>(null);
@@ -899,6 +1048,7 @@ export default function InpatientMedicationOrdersModal({
       setActiveTab("pending");
       setExpandedHistoryOrders(new Set());
       setExpandedLegacyOrders(new Set());
+      setExpandedSubscriptionPlans(new Set());
       setExpandedDiagnosisEntries(new Set());
       setExpandedPatientHistoryOrders(new Set());
       setOpenPrintMenuFor(null);
@@ -907,6 +1057,8 @@ export default function InpatientMedicationOrdersModal({
       setAlternativeDrugLabels({});
       setLegacyAlternativeDrugs({});
       setLegacyAlternativeDrugLabels({});
+      setSubscriptionAlternativeDrugs({});
+      setSubscriptionAlternativeDrugLabels({});
       setOpenPharmacyVisits([]);
     }
   }, [isOpen]);
@@ -921,6 +1073,16 @@ export default function InpatientMedicationOrdersModal({
     if (!isOpen) return;
     setExpandedLegacyOrders(new Set(legacyDispensedOrders.map((t) => t.name)));
   }, [isOpen, legacyDispensedOrders]);
+
+  // Subscription plans open by default.
+  useEffect(() => {
+    if (!isOpen) return;
+    setExpandedSubscriptionPlans(new Set(subscriptionPlans.map((p) => p.name)));
+  }, [isOpen, subscriptionPlans]);
+
+  useEffect(() => {
+    if (!isOpen) setReminderPlan(null);
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen && isHospitalMode && patientVisitCreatedSignal > 0) {
@@ -1005,6 +1167,7 @@ export default function InpatientMedicationOrdersModal({
     { id: "history" as const, label: "Prescription History", count: historyOrders.length, icon: Clock },
     { id: "patient_history" as const, label: "Patient History", count: null, icon: History },
     { id: "legacy_dispensed" as const, label: "Legacy Dispensed Medicine", count: legacyDispensedOrders.length, icon: Package },
+    { id: "monthly_medication" as const, label: "Monthly Medication", count: subscriptionPlans.length, icon: CalendarDays },
   ];
 
   return (
@@ -1645,6 +1808,119 @@ export default function InpatientMedicationOrdersModal({
             )
           )}
 
+          {/* ── MONTHLY MEDICATION (Subscription Medication Plan) ── */}
+          {isHospitalMode && activeTab === "monthly_medication" && (
+            subscriptionPlans.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+                <CalendarDays size={40} className="mb-3 opacity-30" />
+                <p className="text-sm font-medium">No monthly medication plans found.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {subscriptionPlans.map((plan) => {
+                  const isExpanded = expandedSubscriptionPlans.has(plan.name);
+                  const startLabel = plan.start_date ? String(plan.start_date).slice(0, 10) : null;
+                  const nextLabel = plan.next_run_date ? String(plan.next_run_date).slice(0, 10) : null;
+                  return (
+                    <div
+                      key={plan.name}
+                      className="border border-teal-200 dark:border-teal-800/50 rounded-xl overflow-hidden bg-teal-50/40 dark:bg-teal-950/20"
+                    >
+                      <div className="w-full flex items-center gap-2 px-4 py-3 bg-teal-100/70 dark:bg-teal-900/30 transition-colors hover:bg-teal-200/60 dark:hover:bg-teal-900/50">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedSubscriptionPlans((prev) => {
+                              const next = new Set(prev);
+                              next.has(plan.name) ? next.delete(plan.name) : next.add(plan.name);
+                              return next;
+                            })
+                          }
+                          className="flex items-center gap-2 min-w-0 flex-1 text-left rounded-lg"
+                        >
+                          <span className={`text-teal-500 transition-transform duration-150 flex-shrink-0 ${isExpanded ? "rotate-0" : "-rotate-90"}`}>
+                            <ChevronDown size={15} />
+                          </span>
+                          <span className="font-semibold text-sm text-gray-800 dark:text-white truncate font-mono">
+                            {plan.name}
+                          </span>
+                          {plan.frequency ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-teal-200/80 dark:bg-teal-800/50 text-teal-800 dark:text-teal-200 flex-shrink-0">
+                              {plan.frequency}
+                            </span>
+                          ) : null}
+                          {plan.status ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 flex-shrink-0">
+                              {plan.status}
+                            </span>
+                          ) : null}
+                          {startLabel ? (
+                            <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">Start {startLabel}</span>
+                          ) : null}
+                          {nextLabel ? (
+                            <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">Next {nextLabel}</span>
+                          ) : null}
+                          {(plan.practitioner_name || plan.practitioner) ? (
+                            <span className="text-xs text-gray-500 dark:text-gray-400 truncate flex-shrink-0">
+                              {plan.practitioner_name || plan.practitioner}
+                            </span>
+                          ) : null}
+                          <span className="ml-auto text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
+                            {(plan.item_count ?? plan.medications?.length ?? 0)} med(s)
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          title="Send WhatsApp reminder"
+                          onClick={() => setReminderPlan(plan)}
+                          className="flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700 transition-colors"
+                        >
+                          <MessageCircle size={14} />
+                          Reminder
+                        </button>
+                      </div>
+
+                      {isExpanded && (plan.medications?.length ?? 0) > 0 && (
+                        <div className="px-4 py-3 border-t border-teal-200 dark:border-teal-800/50 bg-white/80 dark:bg-gray-900/30">
+                          <SubscriptionItemsTable
+                            items={plan.medications}
+                            planName={plan.name}
+                            selectable={!!onToggleSubscriptionItem}
+                            selectedKeys={selectedSubscriptionItems}
+                            onToggle={onToggleSubscriptionItem}
+                            productAvailability={productAvailability}
+                            alternativeDrugs={subscriptionAlternativeDrugs}
+                            alternativeDrugLabels={subscriptionAlternativeDrugLabels}
+                            onAlternativeChange={(key, value, itemName) => {
+                              setSubscriptionAlternativeDrugs((prev) => {
+                                const next = { ...prev };
+                                if (value) next[key] = value;
+                                else delete next[key];
+                                return next;
+                              });
+                              setSubscriptionAlternativeDrugLabels((prev) => {
+                                const next = { ...prev };
+                                if (value && itemName) next[key] = itemName;
+                                else delete next[key];
+                                return next;
+                              });
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {isExpanded && (!plan.medications || plan.medications.length === 0) && (
+                        <div className="px-4 py-4 border-t border-teal-200 dark:border-teal-800/50 text-sm text-gray-400 dark:text-gray-500 text-center bg-white/80 dark:bg-gray-900/30">
+                          No medications on this plan.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+
           {/* ── VISIT ── */}
           {isHospitalMode && activeTab === "visit" && (
             <div className="max-w-lg mx-auto py-6 space-y-4">
@@ -1824,6 +2100,8 @@ export default function InpatientMedicationOrdersModal({
               ? "Diagnosis, visits, warnings and allergies"
               : activeTab === "legacy_dispensed"
               ? `${selectedLegacyItems.size} legacy item(s) selected`
+              : activeTab === "monthly_medication"
+              ? `${selectedSubscriptionItems.size} monthly item(s) selected`
               : lastCreatedVisit?.name
               ? "Visit linked — used when you dispense"
               : openPharmacyVisits.length > 0
@@ -1864,10 +2142,31 @@ export default function InpatientMedicationOrdersModal({
                 Add Selected {selectedLegacyItems.size > 0 && `(${selectedLegacyItems.size})`}
               </button>
             )}
+            {isHospitalMode && activeTab === "monthly_medication" && onAddSubscriptionItemsToCart && (
+              <button
+                onClick={() => onAddSubscriptionItemsToCart(subscriptionAlternativeDrugs)}
+                disabled={selectedSubscriptionItems.size === 0}
+                className="px-5 py-2 text-sm font-bold text-orange-600 bg-white border-2 border-orange-600 rounded-lg hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-[0.99]"
+              >
+                Add Selected {selectedSubscriptionItems.size > 0 && `(${selectedSubscriptionItems.size})`}
+              </button>
+            )}
           </div>
         </div>
 
         {printMenu}
+
+        {reminderPlan && (
+          <SendSubscriptionMedicationWhatsAppModal
+            plan={reminderPlan}
+            onClose={() => setReminderPlan(null)}
+            onSuccess={() => {
+              toast.success(
+                `WhatsApp reminder sent to ${reminderPlan.patient_name || patientName || reminderPlan.patient || reminderPlan.name}`
+              );
+            }}
+          />
+        )}
       </div>
     </div>
   );
