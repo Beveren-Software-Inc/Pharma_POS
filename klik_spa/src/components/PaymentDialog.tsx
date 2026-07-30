@@ -38,6 +38,10 @@ import { usePOSDetails } from "../hooks/usePOSProfile";
 import { getPartyLabels } from "../utils/partyLabels";
 import { createDraftSalesInvoice, createSalesInvoice, updateDraftSalesInvoice, deleteDraftInvoice } from "../services/salesInvoice";
 import { useNavigate } from "react-router-dom";
+import {
+  auditCartBatchExpiry,
+  formatBatchExpiryMessage,
+} from "../utils/batchExpiry";
 import DisplayPrintPreview from "../utils/invoicePrint";
 import { handlePrintInvoice } from "../utils/printHandler";
 import { sendEmails, sendWhatsAppMessage, sendSMSMessage } from "../services/useSharing";
@@ -1520,6 +1524,42 @@ const handleAutoFillPayment = (methodId: string) => {
       toast.error(`Kindly select a ${party.lower}`);
       return;
     }
+
+    try {
+      const { expired, nearExpiry } = await auditCartBatchExpiry(
+        cartItems
+          .filter((item) => !(item as CartItem & { is_pharmacy_service?: boolean }).is_pharmacy_service)
+          .map((item) => {
+            const lineKey = (item as CartItem & { cartLineId?: string }).cartLineId || item.id;
+            const discount = itemDiscounts[lineKey] || itemDiscounts[item.id] || {};
+            const batchId =
+              (item as { batch_no?: string }).batch_no ||
+              discount.batchNumber ||
+              "";
+            return {
+              itemName: item.name || item.item_code || item.id,
+              itemCode: item.item_code || item.id,
+              batchId,
+            };
+          })
+      );
+      if (expired.length > 0) {
+        toast.error(
+          `Cannot sell expired stock:\n${expired.map((l) => `• ${formatBatchExpiryMessage(l)}`).join("\n")}`
+        );
+        return;
+      }
+      if (nearExpiry.length > 0) {
+        const details = nearExpiry.map((l) => `• ${formatBatchExpiryMessage(l)}`).join("\n");
+        const proceed = window.confirm(
+          `Near-expiry medicine in cart (within 90 days):\n${details}\n\nContinue checkout anyway?`
+        );
+        if (!proceed) return;
+      }
+    } catch (error) {
+      console.error("Batch expiry check failed:", error);
+    }
+
     // Allow invoice completion with partial/zero payment only when
     // delivery personnel is selected OR insurance is selected.
     const allowIncompletePayment = !!selectedDeliveryPersonnel || !!selectedHealthInsurance;

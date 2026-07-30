@@ -1341,6 +1341,11 @@ def build_sales_invoice_doc(
 
 	items = _normalize_pos_items_for_dispensing(items, pos_profile)
 	_validate_and_autofetch_batch_and_serial(items, pos_profile)
+
+	from klik_pos.api.batch_expiry import validate_pos_items_batch_expiry
+
+	validate_pos_items_batch_expiry(items)
+
 	# Set additional remark on invoice if field exists
 	if additional_remark and frappe.db.has_column("Sales Invoice", "custom_remark"):
 		doc.custom_remark = additional_remark

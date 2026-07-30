@@ -637,6 +637,135 @@ def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
 		frappe.throw(f"Failed to fetch legacy dispensed medications: {str(e)}")
 
 
+def _subscription_plan_item_to_dict(row) -> dict:
+	return {
+		"name": row.name,
+		"medication_order_entry": row.get("medication_order_entry"),
+		"drug": row.get("drug"),
+		"drug_name": row.get("drug_name"),
+		"dosage": row.get("dosage"),
+		"dosage_form": row.get("dosage_form"),
+		"instructions": row.get("instructions"),
+		"patient_frequency": row.get("patient_frequency"),
+		"date": str(row.get("date")) if row.get("date") else None,
+		"time": str(row.get("time")) if row.get("time") else None,
+		"qty_per_cycle": row.get("qty_per_cycle"),
+		"is_active": int(row.get("is_active") or 0),
+		"old_med_no": row.get("old_med_no"),
+		"old_medication_name": row.get("old_medication_name"),
+	}
+
+
+@frappe.whitelist()
+def get_subscription_medication_plans(patient: str = None, search: str = "", limit: int = 50, start: int = 0):
+	"""
+	Subscription Medication Plans (monthly medication) for hospital pharmacy UI.
+
+	- With patient: plans for that patient (Medication Orders modal).
+	- Without patient: all submitted plans (Invoice History → Monthly Medication), optional search.
+	"""
+	try:
+		if not frappe.db.exists("DocType", "Subscription Medication Plan"):
+			return []
+
+		try:
+			limit = max(1, min(int(limit), 100))
+		except Exception:
+			limit = 50
+		try:
+			start = max(0, int(start))
+		except Exception:
+			start = 0
+
+		filters = {"docstatus": 1}
+		patient = (patient or "").strip()
+		if patient:
+			filters["patient"] = patient
+
+		or_filters = None
+		search = (search or "").strip()
+		if search and not patient:
+			or_filters = [
+				["name", "like", f"%{search}%"],
+				["patient", "like", f"%{search}%"],
+				["patient_name", "like", f"%{search}%"],
+			]
+
+		plans = frappe.get_all(
+			"Subscription Medication Plan",
+			fields=[
+				"name",
+				"patient",
+				"patient_name",
+				"practitioner",
+				"company",
+				"frequency",
+				"start_date",
+				"end_date",
+				"next_run_date",
+				"status",
+				"modified",
+			],
+			filters=filters,
+			or_filters=or_filters,
+			order_by="modified desc",
+			limit_start=start,
+			limit_page_length=limit,
+			ignore_permissions=True,
+		)
+
+		# Prefer practitioner display name when available
+		practitioner_names = {}
+		prac_ids = list({p.get("practitioner") for p in plans if p.get("practitioner")})
+		if prac_ids and frappe.db.exists("DocType", "Healthcare Practitioner"):
+			for row in frappe.get_all(
+				"Healthcare Practitioner",
+				filters={"name": ["in", prac_ids]},
+				fields=["name", "practitioner_name"],
+				ignore_permissions=True,
+			):
+				practitioner_names[row.name] = row.get("practitioner_name") or row.name
+
+		results = []
+		for plan in plans:
+			raw_items = frappe.get_all(
+				"Subscription Medication Plan Item",
+				filters={"parent": plan.name, "parenttype": "Subscription Medication Plan"},
+				fields=[
+					"name",
+					"medication_order_entry",
+					"drug",
+					"drug_name",
+					"dosage",
+					"dosage_form",
+					"instructions",
+					"patient_frequency",
+					"date",
+					"time",
+					"qty_per_cycle",
+					"is_active",
+					"old_med_no",
+					"old_medication_name",
+					"idx",
+				],
+				order_by="idx asc",
+				ignore_permissions=True,
+			)
+			entry = dict(plan)
+			entry["start_date"] = str(plan.get("start_date")) if plan.get("start_date") else None
+			entry["end_date"] = str(plan.get("end_date")) if plan.get("end_date") else None
+			entry["next_run_date"] = str(plan.get("next_run_date")) if plan.get("next_run_date") else None
+			entry["practitioner_name"] = practitioner_names.get(plan.get("practitioner")) or plan.get("practitioner")
+			entry["medications"] = [_subscription_plan_item_to_dict(row) for row in raw_items]
+			entry["item_count"] = len(entry["medications"])
+			results.append(entry)
+
+		return results
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Error fetching subscription medication plans")
+		frappe.throw(f"Failed to fetch subscription medication plans: {str(e)}")
+
+
 def _get_patient_diagnosis_entries(patient: str, limit: int = 25):
 	if not frappe.db.exists("DocType", "Medical Diagnosis Entry"):
 		return []

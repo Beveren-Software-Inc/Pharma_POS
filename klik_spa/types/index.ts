@@ -59,6 +59,11 @@ export interface CartItem {
   original_drug?: string
   /** Alternative item code dispensed instead of prescribed drug. */
   alternative_drug?: string
+  /**
+   * When true, cart qty checks are skipped because stock was already validated
+   * (e.g. medication-order alternative: validate in stock UOM, cart keeps UNIT qty).
+   */
+  skip_stock_validation?: boolean
 }
 
 export interface MenuItem {
