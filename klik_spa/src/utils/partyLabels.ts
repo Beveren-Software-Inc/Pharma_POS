@@ -25,6 +25,9 @@ export function getPartyLabels(isHospitalPharmacy: boolean) {
     orderColumn: isHospitalPharmacy ? "Order" : "Invoice",
     totalOrdersLabel: isHospitalPharmacy ? "Total Dispense Orders" : "Total Invoices",
     searchOrdersPlaceholder: isHospitalPharmacy ? "Search dispense orders..." : "Search invoices...",
+    searchListPlaceholder: isHospitalPharmacy
+      ? "Search patients... (name, file no, or ID number)"
+      : "Search customers... (name, email, or phone)",
     noOrdersMessage: isHospitalPharmacy
       ? "No dispense orders found for this patient"
       : "No invoices found for this customer",

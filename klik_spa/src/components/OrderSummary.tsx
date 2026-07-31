@@ -4245,7 +4245,7 @@ const handleSetSerial = (event: CustomEvent) => {
                   type="text"
                   placeholder={
                     isHospitalPharmacy
-                      ? "Search patients... (name, file no, or ID number)"
+                      ? "Search patients... (name, file no, ID number, or mobile)"
                       : isPharmacy
                       ? "Search customers or patients... (name, email, phone, patient ID, or file no)"
                       : "Search customers... (name, email, or phone)"
@@ -4454,7 +4454,7 @@ const handleSetSerial = (event: CustomEvent) => {
                 type="text"
                 placeholder={
                   isHospitalPharmacy
-                      ? "Search patients... (name, file no, or ID number)"
+                      ? "Search patients... (name, file no, ID number, or mobile)"
                     : "Search customers... (name, email, or phone)"
                 }
                 value={customerSearchQuery}
