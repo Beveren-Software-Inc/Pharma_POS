@@ -8,6 +8,29 @@ from frappe.utils import flt, getdate
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
 
+def _get_customers_matching_patient_ids(like_param: str, limit: int = 500) -> list[str]:
+	"""Customers whose linked Patient matches the search term on file no / ID number (CPR)."""
+	patient_meta = frappe.get_meta("Patient")
+	available = {f.fieldname for f in patient_meta.fields}
+
+	or_filters = []
+	for fieldname in ("file_no", "patient_id", "id_number", "name"):
+		if fieldname == "name" or fieldname in available:
+			or_filters.append([fieldname, "like", like_param])
+
+	if not or_filters:
+		return []
+
+	matches = frappe.get_all(
+		"Patient",
+		or_filters=or_filters,
+		filters={"customer": ["is", "set"]},
+		fields=["customer"],
+		limit=limit,
+	)
+	return list({row.customer for row in matches if row.customer})
+
+
 @frappe.whitelist(allow_guest=True)
 def get_customers(limit: int = 100, start: int = 0, search: str = ""):
 	"""
@@ -82,6 +105,19 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
 			# Boost limits for search to show more matches
 			limit_val = max(limit_val, 500)
 
+			# Hospital pharmacy: also match customers whose linked Patient matches
+			# file_no / id_number (CPR). Resolved as a separate lookup rather than a
+			# join, because joining Patient onto the contact joins explodes the row count.
+			patient_where = ""
+			patient_params = []
+			is_hospital = int(getattr(pos_profile, "custom_is_hospital_pharmacy", 0) or 0)
+			if is_hospital and frappe.db.exists("DocType", "Patient"):
+				patient_customer_names = _get_customers_matching_patient_ids(like_param)
+				if patient_customer_names:
+					placeholders = ",".join(["%s"] * len(patient_customer_names))
+					patient_where = f" OR c.name IN ({placeholders})"
+					patient_params.extend(patient_customer_names)
+
 			customer_names = frappe.db.sql(
 				f"""
                 SELECT DISTINCT c.name, c.customer_name, c.customer_type, c.customer_group, c.territory, c.default_currency
@@ -93,6 +129,7 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
                 WHERE (
                     c.customer_name LIKE %s OR c.name LIKE %s OR
                     ce.email_id LIKE %s OR cp.phone LIKE %s
+                    {patient_where}
                 )
                 {cust_type_filter}
                 {cust_group_filter}
@@ -106,6 +143,7 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
 						like_param,
 						like_param,
 						like_param,
+						*patient_params,
 						*cust_type_params,
 						*cust_group_params,
 						*user_perm_params,
@@ -128,6 +166,7 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
                 WHERE (
                     c.customer_name LIKE %s OR c.name LIKE %s OR
                     ce.email_id LIKE %s OR cp.phone LIKE %s
+                    {patient_where}
                 )
                 {cust_type_filter}
                 {cust_group_filter}
@@ -139,6 +178,7 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
 						like_param,
 						like_param,
 						like_param,
+						*patient_params,
 						*cust_type_params,
 						*cust_group_params,
 						*user_perm_params,

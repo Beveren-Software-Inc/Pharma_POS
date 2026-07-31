@@ -252,7 +252,7 @@ export default function CustomersPage() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
                   <input
                     type="text"
-                    placeholder={`Search ${party.plural.toLowerCase()}... (Press Enter to add new ${party.lower})`}
+                    placeholder={`${party.searchListPlaceholder} (Press Enter to add new ${party.lower})`}
                     value={searchQuery}
                     onChange={handleSearchInput}
                     onKeyPress={handleSearchKeyPress}
@@ -503,7 +503,7 @@ export default function CustomersPage() {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
                 <input
                   type="text"
-                  placeholder={`Search ${party.plural.toLowerCase()}... (Press Enter to add new ${party.lower})`}
+                  placeholder={`${party.searchListPlaceholder} (Press Enter to add new ${party.lower})`}
                   value={searchQuery}
                   onChange={handleSearchInput}
                   onKeyPress={handleSearchKeyPress}

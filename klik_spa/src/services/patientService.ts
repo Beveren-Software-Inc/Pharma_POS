@@ -5,6 +5,7 @@ export interface Patient {
   file_no?: string;
   /** CPR/Passport/ID Number on Patient (healthcare) */
   id_number?: string;
+  mobile?: string;
 }
 
 export function getPatientFileNo(patient: Patient): string {
@@ -18,9 +19,11 @@ export function getPatientDisplayName(patient: Patient): string {
 export function getPatientSecondaryLabel(patient: Patient): string {
   const fileNo = getPatientFileNo(patient);
   const idNumber = (patient.id_number || "").trim();
+  const mobile = (patient.mobile || "").trim();
   return [
     fileNo ? `File No: ${fileNo}` : "",
     idNumber ? `CPR: ${idNumber}` : "",
+    mobile ? `Mobile: ${mobile}` : "",
   ].filter(Boolean).join(" • ");
 }
 
