@@ -159,6 +159,7 @@ export default function InvoiceViewModal({
                       value={
                         displayInvoice.paymentMethod ||
                         displayInvoice.mode_of_payment ||
+                        displayInvoice.payment_method ||
                         "—"
                       }
                     />

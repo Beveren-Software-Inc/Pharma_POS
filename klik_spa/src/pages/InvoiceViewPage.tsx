@@ -508,7 +508,9 @@ export default function InvoiceViewPage() {
                           </div>
                           <div className="flex justify-between">
                             <span className="text-sm text-gray-600 dark:text-gray-400">Payment:</span>
-                            <span className="text-sm text-gray-900 dark:text-white">{invoice.paymentMethod || invoice.mode_of_payment || (isHospitalPharmacy ? "Dispensed medicine" : "—")}</span>
+                            <span className="text-sm text-gray-900 dark:text-white">
+                              {invoice.paymentMethod || invoice.mode_of_payment || invoice.payment_method || "—"}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -683,7 +685,10 @@ export default function InvoiceViewPage() {
                         <div className="flex justify-between">
                           <span className="text-orange-700 dark:text-orange-300">Payment Method:</span>
                           <span className="text-orange-900 dark:text-orange-100 font-medium">
-                            {invoice.paymentMethod || invoice.mode_of_payment || (isHospitalPharmacy ? "Unbilled" : "Cash")}
+                            {invoice.paymentMethod ||
+                              invoice.mode_of_payment ||
+                              invoice.payment_method ||
+                              (isHospitalPharmacy ? "Unbilled" : "—")}
                           </span>
                         </div>
                         <div className="flex justify-between">

@@ -396,6 +396,19 @@ def get_invoice_details(invoice_id):
 		) or invoice_data.get("owner")
 		invoice_data["cashier_name"] = cashier_name
 
+		# Flatten payment methods from SI Payment child table (and PE fallback)
+		payment_methods = _resolve_invoice_payment_methods(invoice)
+		invoice_data["payment_methods"] = payment_methods
+		if len(payment_methods) == 0:
+			mode_label = "-"
+		elif len(payment_methods) == 1:
+			mode_label = payment_methods[0]["mode_of_payment"]
+		else:
+			mode_label = "/".join([pm["mode_of_payment"] for pm in payment_methods if pm.get("mode_of_payment")])
+		invoice_data["mode_of_payment"] = mode_label
+		invoice_data["paymentMethod"] = mode_label
+		invoice_data["payment_method"] = mode_label
+
 		return {
 			"success": True,
 			"data": {
@@ -408,6 +421,38 @@ def get_invoice_details(invoice_id):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), f"Error fetching invoice {invoice_id}")
 		return {"success": False, "error": str(e)}
+
+
+def _resolve_invoice_payment_methods(invoice_doc):
+	"""Build payment method list from Sales Invoice Payment rows, else submitted Payment Entries."""
+	payment_methods = []
+	for payment in invoice_doc.get("payments") or []:
+		if payment.mode_of_payment:
+			payment_methods.append(
+				{"mode_of_payment": payment.mode_of_payment, "amount": payment.amount}
+			)
+
+	if payment_methods:
+		return payment_methods
+
+	if invoice_doc.status not in ("Paid", "Partly Paid"):
+		return payment_methods
+
+	payment_entries = frappe.get_all(
+		"Payment Entry Reference",
+		filters={"reference_name": invoice_doc.name, "reference_doctype": "Sales Invoice"},
+		fields=["parent", "allocated_amount"],
+	)
+	for pe_ref in payment_entries:
+		pe_status, pe_mode = frappe.db.get_value(
+			"Payment Entry", pe_ref.parent, ["docstatus", "mode_of_payment"]
+		) or (None, None)
+		if pe_status == 1 and pe_mode:
+			payment_methods.append(
+				{"mode_of_payment": pe_mode, "amount": pe_ref.allocated_amount}
+			)
+
+	return payment_methods
 
 
 @frappe.whitelist(allow_guest=True)
