@@ -2522,40 +2522,78 @@ export default function OrderSummary({
     }
   };
 
-  const handleAddHistoryItemsToCart = async () => {
+  const handleAddHistoryItemsToCart = async (alternatives?: Record<string, string>) => {
     if (selectedHistoryItems.size === 0) {
       toast.warning("Please select at least one history item.");
       return;
     }
+
     const itemsToAdd: MedicationOrderLineInput[] = [];
-    medicationOrderHistory.forEach((order) => {
-      order.items.forEach((item, idx) => {
+    const availability = productAvailability();
+    let validationFailed = false;
+    const selectedOrderNames = new Set<string>();
+
+    for (const order of medicationOrderHistory) {
+      for (let idx = 0; idx < order.items.length; idx++) {
+        const item = order.items[idx];
         const itemCode = resolveMedicationItemCode(item);
-        const key = `${order.name}::${idx}::${itemCode}`;
-        if (selectedHistoryItems.has(key) && itemCode) {
-          itemsToAdd.push({
-            item_code: itemCode,
-            quantity: item.quantity ?? 1,
-            uom: item.uom,
-            dosage: item.dosage || undefined,
-            patient_frequency: item.patient_frequency,
-            drug_name: resolveMedicationDisplayName(item) || undefined,
-            medication_order: order.name,
-            medication_order_entry: item.medication_order_entry,
-            is_pink: item.is_pink,
-            reference_no: item.reference_no,
-          });
+        if (!itemCode) continue;
+        const lineKey = `${order.name}::${idx}::${itemCode}`;
+        if (!selectedHistoryItems.has(lineKey)) continue;
+
+        const alternativeCode = alternatives?.[lineKey]?.trim();
+        const effectiveCode = alternativeCode || itemCode;
+        const displayName = resolveMedicationDisplayName(item);
+        const avail = availability[effectiveCode];
+        const qty = item.quantity ?? 1;
+
+        if (avail === undefined) {
+          if (!alternativeCode) {
+            toast.error(
+              `${displayName} not found in product list. Select an alternative drug.`
+            );
+            validationFailed = true;
+            break;
+          }
+        } else if (avail <= 0 || avail < qty) {
+          if (!alternativeCode) {
+            toast.error(`Insufficient stock for ${displayName}. Select an alternative drug.`);
+            validationFailed = true;
+            break;
+          }
         }
-      });
-    });
+
+        if (order.name) selectedOrderNames.add(order.name);
+        itemsToAdd.push({
+          item_code: itemCode,
+          quantity: qty,
+          uom: item.uom,
+          dosage: item.dosage || undefined,
+          patient_frequency: item.patient_frequency,
+          drug_name: displayName || undefined,
+          medication_order: order.name,
+          medication_order_entry: item.medication_order_entry,
+          is_pink: item.is_pink,
+          reference_no: item.reference_no,
+          alternative_item_code: alternativeCode || undefined,
+          line_key: lineKey,
+        });
+      }
+      if (validationFailed) break;
+    }
+
+    if (validationFailed) return;
+
     if (itemsToAdd.length === 0) {
       toast.warning("No valid items selected.");
       return;
     }
+
     const loadingToast = toast.loading(`Adding ${itemsToAdd.length} history item(s) to cart...`);
     try {
       let addedCount = 0;
       let notFoundCount = 0;
+      let noStockCount = 0;
       const qtyByItem = new Map<string, number>();
       const medsByItem = new Map<string, Set<string>>();
       cartItems.forEach((ci) => {
@@ -2567,14 +2605,33 @@ export default function OrderSummary({
       });
 
       for (const itemToAdd of itemsToAdd) {
-        const result = await addMedicationOrderLineToCart(itemToAdd, qtyByItem, medsByItem);
+        const result = await addMedicationOrderLineToCart(
+          itemToAdd,
+          qtyByItem,
+          medsByItem,
+          Array.from(selectedOrderNames)
+        );
         if (result === "added") addedCount++;
+        else if (result === "no_stock") noStockCount++;
         else notFoundCount++;
       }
+
       toast.dismiss(loadingToast);
-      if (addedCount > 0 && notFoundCount === 0) toast.success(`Successfully added ${addedCount} history item(s).`);
-      else if (addedCount > 0) toast.warning(`Added ${addedCount} item(s). ${notFoundCount} item(s) not found.`);
-      else toast.error("No history items were added.");
+
+      if (noStockCount > 0) {
+        toast.error(`${noStockCount} item(s) have no stock. Select alternative drugs where needed.`);
+        return;
+      }
+
+      if (addedCount > 0 && notFoundCount === 0) {
+        toast.success(`Successfully added ${addedCount} history item(s).`);
+      } else if (addedCount > 0) {
+        toast.warning(`Added ${addedCount} item(s). ${notFoundCount} item(s) not found.`);
+      } else {
+        toast.error("No history items were added.");
+      }
+
+      setShowMedicationOrdersModal(false);
       setSelectedHistoryItems(new Set());
     } catch {
       toast.dismiss(loadingToast);
@@ -4766,7 +4823,6 @@ const handleSetSerial = (event: CustomEvent) => {
                       >
                         {item.category}
                       </p>
-                      {(!isHospitalPharmacy || isServiceItem) && (
                       <div className={`${isMobile ? "text-base" : "text-sm"}`}>
                         {discountedPrice < item.price ? (
                           <div className="flex items-center space-x-2">
@@ -4787,7 +4843,6 @@ const handleSetSerial = (event: CustomEvent) => {
                           </div>
                         )}
                       </div>
-                      )}
                     </div>
 
                     {/* Quantity Controls - Fixed Width Container */}
@@ -4824,8 +4879,7 @@ const handleSetSerial = (event: CustomEvent) => {
                       </button>
                     </div>
 
-                    {/* Total Price - hidden in hospital pharmacy (amounts still calculated for dispense) */}
-                    {!isHospitalPharmacy && (
+                    {/* Total Price */}
                     <div className="flex-shrink-0 text-right min-w-[80px] px-2">
                       {discountedTotal < originalTotal ? (
                         <div>
@@ -4853,7 +4907,6 @@ const handleSetSerial = (event: CustomEvent) => {
                         </p>
                       )}
                     </div>
-                    )}
 
                     {duplicateLineEnabled && (
                       <div className="flex-shrink-0 ml-1">
@@ -5294,7 +5347,9 @@ const handleSetSerial = (event: CustomEvent) => {
             {isHospitalPharmacy
               ? (showPostDispenseActions
                 ? "New Order"
-                : isDispensing ? "Dispensing..." : "Dispense")
+                : isDispensing
+                  ? "Dispensing..."
+                  : `Dispense ${currency_symbol}${total.toFixed(3)}`)
               : `Checkout ${currency_symbol}${total.toFixed(3)}`}
           </button>
           {showPostDispenseActions && (

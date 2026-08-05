@@ -32,6 +32,7 @@ import PaymentDialog from "../components/PaymentDialog";
 import { useInvoiceDetails } from "../hooks/useInvoiceDetails";
 import { useCustomerStatistics } from "../hooks/useCustomerStatistics";
 import { usePOSDetails } from "../hooks/usePOSProfile";
+import { getPartyLabels } from "../utils/partyLabels";
 import { deleteDraftInvoice } from "../services/salesInvoice";
 import { toast } from "react-toastify";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
@@ -50,7 +51,13 @@ export default function InvoiceViewPage() {
   const { invoice, isLoading, error } = useInvoiceDetails(invoiceId);
   const { statistics: customerStats, isLoading: statsLoading } = useCustomerStatistics(invoice?.customer || null);
   const { posDetails } = usePOSDetails();
+  const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
+    posDetails?.custom_is_hospital_pharmacy === true ||
+    posDetails?.custom_is_hospital_pharmacy === "1";
+  const party = getPartyLabels(isHospitalPharmacy);
   const navigate = useNavigate()
+  const orderLabel = isHospitalPharmacy ? "dispense order" : "invoice";
+  const OrderLabel = isHospitalPharmacy ? "Dispense Order" : "Invoice";
 
   // PaymentDialog state for sharing
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
@@ -106,20 +113,29 @@ export default function InvoiceViewPage() {
   };
 
 
-// @ts-expect-error just ignore
+  // @ts-expect-error just ignore
   const getStatusBadge = (status) => {
     const baseClasses = "px-3 py-1 rounded-full text-sm font-medium flex items-center space-x-1";
     switch (status) {
       case "Completed":
       case "Paid":
         return `${baseClasses} bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400`;
+      case "Partly Paid":
       case "Pending":
       case "Unpaid":
+      case "Dispensed medicine":
         return `${baseClasses} bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400`;
       case "Cancelled":
+      case "Fully returned":
         return `${baseClasses} bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400`;
       case "Refunded":
+      case "Partially returned":
+      case "Overdue":
         return `${baseClasses} bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400`;
+      case "Held":
+      case "Draft":
+      case "Unbilled":
+        return `${baseClasses} bg-gray-100 text-gray-800 dark:bg-gray-900/20 dark:text-gray-400`;
       default:
         return baseClasses;
     }
@@ -262,7 +278,7 @@ export default function InvoiceViewPage() {
         <div className="flex-1 flex items-center justify-center ml-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600 dark:text-gray-400">Loading invoice...</p>
+            <p className="text-gray-600 dark:text-gray-400">Loading {orderLabel}...</p>
           </div>
         </div>
       </div>
@@ -276,7 +292,7 @@ export default function InvoiceViewPage() {
         <div className="flex-1 flex items-center justify-center ml-20">
           <div className="text-center">
             <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-            <p className="text-red-600 dark:text-red-400">Error loading invoice: {error}</p>
+            <p className="text-red-600 dark:text-red-400">Error loading {orderLabel}: {error}</p>
             <button
               onClick={() => window.location.reload()}
               className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -319,7 +335,7 @@ export default function InvoiceViewPage() {
                 </button>
                 <div>
                   <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-                    Invoice {invoice.name || invoice.id}
+                    {OrderLabel} {invoice.name || invoice.id}
                   </h1>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     {invoice.posting_date} at {invoice.posting_time}
@@ -468,8 +484,10 @@ export default function InvoiceViewPage() {
                   <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-600">
                     <div className="grid grid-cols-2 gap-8">
                       <div>
-                        <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-2">Bill To:</h4>
-                        <p className="text-sm text-gray-900 dark:text-white font-medium">{invoice.customer}</p>
+                        <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-2">
+                          {isHospitalPharmacy ? `${party.singular}:` : "Bill To:"}
+                        </h4>
+                        <p className="text-sm text-gray-900 dark:text-white font-medium">{invoice.customer_name || invoice.customer}</p>
                         <p className="text-sm text-gray-600 dark:text-gray-400">{invoice.customer_address_doc?.address_line1}</p>
                         <p className="text-sm text-gray-600 dark:text-gray-400">{invoice.customer_address_doc?.email_id}</p>
                         <p className="text-sm text-gray-600 dark:text-gray-400">{invoice.customer_address_doc?.phone}</p>
@@ -490,7 +508,9 @@ export default function InvoiceViewPage() {
                           </div>
                           <div className="flex justify-between">
                             <span className="text-sm text-gray-600 dark:text-gray-400">Payment:</span>
-                            <span className="text-sm text-gray-900 dark:text-white">{invoice.paymentMethod}</span>
+                            <span className="text-sm text-gray-900 dark:text-white">
+                              {invoice.paymentMethod || invoice.mode_of_payment || invoice.payment_method || "—"}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -619,10 +639,10 @@ export default function InvoiceViewPage() {
                           <span className="text-gray-900 dark:text-white">{formatCurrency(invoice.grand_total, invoice.currency)}</span>
                         </div>
 
-                        {invoice.paid_amount > 0 && (
+                        {(isHospitalPharmacy || invoice.paid_amount > 0) && (
                           <div className="flex justify-between text-sm">
                             <span className="text-gray-600 dark:text-gray-400">Paid Amount:</span>
-                            <span className="text-beveren-600 dark:text-beveren-400">{formatCurrency(invoice.paid_amount, invoice.currency)}</span>
+                            <span className="text-beveren-600 dark:text-beveren-400">{formatCurrency(invoice.paid_amount || 0, invoice.currency)}</span>
                           </div>
                         )}
 
@@ -664,7 +684,12 @@ export default function InvoiceViewPage() {
                       <div className="space-y-2">
                         <div className="flex justify-between">
                           <span className="text-orange-700 dark:text-orange-300">Payment Method:</span>
-                          <span className="text-orange-900 dark:text-orange-100 font-medium">{invoice.paymentMethod || 'Cash'}</span>
+                          <span className="text-orange-900 dark:text-orange-100 font-medium">
+                            {invoice.paymentMethod ||
+                              invoice.mode_of_payment ||
+                              invoice.payment_method ||
+                              (isHospitalPharmacy ? "Unbilled" : "—")}
+                          </span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-orange-700 dark:text-orange-300">Status:</span>
@@ -672,6 +697,12 @@ export default function InvoiceViewPage() {
                             {invoice.status}
                           </span>
                         </div>
+                        {isHospitalPharmacy && invoice.sales_invoice && (
+                          <div className="flex justify-between">
+                            <span className="text-orange-700 dark:text-orange-300">Invoice:</span>
+                            <span className="text-orange-900 dark:text-orange-100 font-medium">{invoice.sales_invoice}</span>
+                          </div>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <div className="flex justify-between">
@@ -705,7 +736,7 @@ export default function InvoiceViewPage() {
                     <div className="flex items-center justify-between">
                       <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center space-x-2">
                         <User size={20} />
-                        <span>Customer Details</span>
+                        <span>{party.singular} Details</span>
                       </h3>
                       <button
                         onClick={handleEditCustomer}

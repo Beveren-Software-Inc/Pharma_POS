@@ -54,12 +54,19 @@ export default function InvoiceViewModal({
   const getStatusColor = (status: string) => {
     switch (status) {
       case "Completed":
+      case "Paid":
         return "bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400";
+      case "Partly Paid":
       case "Pending":
+      case "Unpaid":
+      case "Dispensed medicine":
         return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400";
       case "Cancelled":
+      case "Fully returned":
         return "bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400";
       case "Refunded":
+      case "Partially returned":
+      case "Overdue":
         return "bg-orange-100 text-orange-800 dark:bg-orange-900/20 dark:text-orange-400";
       default:
         return "bg-gray-100 text-gray-800 dark:bg-gray-900/20 dark:text-gray-400";
@@ -90,7 +97,7 @@ export default function InvoiceViewModal({
           <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center space-x-4">
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-                Invoice Details
+                {isHospitalPharmacy ? `${party.singular} Order Details` : "Invoice Details"}
               </h2>
               <span
                 className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(
@@ -123,7 +130,7 @@ export default function InvoiceViewModal({
               <div className="lg:col-span-2 space-y-6">
                 <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-6">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                    Invoice Information
+                    {isHospitalPharmacy ? "Order Information" : "Invoice Information"}
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <InfoItem
@@ -134,17 +141,27 @@ export default function InvoiceViewModal({
                     <InfoItem
                       icon={<User />}
                       label={party.singular}
-                      value={displayInvoice.customer}
+                      value={displayInvoice.customer_name || displayInvoice.customer}
                     />
                     <InfoItem
                       icon={<User />}
                       label="Cashier"
-                      value={displayInvoice.cashier}
+                      value={
+                        displayInvoice.cashier ||
+                        displayInvoice.cashier_name ||
+                        displayInvoice.owner ||
+                        "—"
+                      }
                     />
                     <InfoItem
                       icon={<CreditCard />}
-                      label="Payment Method"
-                      value={displayInvoice.paymentMethod}
+                      label={isHospitalPharmacy ? "Type" : "Payment Method"}
+                      value={
+                        displayInvoice.paymentMethod ||
+                        displayInvoice.mode_of_payment ||
+                        displayInvoice.payment_method ||
+                        "—"
+                      }
                     />
                   </div>
                 </div>
@@ -229,7 +246,15 @@ export default function InvoiceViewModal({
                     Payment Summary
                   </h3>
                   <div className="space-y-3">
-                    <SummaryRow label="Subtotal" value={Number(displayInvoice.subtotal ?? 0)} />
+                    <SummaryRow
+                      label="Subtotal"
+                      value={Number(
+                        displayInvoice.subtotal ??
+                          displayInvoice.total ??
+                          displayInvoice.grand_total ??
+                          0
+                      )}
+                    />
                     {displayInvoice.giftCardDiscount > 0 && (
                       <SummaryRow
                         label="Gift Card Discount"
@@ -240,10 +265,34 @@ export default function InvoiceViewModal({
                     <div className="border-t border-gray-200 dark:border-gray-600 pt-3">
                       <SummaryRow
                         label="Total"
-                        value={Number(displayInvoice.totalAmount ?? 0)}
+                        value={Number(
+                          displayInvoice.totalAmount ??
+                            displayInvoice.grand_total ??
+                            displayInvoice.total ??
+                            0
+                        )}
                         bold
                       />
                     </div>
+                    {(Number(displayInvoice.paid_amount) > 0 || isHospitalPharmacy) && (
+                      <SummaryRow
+                        label="Paid Amount"
+                        value={Number(displayInvoice.paid_amount || 0)}
+                        color="green"
+                      />
+                    )}
+                    {Number(displayInvoice.outstanding_amount) > 0 && (
+                      <SummaryRow
+                        label="Outstanding"
+                        value={Number(displayInvoice.outstanding_amount || 0)}
+                        color="orange"
+                      />
+                    )}
+                    {isHospitalPharmacy && displayInvoice.sales_invoice && (
+                      <div className="text-xs text-gray-500 dark:text-gray-400 pt-1">
+                        Invoice: {displayInvoice.sales_invoice}
+                      </div>
+                    )}
                     {displayInvoice.status === "Refunded" && (
                       <div className="border-t border-gray-200 dark:border-gray-600 pt-3">
                         <SummaryRow
