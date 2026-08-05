@@ -33,6 +33,7 @@ import BottomNavigation from "../components/BottomNavigation";
 import MultiInvoiceReturn from "../components/MultiInvoiceReturn";
 import SingleInvoiceReturn from "../components/SingleInvoiceReturn";
 import DispenseOrderReturn from "../components/DispenseOrderReturn";
+import type { DispenseReturnStockLine } from "../components/DispenseOrderReturn";
 import DispenseVisitTypeBadge from "../components/DispenseVisitTypeBadge";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { formatCurrency } from "../utils/currency";
@@ -42,6 +43,7 @@ import { usePosDispenseHistory } from "../hooks/usePosDispenseHistory";
 import { useCustomers } from "../hooks/useCustomers";
 import { useUserInfo } from "../hooks/useUserInfo";
 import { usePOSDetails } from "../hooks/usePOSProfile";
+import { useProducts } from "../hooks/useProducts";
 import { getPartyLabels } from "../utils/partyLabels";
 import { toast } from "react-toastify";
 import { extractErrorFromException } from "../utils/errorExtraction";
@@ -120,6 +122,12 @@ export default function InvoiceHistoryPage() {
     posDetails?.custom_is_hospital_pharmacy === true ||
     posDetails?.custom_is_hospital_pharmacy === "1";
   const party = getPartyLabels(isHospitalPharmacy);
+  const {
+    refreshStockOnly,
+    updateBatchQuantitiesForItems,
+    updateSerialsForItems,
+    updateDispensingLotsForItems,
+  } = useProducts();
 
   const salesInvoiceQuery = useSalesInvoices(searchTerm, true, cashierFilter, !isHospitalPharmacy);
   const dispenseQuery = usePosDispenseHistory(searchTerm, cashierFilter, isHospitalPharmacy);
@@ -1580,10 +1588,33 @@ const getStatusBadge = (status: string) => {
       window.location.reload();
     };
 
-    const handleDispenseReturnSuccess = () => {
+    const handleDispenseReturnSuccess = async (
+      _returnDeliveryNote: string,
+      returnedItems: DispenseReturnStockLine[] = []
+    ) => {
       setShowDispenseReturn(false);
       setSelectedDispenseOrder(null);
       refetch();
+
+      // Same inventory refresh as New Order after a sale: qty, batches, serials, dispensing lots.
+      // Without this, POS keeps stale dispensed-lot remaining qty until a manual refresh.
+      try {
+        await refreshStockOnly();
+        const itemCodes = [
+          ...new Set(
+            returnedItems
+              .map((row) => row.itemCode)
+              .filter((code) => code && code !== "undefined")
+          ),
+        ];
+        if (itemCodes.length > 0) {
+          await updateBatchQuantitiesForItems(itemCodes);
+          await updateSerialsForItems(itemCodes);
+          await updateDispensingLotsForItems(returnedItems);
+        }
+      } catch (error) {
+        console.error("Failed to refresh POS stock after dispense return:", error);
+      }
     };
 
   const handleCustomerSelect = (customer: string) => {

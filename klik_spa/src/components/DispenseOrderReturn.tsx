@@ -11,6 +11,7 @@ interface DispenseReturnLine {
   item_name: string;
   so_detail?: string;
   dn_detail?: string;
+  batch_no?: string;
   qty: number;
   rate: number;
   returned_qty: number;
@@ -27,11 +28,19 @@ function getDispenseLineKey(item: {
   return item.dn_detail || item.so_detail || item.item_code || item.id || "";
 }
 
+export type DispenseReturnStockLine = {
+  itemCode: string;
+  batchNo?: string;
+};
+
 interface DispenseOrderReturnProps {
   order: SalesInvoice | null;
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (returnDeliveryNote: string) => void;
+  onSuccess: (
+    returnDeliveryNote: string,
+    returnedItems: DispenseReturnStockLine[]
+  ) => void;
 }
 
 export default function DispenseOrderReturn({
@@ -59,6 +68,7 @@ export default function DispenseOrderReturn({
           item_name: item.item_name || item.name,
           so_detail: item.so_detail,
           dn_detail: item.dn_detail,
+          batch_no: item.batch_no || undefined,
           qty,
           rate: Number(item.rate ?? item.unitPrice ?? 0),
           returned_qty: returnedQty,
@@ -114,7 +124,13 @@ export default function DispenseOrderReturn({
     try {
       const result = await createDispenseReturn(order.id || order.name, itemsToReturn);
       toast.success(`Return created: ${result.return_delivery_note}`);
-      onSuccess(result.return_delivery_note);
+      const stockLines: DispenseReturnStockLine[] = returnItems
+        .filter((item) => item.return_qty > 0 && item.item_code)
+        .map((item) => ({
+          itemCode: item.item_code,
+          batchNo: item.batch_no || undefined,
+        }));
+      onSuccess(result.return_delivery_note, stockLines);
       onClose();
     } catch (error) {
       console.error("Error creating dispense return:", error);

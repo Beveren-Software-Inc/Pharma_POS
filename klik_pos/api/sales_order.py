@@ -946,6 +946,298 @@ def _annotate_dispense_return_status(order_items):
 	return status, returned_line_count
 
 
+def _build_dispense_order_items(sales_order_name, customer):
+	"""Sales Order items enriched with DN batch/return qty for POS view & history."""
+	dn_items_by_order = _get_dispense_dn_items_by_sales_order([sales_order_name])
+	dn_items = dn_items_by_order.get(sales_order_name, [])
+	item_rows = frappe.get_all(
+		"Sales Order Item",
+		filters={"parent": sales_order_name},
+		fields=["name", "item_code", "item_name", "qty", "rate", "amount", "description", "uom"],
+		order_by="idx asc",
+	)
+
+	order_items = []
+	for row in item_rows:
+		dn_match = None
+		for dn_item in dn_items:
+			if dn_item.so_detail == row.name or (
+				not dn_item.so_detail and dn_item.item_code == row.item_code
+			):
+				dn_match = dn_item
+				break
+
+		dn_detail = dn_match.dn_detail if dn_match else None
+		item = {
+			"name": row.name,
+			"so_detail": row.name,
+			"dn_detail": dn_detail,
+			"item_code": row.item_code,
+			"item_name": row.item_name,
+			"description": row.description,
+			"qty": row.qty,
+			"rate": row.rate,
+			"amount": row.amount,
+			"uom": row.uom,
+			"batch_no": dn_match.batch_no if dn_match else None,
+			"returned_qty": 0,
+			"available_qty": flt(row.qty),
+		}
+		order_items.append(item)
+
+	delivery_note_name = _get_pos_dispense_delivery_note(sales_order_name)
+	if not delivery_note_name and dn_items:
+		delivery_note_name = dn_items[0].delivery_note
+
+	if delivery_note_name:
+		for item in order_items:
+			if item.get("dn_detail"):
+				item["returned_qty"] = _get_returned_qty_for_dn_item(
+					delivery_note_name, customer, item["dn_detail"]
+				)
+				item["available_qty"] = max(
+					0, flt(item.get("qty") or 0) - flt(item["returned_qty"] or 0)
+				)
+
+	dispense_status, returned_line_count = _annotate_dispense_return_status(order_items)
+	can_return = 1 if (
+		bool(delivery_note_name)
+		and any(flt(item.get("available_qty") or 0) > 0 for item in order_items)
+	) else 0
+
+	return order_items, delivery_note_name, dispense_status, returned_line_count, can_return
+
+
+def _get_dispense_order_billing_info(sales_order_name):
+	"""
+	Resolve linked Sales Invoice(s) and Payment Entry data for a hospital dispense SO.
+	Billing happens after dispense (reception / healthcare), so the SO alone has no payment fields.
+	"""
+	invoices = frappe.db.sql(
+		"""
+		SELECT DISTINCT
+			si.name,
+			si.status,
+			si.docstatus,
+			si.grand_total,
+			si.paid_amount,
+			si.outstanding_amount,
+			si.posting_date
+		FROM `tabSales Invoice Item` sii
+		INNER JOIN `tabSales Invoice` si ON si.name = sii.parent
+		WHERE sii.sales_order = %s
+		  AND si.docstatus < 2
+		ORDER BY si.creation DESC
+		""",
+		sales_order_name,
+		as_dict=True,
+	)
+
+	if not invoices:
+		# Advances recorded directly against the Sales Order
+		so_payments = frappe.db.sql(
+			"""
+			SELECT pe.mode_of_payment, pe.paid_amount, pe.name AS payment_entry,
+				per.allocated_amount
+			FROM `tabPayment Entry Reference` per
+			INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent
+			WHERE per.reference_doctype = 'Sales Order'
+			  AND per.reference_name = %s
+			  AND pe.docstatus = 1
+			""",
+			sales_order_name,
+			as_dict=True,
+		)
+		if not so_payments:
+			return {
+				"sales_invoices": [],
+				"sales_invoice": None,
+				"invoice_status": None,
+				"paid_amount": 0,
+				"outstanding_amount": 0,
+				"mode_of_payment": None,
+				"payment_entries": [],
+			}
+
+		modes = []
+		paid = 0
+		for row in so_payments:
+			paid += flt(row.allocated_amount or row.paid_amount or 0)
+			if row.mode_of_payment and row.mode_of_payment not in modes:
+				modes.append(row.mode_of_payment)
+		return {
+			"sales_invoices": [],
+			"sales_invoice": None,
+			"invoice_status": "Paid" if paid > 0 else None,
+			"paid_amount": paid,
+			"outstanding_amount": 0,
+			"mode_of_payment": ", ".join(modes) if modes else None,
+			"payment_entries": [row.payment_entry for row in so_payments if row.payment_entry],
+		}
+
+	invoice_names = [row.name for row in invoices]
+	paid_amount = 0
+	outstanding_amount = 0
+	for inv in invoices:
+		# Prefer grand_total - outstanding (PE updates outstanding more reliably than paid_amount)
+		gt = flt(inv.grand_total or 0)
+		out = flt(inv.outstanding_amount or 0)
+		paid_amount += max(0, gt - out) if inv.docstatus == 1 else flt(inv.paid_amount or 0)
+		outstanding_amount += out if inv.docstatus == 1 else gt
+
+	# Primary invoice status: prefer Paid / Partly Paid over Draft
+	status_priority = {
+		"Paid": 5,
+		"Credit Note Issued": 4,
+		"Partly Paid": 3,
+		"Overdue": 2,
+		"Unpaid": 1,
+		"Return": 1,
+		"Draft": 0,
+	}
+	primary = max(
+		invoices,
+		key=lambda inv: (status_priority.get(inv.status or "", -1), inv.posting_date or ""),
+	)
+	invoice_status = primary.status if primary.docstatus == 1 else (primary.status or "Draft")
+
+	# Payment modes from PE against those invoices
+	pe_rows = frappe.db.sql(
+		"""
+		SELECT pe.mode_of_payment, pe.name AS payment_entry, per.allocated_amount
+		FROM `tabPayment Entry Reference` per
+		INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent
+		WHERE per.reference_doctype = 'Sales Invoice'
+		  AND per.reference_name IN %(invoices)s
+		  AND pe.docstatus = 1
+		""",
+		{"invoices": invoice_names},
+		as_dict=True,
+	)
+
+	modes = []
+	for row in pe_rows:
+		if row.mode_of_payment and row.mode_of_payment not in modes:
+			modes.append(row.mode_of_payment)
+
+	# Fallback: Sales Invoice Payment child table (POS-style invoices)
+	if not modes:
+		si_payments = frappe.db.sql(
+			"""
+			SELECT DISTINCT mode_of_payment
+			FROM `tabSales Invoice Payment`
+			WHERE parent IN %(invoices)s
+			  AND IFNULL(mode_of_payment, '') != ''
+			""",
+			{"invoices": invoice_names},
+			as_dict=True,
+		)
+		modes = [row.mode_of_payment for row in si_payments if row.mode_of_payment]
+
+	return {
+		"sales_invoices": invoice_names,
+		"sales_invoice": primary.name,
+		"invoice_status": invoice_status,
+		"paid_amount": paid_amount,
+		"outstanding_amount": outstanding_amount,
+		"mode_of_payment": ", ".join(modes) if modes else None,
+		"payment_entries": [row.payment_entry for row in pe_rows if row.payment_entry],
+	}
+
+
+@frappe.whitelist()
+def get_dispense_order_details(sales_order_name):
+	"""
+	Full POS hospital dispense order (Sales Order) details for the invoice/order view page.
+	Returns a shape compatible with get_invoice_details so the same UI can render it.
+	Enriches with linked Sales Invoice / Payment Entry when billing has been done.
+	"""
+	try:
+		sales_order_name = (sales_order_name or "").strip()
+		if not sales_order_name:
+			frappe.throw("Sales order is required")
+		if not frappe.db.exists("Sales Order", sales_order_name):
+			frappe.throw(f"Sales Order {sales_order_name} not found")
+
+		order = frappe.get_doc("Sales Order", sales_order_name)
+		if not _to_bool(getattr(order, "custom_is_pos", 0)):
+			frappe.throw("This is not a POS dispense order")
+
+		is_held = int(order.docstatus or 0) == 0
+		order_items, delivery_note_name, dispense_status, returned_line_count, can_return = (
+			_build_dispense_order_items(order.name, order.customer)
+		)
+		if is_held:
+			dispense_status = "Held"
+			can_return = 0
+
+		billing = _get_dispense_order_billing_info(order.name)
+		# Prefer billing status (Paid / Unpaid / …) when an invoice exists; keep dispense_status for returns.
+		display_status = billing.get("invoice_status") or dispense_status
+		mode_of_payment = billing.get("mode_of_payment")
+		if not mode_of_payment:
+			mode_of_payment = "Unbilled" if not billing.get("sales_invoice") else "—"
+
+		cashier_name = (
+			frappe.db.get_value("User", order.owner, "full_name") or order.owner
+		)
+		hold_payload = (
+			_parse_hold_payload(getattr(order, "custom_pos_hold_data", None))
+			if hasattr(order, "custom_pos_hold_data")
+			else None
+		)
+		remarks = getattr(order, "custom_remarks", None) or ""
+
+		return {
+			"success": True,
+			"data": {
+				"name": order.name,
+				"customer": order.customer,
+				"customer_name": order.customer_name or order.customer,
+				"company": order.company,
+				"currency": order.currency,
+				"posting_date": order.transaction_date,
+				"posting_time": "",
+				"owner": order.owner,
+				"cashier_name": cashier_name,
+				"status": display_status,
+				"dispense_status": dispense_status,
+				"invoice_status": billing.get("invoice_status"),
+				"docstatus": order.docstatus,
+				"grand_total": order.grand_total,
+				"base_grand_total": order.base_grand_total or order.grand_total,
+				"total": order.total or order.grand_total,
+				"net_total": order.net_total or order.total or order.grand_total,
+				"total_taxes_and_charges": order.total_taxes_and_charges or 0,
+				"rounding_adjustment": getattr(order, "rounding_adjustment", 0) or 0,
+				"paid_amount": billing.get("paid_amount") or 0,
+				"outstanding_amount": billing.get("outstanding_amount") or 0,
+				"is_return": 0,
+				"is_pos_dispense": 1,
+				"is_held_dispense": 1 if is_held else 0,
+				"paymentMethod": mode_of_payment,
+				"mode_of_payment": mode_of_payment,
+				"sales_invoice": billing.get("sales_invoice"),
+				"sales_invoices": billing.get("sales_invoices") or [],
+				"payment_entries": billing.get("payment_entries") or [],
+				"delivery_note_name": delivery_note_name,
+				"can_return": can_return,
+				"returned_line_count": returned_line_count,
+				"custom_remarks": remarks,
+				"notes": remarks,
+				"custom_reference_type": getattr(order, "custom_reference_type", None) or "",
+				"custom_reference_name": getattr(order, "custom_reference_name", None) or "",
+				"visit_type": _resolve_dispense_visit_type(order, hold_payload),
+				"patient": getattr(order, "patient", None),
+				"items": order_items,
+				"taxes": [],
+			},
+		}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), f"Error fetching dispense order {sales_order_name}")
+		return {"success": False, "error": str(e)}
+
+
 @frappe.whitelist()
 def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 	"""List POS hospital dispense Sales Orders (submitted and held drafts)."""

@@ -34,7 +34,7 @@ interface InpatientMedicationOrdersModalProps {
   onAddToCart: (alternatives?: Record<string, string>) => void;
   selectedHistoryItems: Set<string>;
   onToggleHistoryItem: (itemKey: string) => void;
-  onAddHistoryItemsToCart: () => void;
+  onAddHistoryItemsToCart: (alternatives?: Record<string, string>) => void;
   selectedLegacyItems?: Set<string>;
   onToggleLegacyItem?: (itemKey: string) => void;
   onAddLegacyItemsToCart?: (alternatives?: Record<string, string>) => void;
@@ -1010,6 +1010,8 @@ export default function InpatientMedicationOrdersModal({
   const [activeTab, setActiveTab] = useState<"pending" | "history" | "visit" | "patient_history" | "legacy_dispensed" | "monthly_medication">("pending");
   const [alternativeDrugs, setAlternativeDrugs] = useState<Record<string, string>>({});
   const [alternativeDrugLabels, setAlternativeDrugLabels] = useState<Record<string, string>>({});
+  const [historyAlternativeDrugs, setHistoryAlternativeDrugs] = useState<Record<string, string>>({});
+  const [historyAlternativeDrugLabels, setHistoryAlternativeDrugLabels] = useState<Record<string, string>>({});
   const [legacyAlternativeDrugs, setLegacyAlternativeDrugs] = useState<Record<string, string>>({});
   const [legacyAlternativeDrugLabels, setLegacyAlternativeDrugLabels] = useState<Record<string, string>>({});
   const [subscriptionAlternativeDrugs, setSubscriptionAlternativeDrugs] = useState<Record<string, string>>({});
@@ -1055,6 +1057,8 @@ export default function InpatientMedicationOrdersModal({
       setPrintMenuPosition(null);
       setAlternativeDrugs({});
       setAlternativeDrugLabels({});
+      setHistoryAlternativeDrugs({});
+      setHistoryAlternativeDrugLabels({});
       setLegacyAlternativeDrugs({});
       setLegacyAlternativeDrugLabels({});
       setSubscriptionAlternativeDrugs({});
@@ -1073,6 +1077,12 @@ export default function InpatientMedicationOrdersModal({
     if (!isOpen) return;
     setExpandedLegacyOrders(new Set(legacyDispensedOrders.map((t) => t.name)));
   }, [isOpen, legacyDispensedOrders]);
+
+  // Prescription history orders open by default so items (with checkboxes / alt) are visible.
+  useEffect(() => {
+    if (!isOpen) return;
+    setExpandedHistoryOrders(new Set(historyOrders.map((o) => o.name)));
+  }, [isOpen, historyOrders]);
 
   // Subscription plans open by default.
   useEffect(() => {
@@ -1410,8 +1420,26 @@ export default function InpatientMedicationOrdersModal({
                             selectedKeys={selectedHistoryItems}
                             onToggle={onToggleHistoryItem}
                             orderName={order.name}
+                            showDetailsOnHover
                             hospitalMode={isHospitalMode}
                             defaultUom={defaultUom}
+                            productAvailability={productAvailability}
+                            alternativeDrugs={historyAlternativeDrugs}
+                            alternativeDrugLabels={historyAlternativeDrugLabels}
+                            onAlternativeChange={(key, value, itemName) => {
+                              setHistoryAlternativeDrugs((prev) => {
+                                const next = { ...prev };
+                                if (value) next[key] = value;
+                                else delete next[key];
+                                return next;
+                              });
+                              setHistoryAlternativeDrugLabels((prev) => {
+                                const next = { ...prev };
+                                if (value && itemName) next[key] = itemName;
+                                else delete next[key];
+                                return next;
+                              });
+                            }}
                           />
                         </div>
                       )}
@@ -2126,7 +2154,7 @@ export default function InpatientMedicationOrdersModal({
             )}
             {isHospitalMode && activeTab === "history" && (
               <button
-                onClick={onAddHistoryItemsToCart}
+                onClick={() => onAddHistoryItemsToCart(historyAlternativeDrugs)}
                 disabled={selectedHistoryItems.size === 0}
                 className="px-5 py-2 text-sm font-bold text-orange-600 bg-white border-2 border-orange-600 rounded-lg hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm active:scale-[0.99]"
               >
