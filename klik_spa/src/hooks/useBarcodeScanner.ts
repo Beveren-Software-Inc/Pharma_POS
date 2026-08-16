@@ -63,9 +63,12 @@ export function useBarcodeScanner(
     if (r && typeof (r as Promise<unknown>).then === 'function') await r
   }
 
-  /** Call the Frappe API and return the message object, or null. */
-  async function fetchItemByIdentifier(code: string) {
-    const url = `/api/method/klik_pos.api.item.get_item_by_identifier?code=${encodeURIComponent(code)}`
+  /** Call the Frappe API and return the message object, or null.
+   *  ``itemCode`` (optional) scopes batch/serial resolution to the already-resolved
+   *  GS1 GTIN item so shared lots resolve to that item's unique batch
+   *  (e.g. `065J045_TRN-008877` instead of the raw `065J045`). */
+  async function fetchItemByIdentifier(code: string, itemCode?: string) {
+    const url = `/api/method/klik_pos.api.item.get_item_by_identifier?code=${encodeURIComponent(code)}${itemCode ? `&item_code=${encodeURIComponent(itemCode)}` : ''}`
     const res  = await fetch(url)
     const data = await res.json()
     return data?.message?.item_code ? data.message : null
@@ -160,16 +163,20 @@ export function useBarcodeScanner(
   }
 
   const candidates = [gs1.gtin, gs1.lotNumber, gs1.serialNumber].filter(Boolean) as string[]
+  let resolvedItemCode: string | undefined
 
   for (const candidate of candidates) {
     let msg: Record<string, unknown> | null = null
     try {
-      msg = await fetchItemByIdentifier(candidate)
+      // Once the GTIN resolves the item, scope subsequent lot/serial lookups to it
+      // so a lot shared across items resolves to this item's unique batch.
+      msg = await fetchItemByIdentifier(candidate, resolvedItemCode)
     } catch { continue }
     if (!msg) continue
 
     const item       = messageToMenuItem(msg)
     const itemCode   = item.id
+    if (!resolvedItemCode) resolvedItemCode = itemCode
     const batchId    = gs1.lotNumber
 
     // ── Batch-aware: check if a cart line with same batch already exists ──

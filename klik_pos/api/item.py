@@ -365,12 +365,16 @@ def get_item_by_barcode(barcode: str):
 
 
 @frappe.whitelist(allow_guest=True)
-def get_item_by_identifier(code: str):
+def get_item_by_identifier(code: str, item_code=None):
 	"""Resolve an item by barcode, batch, serial, dispensing lot, or item code.
 
 	- If barcode maps to an Item Barcode row that has custom_batch set, treat it as a batch match
 	  so the POS can auto-select the correct batch for this scan.
 	- Items without batch/serial still resolve by item code so POS can display/add them.
+	- ``item_code`` is an optional hint used when the same GS1 lot is shared across items
+	  (beveren_health creates an item-unique batch ``BATCH_ITEMCODE`` with
+	  ``custom_original_batch_id`` = the scanned lot). When provided, the batch lookup is
+	  restricted to that item so the correct per-item batch is returned.
 	Returns same structure as get_item_by_barcode.
 	"""
 	item_tax_template = None
@@ -379,6 +383,7 @@ def get_item_by_identifier(code: str):
 			frappe.throw(_("Identifier required"))
 
 		code = code.strip()
+		preferred_item_code = (item_code or "").strip() or None
 		pos_doc = get_current_pos_profile()
 		warehouse = pos_doc.warehouse
 		price_list = pos_doc.selling_price_list
@@ -399,29 +404,52 @@ def get_item_by_identifier(code: str):
 			as_dict=True,
 		)
 		if item_row:
-			custom_batch = item_row[0].get("custom_batch") if has_custom_batch else None
-			if custom_batch:
-				# Treat this as a batch match so frontend can pre-select batch
-				matched_type = "batch"
-				matched_value = custom_batch
+			# If the caller already resolved the item (GS1 GTIN), keep that item
+			# so a later batch lookup stays scoped to the scanned product.
+			barcode_item = item_row[0].get("item_code")
+			if preferred_item_code and barcode_item and barcode_item != preferred_item_code:
+				item_row = []
 			else:
-				matched_type = "barcode"
-				matched_value = code
+				custom_batch = item_row[0].get("custom_batch") if has_custom_batch else None
+				if custom_batch:
+					# Treat this as a batch match so frontend can pre-select batch
+					matched_type = "batch"
+					matched_value = custom_batch
+				else:
+					matched_type = "barcode"
+					matched_value = code
 
-		# 2) Try Batch by batch_id or name
+		# 2) Try Batch by batch_id, name, or original batch id - scoped to the preferred item
 		if not item_row:
-			item_row = frappe.db.sql(
-				"""
-				SELECT b.item as item_code
-				FROM `tabBatch` b
-				WHERE b.batch_id = %s OR b.name = %s
-				""",
-				(code, code),
-				as_dict=True,
-			)
-			if item_row:
+			if preferred_item_code and frappe.db.has_column("Batch", "custom_original_batch_id"):
+				batch_rows = frappe.db.sql(
+					"""
+					SELECT b.name, b.batch_id, b.item as item_code
+					FROM `tabBatch` b
+					WHERE b.item = %s
+						AND (b.batch_id = %s OR b.name = %s OR b.custom_original_batch_id = %s)
+					ORDER BY b.creation DESC
+					LIMIT 1
+					""",
+					(preferred_item_code, code, code, code),
+					as_dict=True,
+				)
+			else:
+				batch_rows = frappe.db.sql(
+					"""
+					SELECT b.name, b.batch_id, b.item as item_code
+					FROM `tabBatch` b
+					WHERE b.batch_id = %s OR b.name = %s OR b.custom_original_batch_id = %s
+					ORDER BY b.creation DESC
+					LIMIT 1
+					""",
+					(code, code, code),
+					as_dict=True,
+				)
+			if batch_rows:
+				item_row = batch_rows
 				matched_type = "batch"
-				matched_value = code
+				matched_value = batch_rows[0].batch_id or code
 
 		dispensing_lot_name = None
 		dispensing_batch_no = None
@@ -1582,11 +1610,16 @@ def get_batch_nos_with_qty(item_code):
 
 	# Get batches for the item, FEFO-ordered (earliest expiry first) and excluding already-expired
 	# batches (a batch with expiry_date in the past must not be dispensed/sold).
+	batch_fields = ["name", "batch_id", "expiry_date"]
+	has_original_batch = frappe.db.has_column("Batch", "custom_original_batch_id")
+	if has_original_batch:
+		batch_fields.append("custom_original_batch_id")
+
 	batches = frappe.get_all(
 		"Batch",
 		filters={"item": item_code},
 		or_filters=[["expiry_date", "is", "not set"], ["expiry_date", ">=", frappe.utils.today()]],
-		fields=["name", "batch_id", "expiry_date"],
+		fields=batch_fields,
 		order_by="expiry_date asc",
 	)
 
@@ -1594,13 +1627,14 @@ def get_batch_nos_with_qty(item_code):
 	for b in batches:
 		qty = get_batch_qty(batch_no=b.name, warehouse=warehouse)
 		if qty > 0:
-			batch_qty_data.append(
-				{
-					"batch_id": b.batch_id,
-					"qty": qty,
-					"expiry_date": str(b.expiry_date) if b.get("expiry_date") else None,
-				}
-			)
+			entry = {
+				"batch_id": b.batch_id,
+				"qty": qty,
+				"expiry_date": str(b.expiry_date) if b.get("expiry_date") else None,
+			}
+			if has_original_batch:
+				entry["original_batch_id"] = b.custom_original_batch_id or None
+			batch_qty_data.append(entry)
 
 	return batch_qty_data
 
