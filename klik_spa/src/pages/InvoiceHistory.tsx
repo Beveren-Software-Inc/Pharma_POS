@@ -1103,6 +1103,7 @@ const getStatusBadge = (status: string) => {
                                 <tr>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Medicine</th>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Batch</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">UOM</th>
                                   <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Qty</th>
                                   <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Returned</th>
                                 </tr>
@@ -1122,9 +1123,9 @@ const getStatusBadge = (status: string) => {
                                           : ""
                                     }
                                   >
-                                    <td className="px-4 py-2 text-gray-900 dark:text-white">
+                                    <td className="px-4 py-2 text-gray-900 dark:text-white max-w-[50%]">
                                       <div className="flex items-center gap-2 flex-wrap">
-                                        <div className="font-medium">{item.item_name || item.name}</div>
+                                        <div className="font-medium break-words">{item.item_name || item.name}</div>
                                         {returnLabel && (
                                           <span className={getItemReturnBadgeClass(returnStatus)}>
                                             {returnLabel}
@@ -1133,8 +1134,9 @@ const getStatusBadge = (status: string) => {
                                       </div>
                                       <div className="text-xs text-gray-500">{item.item_code}</div>
                                     </td>
-                                    <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{item.batch_no || "—"}</td>
-                                    <td className="px-4 py-2 text-right text-gray-900 dark:text-white">{item.qty ?? item.quantity}</td>
+                                    <td className="px-4 py-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">{item.batch_no || "—"}</td>
+                                    <td className="px-4 py-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">{item.uom || "—"}</td>
+                                    <td className="px-4 py-2 text-right text-gray-900 dark:text-white whitespace-nowrap">{item.qty ?? item.quantity}</td>
                                     <td className="px-4 py-2 text-right">
                                       <span
                                         className={
@@ -1321,7 +1323,7 @@ const getStatusBadge = (status: string) => {
                     >
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <div className="font-medium text-gray-900 dark:text-white truncate">
+                          <div className="font-medium text-gray-900 dark:text-white break-words max-w-[50%]">
                             {item.item_name || item.name}
                           </div>
                           {returnLabel && (
@@ -1331,12 +1333,13 @@ const getStatusBadge = (status: string) => {
                         <div className="text-xs text-gray-500">
                           {item.item_code}
                           {item.batch_no ? ` · Batch ${item.batch_no}` : ""}
+                          {item.uom ? ` · ${item.uom}` : ""}
                           {(item.returned_qty ?? 0) > 0 ? ` · Returned ${item.returned_qty}` : ""}
                         </div>
                       </div>
                       <div className="text-right text-gray-700 dark:text-gray-200 whitespace-nowrap">
                         {isHospitalPharmacy
-                          ? (item.qty ?? item.quantity)
+                          ? `${item.qty ?? item.quantity}${item.uom ? ` ${item.uom}` : ""}`
                           : `${item.qty ?? item.quantity} × ${formatCurrency(item.rate ?? 0, invoice.currency)}`}
                       </div>
                     </div>
