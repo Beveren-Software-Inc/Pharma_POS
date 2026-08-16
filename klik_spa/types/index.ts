@@ -147,6 +147,7 @@ export interface SalesInvoiceItem {
   so_detail?: string
   dn_detail?: string
   batch_no?: string
+  uom?: string
   return_status?: "none" | "partial" | "full"
   item_group?: string
   is_non_returnable?: boolean

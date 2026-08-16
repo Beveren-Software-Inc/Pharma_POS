@@ -1317,7 +1317,7 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 			item_rows = frappe.get_all(
 				"Sales Order Item",
 				filters={"parent": ["in", order_names]},
-				fields=["parent", "name", "item_code", "item_name", "qty", "rate", "amount"],
+				fields=["parent", "name", "item_code", "item_name", "qty", "rate", "amount", "uom"],
 			)
 			for row in item_rows:
 				dn_match = None
@@ -1339,6 +1339,7 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
 						"qty": row.qty,
 						"rate": row.rate,
 						"amount": row.amount,
+						"uom": row.get("uom"),
 						"batch_no": dn_match.batch_no if dn_match else None,
 						"returned_qty": 0,
 						"available_qty": flt(row.qty),

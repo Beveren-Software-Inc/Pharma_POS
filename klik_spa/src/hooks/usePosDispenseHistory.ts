@@ -98,6 +98,7 @@ export function usePosDispenseHistory(
                   so_detail: item.so_detail ? String(item.so_detail) : undefined,
                   dn_detail: item.dn_detail ? String(item.dn_detail) : undefined,
                   batch_no: item.batch_no ? String(item.batch_no) : undefined,
+                  uom: item.uom ? String(item.uom) : undefined,
                   return_status: item.return_status as SalesInvoiceItem["return_status"],
                 }))
               : [];
