@@ -1996,7 +1996,7 @@ export default function InpatientMedicationOrdersModal({
                     </div>
                     <div>
                       <h3 className="font-bold text-gray-900 dark:text-white text-base">
-                        Open Pharmacy visits
+                        Open patient visits
                       </h3>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                         Reuse a visit already opened by reception — avoids duplicates
@@ -2006,7 +2006,7 @@ export default function InpatientMedicationOrdersModal({
                 </div>
                 <div className="px-4 py-3">
                   {!patientId ? (
-                    <p className="text-sm text-gray-500 px-2 py-3">Select a patient to see open Pharmacy visits.</p>
+                    <p className="text-sm text-gray-500 px-2 py-3">Select a patient to see open visits.</p>
                   ) : loadingOpenVisits ? (
                     <div className="flex items-center justify-center gap-2 py-6 text-sm text-gray-500">
                       <span className="w-4 h-4 border-2 border-sky-600/30 border-t-sky-600 rounded-full animate-spin" />
@@ -2014,7 +2014,7 @@ export default function InpatientMedicationOrdersModal({
                     </div>
                   ) : openPharmacyVisits.length === 0 ? (
                     <p className="text-sm text-gray-500 px-2 py-3">
-                      No open Pharmacy visits for this patient. Create one below if needed.
+                      No open visits for this patient. Create one below if needed.
                     </p>
                   ) : (
                     <div className="space-y-2">
@@ -2084,7 +2084,7 @@ export default function InpatientMedicationOrdersModal({
                         {lastCreatedVisit?.name ? "Create another visit" : "Create Patient Visit"}
                       </h3>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        Only if there is no open Pharmacy visit to reuse
+                        Creates a Pharmacy visit. Use only if there is no open visit to reuse.
                       </p>
                     </div>
                   </div>
@@ -2133,7 +2133,7 @@ export default function InpatientMedicationOrdersModal({
               : lastCreatedVisit?.name
               ? "Visit linked — used when you dispense"
               : openPharmacyVisits.length > 0
-              ? "Select an open Pharmacy visit, or create a new one"
+              ? "Select an open visit, or create a new Pharmacy visit"
               : "Create a new encounter above"}
           </div>
           <div className="flex items-center gap-2">

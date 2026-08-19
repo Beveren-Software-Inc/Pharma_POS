@@ -135,8 +135,8 @@ def _resolve_pharmacy_visit_type():
 	return "Pharmacy"
 
 
-def _pharmacy_visit_type_values():
-	"""Return visit type names that count as Pharmacy for open-visit lookup."""
+def _legacy_pharmacy_visit_type_values():
+	"""Hardcoded Pharmacy visit type names — used only when the POS flag is unavailable."""
 	types = []
 	for candidate in PHARMACY_VISIT_TYPE_CANDIDATES:
 		if frappe.db.exists("DocType", "Patient Visit Type") and frappe.db.exists(
@@ -147,7 +147,6 @@ def _pharmacy_visit_type_values():
 			types.append(candidate)
 		else:
 			types.append(candidate)
-	# Deduplicate while preserving order
 	seen = set()
 	out = []
 	for value in types:
@@ -155,6 +154,27 @@ def _pharmacy_visit_type_values():
 			seen.add(value)
 			out.append(value)
 	return out
+
+
+def _pos_display_visit_type_values():
+	"""Visit types that should appear on Pharmacy POS (Display On Pharmacy POS).
+
+	Creation still uses Pharmacy via `_resolve_pharmacy_visit_type`. Display is
+	driven by Patient Visit Type.display_on_pharmacy_pos so reception can show
+	OP / follow-up / etc. without changing what POS creates.
+	"""
+	if frappe.db.exists("DocType", "Patient Visit Type") and frappe.db.has_column(
+		"Patient Visit Type", "display_on_pharmacy_pos"
+	):
+		filters = {"display_on_pharmacy_pos": 1}
+		if frappe.db.has_column("Patient Visit Type", "disabled"):
+			filters["disabled"] = 0
+		return frappe.get_all(
+			"Patient Visit Type",
+			filters=filters,
+			pluck="name",
+		)
+	return _legacy_pharmacy_visit_type_values()
 
 
 def _extract_medication_order_items(order_doc):
@@ -1065,10 +1085,11 @@ def get_patient_history_summary(patient: str, limit: int = 10):
 @frappe.whitelist()
 def get_open_pharmacy_patient_visits(patient: str, limit: int = 20):
 	"""
-	Return open Patient Visits for this patient with visit type Pharmacy.
+	Return open Patient Visits whose visit type is flagged Display On Pharmacy POS.
 
 	Used by POS so pharmacists can reuse a visit created earlier by reception
-	instead of opening a duplicate pharmacy visit.
+	instead of opening a duplicate pharmacy visit. Creating a visit from POS
+	still uses the Pharmacy visit type.
 	"""
 	try:
 		if not patient:
@@ -1096,17 +1117,16 @@ def get_open_pharmacy_patient_visits(patient: str, limit: int = 20):
 		if "status" in fields:
 			filters["status"] = ["not in", list(CLOSED_PATIENT_VISIT_STATUSES)]
 
-		pharmacy_types = _pharmacy_visit_type_values()
-		# Also match common reception labels that contain "Pharmacy"
-		or_filters = None
 		if "visit_type" in fields:
-			or_filters = [["visit_type", "in", pharmacy_types], ["visit_type", "like", "%Pharmacy%"]]
+			pos_types = _pos_display_visit_type_values()
+			if not pos_types:
+				return {"success": True, "visits": [], "doctype": "Patient Visit"}
+			filters["visit_type"] = ["in", pos_types]
 
 		order_by = "encounter_date desc, creation desc" if "encounter_date" in fields else "modified desc"
 		rows = frappe.get_all(
 			"Patient Visit",
 			filters=filters,
-			or_filters=or_filters,
 			fields=fetch,
 			order_by=order_by,
 			limit=limit,
