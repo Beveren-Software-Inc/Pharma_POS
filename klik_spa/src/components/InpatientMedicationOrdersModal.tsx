@@ -43,6 +43,8 @@ interface InpatientMedicationOrdersModalProps {
   onAddSubscriptionItemsToCart?: (alternatives?: Record<string, string>) => void;
   onCreateVisit: () => void;
   onSelectVisit?: (visit: { doctype: string; name: string; visit_type?: string | null }) => void;
+  /** Reload pending orders; pass true to include Unsigned prescriptions. */
+  onReloadPendingOrders?: (includeUnsigned: boolean) => Promise<void>;
   creatingVisit?: boolean;
   patientName?: string;
   patientId?: string;
@@ -54,6 +56,20 @@ interface InpatientMedicationOrdersModalProps {
   patientVisitCreatedSignal?: number;
   patientHistory?: PatientHistorySummary | null;
   productAvailability?: Record<string, number>;
+}
+
+function localDateISO(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function defaultClosedVisitRange(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 7);
+  return { from: localDateISO(from), to: localDateISO(to) };
 }
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -166,6 +182,11 @@ function medicationLineLabel(item: ItemRow): string {
   return resolveMedicationDisplayName(item);
 }
 
+const MED_ITEM_NAME_CELL =
+  "px-3 py-2 align-top min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]";
+const MED_ALT_CELL =
+  "px-2 py-2 w-[10rem] min-w-[10rem] max-w-[10rem] overflow-hidden align-top sticky right-0 bg-inherit";
+
 function MedicationDrugCell({ item }: { item: ItemRow }) {
   const label = medicationLineLabel(item);
   const details = useMemo(
@@ -242,7 +263,7 @@ function MedicationDrugCell({ item }: { item: ItemRow }) {
   }, [hovered, updatePosition]);
 
   if (!details.length) {
-    return <span>{label}</span>;
+    return <span className="break-words [overflow-wrap:anywhere]">{label}</span>;
   }
 
   const tooltip =
@@ -286,7 +307,7 @@ function MedicationDrugCell({ item }: { item: ItemRow }) {
           setHovered(false);
           setCoords(null);
         }}
-        className="cursor-help underline decoration-dotted decoration-gray-300 dark:decoration-gray-600 underline-offset-2"
+        className="cursor-help underline decoration-dotted decoration-gray-300 dark:decoration-gray-600 underline-offset-2 break-words [overflow-wrap:anywhere]"
       >
         {label}
       </span>
@@ -571,20 +592,20 @@ function ItemsTable({
   const isPrn = (v: ItemRow["is_prn"]) => v === 1 || v === true || v === "1";
 
   return (
-    <div className={`rounded-lg border border-gray-200 dark:border-gray-700 text-xs ${showDetailsOnHover ? "overflow-visible" : "overflow-hidden"}`}>
-      <table className="w-full">
+    <div className="rounded-lg border border-gray-200 dark:border-gray-700 text-xs overflow-x-auto">
+      <table className="w-full table-fixed">
         <thead>
           <tr className="bg-gray-50 dark:bg-gray-800/70 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
             {selectable && <th className="px-3 py-2 w-8" />}
-            <th className="px-3 py-2 text-left">Drug</th>
-            <th className="px-3 py-2 text-left">Dosage</th>
-            <th className="px-3 py-2 text-left">Qty</th>
-            <th className="px-3 py-2 text-left">Frequency</th>
-            <th className="px-3 py-2 text-left">Type</th>
-            <th className="px-3 py-2 text-center">PRN</th>
-            {productAvailability && <th className="px-3 py-2 text-left">Stock</th>}
+            <th className="px-3 py-2 text-left w-[32%]">Drug</th>
+            <th className="px-3 py-2 text-left w-[12%]">Dosage</th>
+            <th className="px-3 py-2 text-left w-[10%]">Qty</th>
+            <th className="px-3 py-2 text-left w-[14%]">Frequency</th>
+            <th className="px-3 py-2 text-left w-[12%]">Type</th>
+            <th className="px-3 py-2 text-center w-12">PRN</th>
+            {productAvailability && <th className="px-3 py-2 text-left w-14">Stock</th>}
             {onAlternativeChange && (
-              <th className="px-2 py-2 text-left w-[160px] min-w-[160px] max-w-[160px]">Alt. Drug</th>
+              <th className={`${MED_ALT_CELL} text-left font-bold`}>Alt. Drug</th>
             )}
            </tr>
         </thead>
@@ -619,19 +640,19 @@ function ItemsTable({
                     />
                    </td>
                 )}
-                <td className="px-3 py-2 font-semibold text-gray-800 dark:text-gray-200 whitespace-nowrap">
+                <td className={`${MED_ITEM_NAME_CELL} font-semibold text-gray-800 dark:text-gray-200`}>
                   {showDetailsOnHover ? <MedicationDrugCell item={item} /> : medicationLineLabel(item)}
                  </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.dosage || "—"}
                  </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap align-top">
                   {formatMedicationQty(item)}
                  </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.patient_frequency || "—"}
                  </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.medication_type || "—"}
                  </td>
                 <td className="px-3 py-2 text-center">
@@ -647,7 +668,7 @@ function ItemsTable({
                 )}
                 {onAlternativeChange && (
                   <td
-                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    className={MED_ALT_CELL}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <AlternativeDrugSelect
@@ -728,21 +749,21 @@ function LegacyItemsTable({
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
-      <table className="min-w-full text-sm">
+      <table className="w-full table-fixed text-sm">
         <thead className="bg-slate-50 dark:bg-slate-800/80 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
           <tr>
             {selectable && <th className="px-3 py-2 w-8" />}
-            <th className="px-3 py-2 text-left font-semibold">#</th>
-            <th className="px-3 py-2 text-left font-semibold">Item</th>
-            <th className="px-3 py-2 text-right font-semibold">Qty</th>
-            <th className="px-3 py-2 text-left font-semibold">UOM</th>
-            <th className="px-3 py-2 text-right font-semibold">Rate</th>
-            <th className="px-3 py-2 text-right font-semibold">Amount</th>
-            <th className="px-3 py-2 text-left font-semibold">Batch</th>
-            <th className="px-3 py-2 text-left font-semibold">Expiry</th>
-            {productAvailability && <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">Stock</th>}
+            <th className="px-3 py-2 text-left font-semibold w-10">#</th>
+            <th className="px-3 py-2 text-left font-semibold w-[28%]">Item</th>
+            <th className="px-3 py-2 text-right font-semibold w-14">Qty</th>
+            <th className="px-3 py-2 text-left font-semibold w-14">UOM</th>
+            <th className="px-3 py-2 text-right font-semibold w-16">Rate</th>
+            <th className="px-3 py-2 text-right font-semibold w-16">Amount</th>
+            <th className="px-3 py-2 text-left font-semibold w-[12%]">Batch</th>
+            <th className="px-3 py-2 text-left font-semibold w-20">Expiry</th>
+            {productAvailability && <th className="px-3 py-2 text-left font-semibold whitespace-nowrap w-14">Stock</th>}
             {onAlternativeChange && (
-              <th className="px-2 py-2 text-left font-semibold w-[160px] min-w-[160px] max-w-[160px]">
+              <th className={`${MED_ALT_CELL} text-left font-semibold`}>
                 Alt. Drug
               </th>
             )}
@@ -785,12 +806,12 @@ function LegacyItemsTable({
                   </td>
                 )}
                 <td className="px-3 py-2 text-slate-500 tabular-nums">{item.sr_num ?? idx + 1}</td>
-                <td className="px-3 py-2">
-                  <div className="font-medium text-slate-900 dark:text-white">
+                <td className={MED_ITEM_NAME_CELL}>
+                  <div className="font-medium text-slate-900 dark:text-white break-words [overflow-wrap:anywhere]">
                     {resolveLegacyMedicationDisplayName(item)}
                   </div>
                   {lineCode ? (
-                    <div className="text-xs text-slate-400 font-mono mt-0.5">{lineCode}</div>
+                    <div className="text-xs text-slate-400 font-mono mt-0.5 break-all">{lineCode}</div>
                   ) : null}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
@@ -822,7 +843,7 @@ function LegacyItemsTable({
                 )}
                 {onAlternativeChange && (
                   <td
-                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    className={MED_ALT_CELL}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <AlternativeDrugSelect
@@ -867,18 +888,18 @@ function SubscriptionItemsTable({
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-teal-200 dark:border-teal-800/50">
-      <table className="min-w-full text-sm">
+      <table className="w-full table-fixed text-sm">
         <thead className="bg-teal-50 dark:bg-teal-900/30 text-xs uppercase tracking-wide text-teal-700/80 dark:text-teal-300/80">
           <tr>
             {selectable && <th className="px-3 py-2 w-8" />}
-            <th className="px-3 py-2 text-left font-semibold">Drug</th>
-            <th className="px-3 py-2 text-left font-semibold">Dosage</th>
-            <th className="px-3 py-2 text-right font-semibold">Qty / cycle</th>
-            <th className="px-3 py-2 text-left font-semibold">Frequency</th>
-            <th className="px-3 py-2 text-center font-semibold">Active</th>
-            {productAvailability && <th className="px-3 py-2 text-left font-semibold">Stock</th>}
+            <th className="px-3 py-2 text-left font-semibold w-[32%]">Drug</th>
+            <th className="px-3 py-2 text-left font-semibold w-[14%]">Dosage</th>
+            <th className="px-3 py-2 text-right font-semibold w-20">Qty / cycle</th>
+            <th className="px-3 py-2 text-left font-semibold w-[16%]">Frequency</th>
+            <th className="px-3 py-2 text-center font-semibold w-14">Active</th>
+            {productAvailability && <th className="px-3 py-2 text-left font-semibold w-14">Stock</th>}
             {onAlternativeChange && (
-              <th className="px-2 py-2 text-left font-semibold w-[160px] min-w-[160px] max-w-[160px]">
+              <th className={`${MED_ALT_CELL} text-left font-semibold`}>
                 Alt. Drug
               </th>
             )}
@@ -923,21 +944,21 @@ function SubscriptionItemsTable({
                     />
                   </td>
                 )}
-                <td className="px-3 py-2">
-                  <div className="font-medium text-slate-900 dark:text-white">
+                <td className={MED_ITEM_NAME_CELL}>
+                  <div className="font-medium text-slate-900 dark:text-white break-words [overflow-wrap:anywhere]">
                     {resolveSubscriptionItemDisplayName(item)}
                   </div>
                   {lineCode ? (
-                    <div className="text-xs text-slate-400 font-mono mt-0.5">{lineCode}</div>
+                    <div className="text-xs text-slate-400 font-mono mt-0.5 break-all">{lineCode}</div>
                   ) : null}
                 </td>
-                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.dosage != null && item.dosage !== "" ? String(item.dosage) : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
                   {item.qty_per_cycle ?? 1}
                 </td>
-                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.patient_frequency || "—"}
                 </td>
                 <td className="px-3 py-2 text-center">
@@ -954,7 +975,7 @@ function SubscriptionItemsTable({
                 )}
                 {onAlternativeChange && (
                   <td
-                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    className={MED_ALT_CELL}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <AlternativeDrugSelect
@@ -997,6 +1018,7 @@ export default function InpatientMedicationOrdersModal({
   onAddSubscriptionItemsToCart,
   onCreateVisit,
   onSelectVisit,
+  onReloadPendingOrders,
   creatingVisit = false,
   patientName,
   patientId,
@@ -1027,23 +1049,75 @@ export default function InpatientMedicationOrdersModal({
   const [medicationOrderPrintFormats, setMedicationOrderPrintFormats] = useState<string[]>(["Standard"]);
   const [openPharmacyVisits, setOpenPharmacyVisits] = useState<OpenPharmacyPatientVisit[]>([]);
   const [loadingOpenVisits, setLoadingOpenVisits] = useState(false);
+  const [includeClosedVisits, setIncludeClosedVisits] = useState(false);
+  const [closedVisitFrom, setClosedVisitFrom] = useState(() => defaultClosedVisitRange().from);
+  const [closedVisitTo, setClosedVisitTo] = useState(() => defaultClosedVisitRange().to);
+  const [showClosedVisitRangeModal, setShowClosedVisitRangeModal] = useState(false);
+  const [includeUnsignedPending, setIncludeUnsignedPending] = useState(false);
+  const [loadingUnsignedPending, setLoadingUnsignedPending] = useState(false);
   const printButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const MEDICATION_ORDER_DOCTYPE = "Patient Medication Order";
 
-  const loadOpenPharmacyVisits = useCallback(async () => {
+  const loadOpenPharmacyVisits = useCallback(async (opts?: {
+    includeClosed?: boolean;
+    fromDate?: string;
+    toDate?: string;
+  }) => {
     if (!patientId || !isHospitalMode) {
       setOpenPharmacyVisits([]);
       return;
     }
     setLoadingOpenVisits(true);
     try {
-      const visits = await getOpenPharmacyPatientVisits(patientId);
+      const includeClosed = opts?.includeClosed ?? includeClosedVisits;
+      const visits = await getOpenPharmacyPatientVisits(patientId, {
+        limit: includeClosed ? 50 : 20,
+        includeClosed,
+        fromDate: includeClosed ? (opts?.fromDate ?? closedVisitFrom) : undefined,
+        toDate: includeClosed ? (opts?.toDate ?? closedVisitTo) : undefined,
+      });
       setOpenPharmacyVisits(visits);
     } finally {
       setLoadingOpenVisits(false);
     }
-  }, [patientId, isHospitalMode]);
+  }, [patientId, isHospitalMode, includeClosedVisits, closedVisitFrom, closedVisitTo]);
+
+  const handleToggleUnsignedPending = async () => {
+    if (!onReloadPendingOrders) return;
+    const next = !includeUnsignedPending;
+    setLoadingUnsignedPending(true);
+    try {
+      await onReloadPendingOrders(next);
+      setIncludeUnsignedPending(next);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to reload pending orders");
+    } finally {
+      setLoadingUnsignedPending(false);
+    }
+  };
+
+  const applyClosedVisitRange = async () => {
+    let from = closedVisitFrom;
+    let to = closedVisitTo;
+    if (from && to && from > to) {
+      [from, to] = [to, from];
+      setClosedVisitFrom(from);
+      setClosedVisitTo(to);
+    }
+    setIncludeClosedVisits(true);
+    setShowClosedVisitRangeModal(false);
+    await loadOpenPharmacyVisits({ includeClosed: true, fromDate: from, toDate: to });
+  };
+
+  const clearClosedVisitFilter = async () => {
+    setIncludeClosedVisits(false);
+    const range = defaultClosedVisitRange();
+    setClosedVisitFrom(range.from);
+    setClosedVisitTo(range.to);
+    setShowClosedVisitRangeModal(false);
+    await loadOpenPharmacyVisits({ includeClosed: false });
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -1064,13 +1138,22 @@ export default function InpatientMedicationOrdersModal({
       setSubscriptionAlternativeDrugs({});
       setSubscriptionAlternativeDrugLabels({});
       setOpenPharmacyVisits([]);
+      setIncludeClosedVisits(false);
+      const range = defaultClosedVisitRange();
+      setClosedVisitFrom(range.from);
+      setClosedVisitTo(range.to);
+      setShowClosedVisitRangeModal(false);
+      setIncludeUnsignedPending(false);
+      setLoadingUnsignedPending(false);
     }
   }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen || !isHospitalMode || !patientId) return;
-    void loadOpenPharmacyVisits();
-  }, [isOpen, isHospitalMode, patientId, loadOpenPharmacyVisits, patientVisitCreatedSignal]);
+    void loadOpenPharmacyVisits({ includeClosed: includeClosedVisits });
+    // Intentionally only re-run when patient/modal/visit-create signal changes — not on every filter tweak.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, isHospitalMode, patientId, patientVisitCreatedSignal]);
 
   // Legacy transactions open by default (each has a child table).
   useEffect(() => {
@@ -1208,40 +1291,86 @@ export default function InpatientMedicationOrdersModal({
         </div>
 
         {/* Tab Bar */}
-        {isHospitalMode && (
+        {isHospitalMode ? (
           <div className="px-8 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-700/60">
-            <div className="flex items-stretch">
-              {tabs.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                return (
+            <div className="flex items-stretch justify-between gap-3">
+              <div className="flex items-stretch min-w-0 overflow-x-auto">
+                {tabs.map((tab) => {
+                  const Icon = tab.icon;
+                  const isActive = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`relative flex items-center gap-2 px-5 py-4 text-sm font-semibold transition-all duration-150 whitespace-nowrap
+                        ${isActive
+                          ? "text-beveren-600 dark:text-beveren-400"
+                          : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                        }`}
+                    >
+                      <Icon size={15} className={isActive ? "text-orange-500" : "text-gray-400"} />
+                      <span>{tab.label}</span>
+                      {tab.count !== null && (
+                        <span className={`ml-0.5 min-w-[20px] h-5 px-1.5 rounded-full text-xs flex items-center justify-center font-bold
+                          ${isActive ? "bg-beveren-600 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300"}`}>
+                          {tab.count}
+                        </span>
+                      )}
+                      {isActive && (
+                        <span className="absolute bottom-0 left-0 right-0 h-[3px] bg-beveren-600 dark:bg-beveren-400 rounded-t-full" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              {activeTab === "pending" && onReloadPendingOrders ? (
+                <div className="flex items-center flex-shrink-0 py-2">
                   <button
-                    key={tab.id}
                     type="button"
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`relative flex items-center gap-2 px-5 py-4 text-sm font-semibold transition-all duration-150
-                      ${isActive
-                        ? "text-beveren-600 dark:text-beveren-400"
-                        : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
-                      }`}
+                    onClick={() => void handleToggleUnsignedPending()}
+                    disabled={loadingUnsignedPending}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
+                      includeUnsignedPending
+                        ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300"
+                        : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 hover:border-orange-400 hover:text-orange-600"
+                    }`}
+                    title={
+                      includeUnsignedPending
+                        ? "Hide unsigned prescriptions"
+                        : "Also show Unsigned medication orders"
+                    }
                   >
-                    <Icon size={15} className={isActive ? "text-orange-500" : "text-gray-400"} />
-                    <span>{tab.label}</span>
-                    {tab.count !== null && (
-                      <span className={`ml-0.5 min-w-[20px] h-5 px-1.5 rounded-full text-xs flex items-center justify-center font-bold
-                        ${isActive ? "bg-beveren-600 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300"}`}>
-                        {tab.count}
-                      </span>
-                    )}
-                    {isActive && (
-                      <span className="absolute bottom-0 left-0 right-0 h-[3px] bg-beveren-600 dark:bg-beveren-400 rounded-t-full" />
-                    )}
+                    {loadingUnsignedPending
+                      ? "Loading…"
+                      : includeUnsignedPending
+                        ? "Hide unsigned"
+                        : "Display even unsigned"}
                   </button>
-                );
-              })}
+                </div>
+              ) : null}
             </div>
           </div>
-        )}
+        ) : onReloadPendingOrders ? (
+          <div className="px-8 py-2 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-700/60 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void handleToggleUnsignedPending()}
+              disabled={loadingUnsignedPending}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
+                includeUnsignedPending
+                  ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300"
+                  : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 hover:border-orange-400 hover:text-orange-600"
+              }`}
+            >
+              {loadingUnsignedPending
+                ? "Loading…"
+                : includeUnsignedPending
+                  ? "Hide unsigned"
+                  : "Display even unsigned"}
+            </button>
+          </div>
+        ) : null}
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-8 py-6 bg-white dark:bg-gray-900">
@@ -1251,7 +1380,20 @@ export default function InpatientMedicationOrdersModal({
             pendingOrders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
                 <ClipboardList size={40} className="mb-3 opacity-30" />
-                <p className="text-sm font-medium">No pending medication orders found.</p>
+                <p className="text-sm font-medium">
+                  {includeUnsignedPending
+                    ? "No pending or unsigned medication orders found."
+                    : "No pending medication orders found."}
+                </p>
+                {!includeUnsignedPending && onReloadPendingOrders ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleUnsignedPending()}
+                    className="mt-3 text-xs font-bold text-orange-600 hover:underline"
+                  >
+                    Display even unsigned
+                  </button>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-3">
@@ -1278,6 +1420,7 @@ export default function InpatientMedicationOrdersModal({
                         </div>
                         <div className="flex items-center gap-2 flex-1 min-w-0">
                           <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate">{order.name}</h3>
+                          <StatusBadge status={order.status} hideStatuses={["Draft", "Completed"]} />
                           <DispenseVisitTypeBadge
                             visitType={order.visit_type}
                             referenceType={order.custom_reference_type}
@@ -1990,17 +2133,54 @@ export default function InpatientMedicationOrdersModal({
 
               <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div className="px-6 py-4 bg-sky-50 dark:bg-sky-900/20 border-b border-sky-100 dark:border-sky-800/30">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center">
-                      <ClipboardList size={17} className="text-white" />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center flex-shrink-0">
+                        <ClipboardList size={17} className="text-white" />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-gray-900 dark:text-white text-base">
+                          {includeClosedVisits ? "Open & closed visits" : "Open patient visits"}
+                        </h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          {includeClosedVisits
+                            ? `Open visits plus closed visits from ${closedVisitFrom} to ${closedVisitTo}`
+                            : "Reuse a visit already opened by reception — avoids duplicates"}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-gray-900 dark:text-white text-base">
-                        Open patient visits
-                      </h3>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        Reuse a visit already opened by reception — avoids duplicates
-                      </p>
+                    <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                      <button
+                        type="button"
+                        disabled={!patientId || loadingOpenVisits}
+                        onClick={() => {
+                          if (includeClosedVisits) {
+                            void clearClosedVisitFilter();
+                          } else {
+                            const range = defaultClosedVisitRange();
+                            setClosedVisitFrom(range.from);
+                            setClosedVisitTo(range.to);
+                            setShowClosedVisitRangeModal(true);
+                          }
+                        }}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
+                          includeClosedVisits
+                            ? "border-sky-600 bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+                            : "border-sky-600 text-sky-700 bg-white hover:bg-sky-50"
+                        }`}
+                        title="Include closed visits in a date range"
+                      >
+                        {includeClosedVisits ? "Open only" : "Include closed…"}
+                      </button>
+                      {includeClosedVisits ? (
+                        <button
+                          type="button"
+                          className="text-[11px] font-semibold text-sky-700 hover:underline"
+                          onClick={() => setShowClosedVisitRangeModal(true)}
+                        >
+                          Change dates
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -2010,11 +2190,13 @@ export default function InpatientMedicationOrdersModal({
                   ) : loadingOpenVisits ? (
                     <div className="flex items-center justify-center gap-2 py-6 text-sm text-gray-500">
                       <span className="w-4 h-4 border-2 border-sky-600/30 border-t-sky-600 rounded-full animate-spin" />
-                      Loading open visits…
+                      Loading visits…
                     </div>
                   ) : openPharmacyVisits.length === 0 ? (
                     <p className="text-sm text-gray-500 px-2 py-3">
-                      No open visits for this patient. Create one below if needed.
+                      {includeClosedVisits
+                        ? "No matching visits in this date range. Create one below if needed."
+                        : "No open visits for this patient. Create one below if needed."}
                     </p>
                   ) : (
                     <div className="space-y-2">
@@ -2023,6 +2205,9 @@ export default function InpatientMedicationOrdersModal({
                           visit.encounter_date || visit.visit_date || visit.posting_date || ""
                         ).slice(0, 10);
                         const isSelected = lastCreatedVisit?.name === visit.name;
+                        const isClosed = ["Completed", "External Referral", "Cancelled"].includes(
+                          String(visit.status || "")
+                        );
                         return (
                           <div
                             key={visit.name}
@@ -2038,7 +2223,20 @@ export default function InpatientMedicationOrdersModal({
                               </div>
                               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
                                 {visitDate ? <span>Date: <span className="tabular-nums font-medium text-gray-700 dark:text-gray-200">{visitDate}</span></span> : null}
-                                {visit.status ? <span>Status: <span className="font-medium text-gray-700 dark:text-gray-200">{visit.status}</span></span> : null}
+                                {visit.status ? (
+                                  <span>
+                                    Status:{" "}
+                                    <span
+                                      className={`font-medium ${
+                                        isClosed
+                                          ? "text-amber-700 dark:text-amber-300"
+                                          : "text-gray-700 dark:text-gray-200"
+                                      }`}
+                                    >
+                                      {visit.status}
+                                    </span>
+                                  </span>
+                                ) : null}
                                 {visit.visit_type ? <span>Type: <span className="font-medium text-gray-700 dark:text-gray-200">{visit.visit_type}</span></span> : null}
                               </div>
                               {visit.practitioner_name ? (
@@ -2183,6 +2381,82 @@ export default function InpatientMedicationOrdersModal({
         </div>
 
         {printMenu}
+
+        {showClosedVisitRangeModal && typeof document !== "undefined"
+          ? createPortal(
+              <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+                <div
+                  className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                  onClick={() => setShowClosedVisitRangeModal(false)}
+                />
+                <div
+                  className="relative bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-sm border border-gray-200 dark:border-gray-700 p-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white">
+                    Include closed visits
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Show open visits plus closed visits in this date range (default: last 7 days).
+                  </p>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                        From
+                      </label>
+                      <input
+                        type="date"
+                        value={closedVisitFrom}
+                        onChange={(e) => setClosedVisitFrom(e.target.value)}
+                        className="w-full h-9 px-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                        To
+                      </label>
+                      <input
+                        type="date"
+                        value={closedVisitTo}
+                        onChange={(e) => setClosedVisitTo(e.target.value)}
+                        className="w-full h-9 px-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-sky-700 hover:underline"
+                      onClick={() => {
+                        const range = defaultClosedVisitRange();
+                        setClosedVisitFrom(range.from);
+                        setClosedVisitTo(range.to);
+                      }}
+                    >
+                      Last 7 days
+                    </button>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowClosedVisitRangeModal(false)}
+                      className="px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void applyClosedVisitRange()}
+                      className="px-3 py-2 text-xs font-bold rounded-lg border-2 border-sky-600 text-sky-700 bg-sky-50 hover:bg-sky-100"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )
+          : null}
 
         {reminderPlan && (
           <SendSubscriptionMedicationWhatsAppModal

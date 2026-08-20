@@ -5678,6 +5678,16 @@ const handleSetSerial = (event: CustomEvent) => {
         onAddSubscriptionItemsToCart={handleAddSubscriptionItemsToCart}
         onCreateVisit={handleCreatePatientVisit}
         onSelectVisit={handleSelectPatientVisit}
+        onReloadPendingOrders={async (includeUnsigned) => {
+          const patientId =
+            selectedPatient?.name || selectedCustomer?.id || selectedCustomer?.name;
+          if (!patientId) return;
+          const orders = await getPendingInpatientMedicationOrders(patientId, {
+            includeUnsigned,
+          });
+          setMedicationOrders(orders);
+          setSelectedOrders(new Set(orders.map((o) => o.name)));
+        }}
         creatingVisit={isCreatingVisit}
         patientName={selectedPatient?.patient_name || selectedPatient?.name}
         patientId={

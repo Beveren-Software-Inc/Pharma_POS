@@ -238,10 +238,18 @@ export async function getPrintFormatsForDoctype(
   }
 }
 
-export async function getPendingInpatientMedicationOrders(patient: string): Promise<InpatientMedicationOrder[]> {
+export async function getPendingInpatientMedicationOrders(
+  patient: string,
+  opts?: { includeUnsigned?: boolean }
+): Promise<InpatientMedicationOrder[]> {
   try {
-    const apiUrl = `/api/method/klik_pos.api.patient.get_pending_inpatient_medication_orders?patient=${encodeURIComponent(patient)}`;
-    
+    const params = new URLSearchParams();
+    params.set("patient", patient);
+    if (opts?.includeUnsigned) {
+      params.set("include_unsigned", "1");
+    }
+    const apiUrl = `/api/method/klik_pos.api.patient.get_pending_inpatient_medication_orders?${params.toString()}`;
+
     const response = await fetch(apiUrl, {
       method: 'GET',
       headers: {
@@ -707,10 +715,24 @@ export interface OpenPharmacyPatientVisit {
 
 export async function getOpenPharmacyPatientVisits(
   patient: string,
-  limit = 20
+  opts?: {
+    limit?: number;
+    includeClosed?: boolean;
+    fromDate?: string;
+    toDate?: string;
+  }
 ): Promise<OpenPharmacyPatientVisit[]> {
   try {
-    const apiUrl = `/api/method/klik_pos.api.patient.get_open_pharmacy_patient_visits?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const limit = opts?.limit ?? 20;
+    const params = new URLSearchParams();
+    params.set("patient", patient);
+    params.set("limit", String(limit));
+    if (opts?.includeClosed) {
+      params.set("include_closed", "1");
+      if (opts.fromDate) params.set("from_date", opts.fromDate);
+      if (opts.toDate) params.set("to_date", opts.toDate);
+    }
+    const apiUrl = `/api/method/klik_pos.api.patient.get_open_pharmacy_patient_visits?${params.toString()}`;
     const response = await fetch(apiUrl, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
