@@ -3,7 +3,7 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package, CalendarDays, MessageCircle } from "lucide-react";
-import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, SubscriptionMedicationPlan, SubscriptionMedicationPlanItem, OpenPharmacyPatientVisit } from "../services/patientService";
+import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, PosDispensedTransaction, SubscriptionMedicationPlan, SubscriptionMedicationPlanItem, OpenPharmacyPatientVisit } from "../services/patientService";
 import {
   searchPosStockItemsForAlternative,
   getPrintFormatsForDoctype,
@@ -12,6 +12,8 @@ import {
   resolveLegacyMedicationItemCode,
   resolveLegacyMedicationDisplayName,
   legacyMedicationLineKey,
+  posDispensedLineKey,
+  posDispensedItemToLegacyShape,
   resolveSubscriptionItemCode,
   resolveSubscriptionItemDisplayName,
   subscriptionMedicationLineKey,
@@ -28,6 +30,7 @@ interface InpatientMedicationOrdersModalProps {
   pendingOrders: InpatientMedicationOrder[];
   historyOrders: InpatientMedicationOrder[];
   legacyDispensedOrders?: LegacyDispensedTransaction[];
+  posDispensedOrders?: PosDispensedTransaction[];
   subscriptionPlans?: SubscriptionMedicationPlan[];
   selectedOrders: Set<string>;
   onToggleOrder: (orderName: string) => void;
@@ -736,6 +739,7 @@ function LegacyItemsTable({
   alternativeDrugs,
   alternativeDrugLabels,
   onAlternativeChange,
+  lineKeyFn,
 }: {
   items: LegacyDispensedMedicationItem[];
   txnName: string;
@@ -746,6 +750,7 @@ function LegacyItemsTable({
   alternativeDrugs?: Record<string, string>;
   alternativeDrugLabels?: Record<string, string>;
   onAlternativeChange?: (key: string, value: string, itemName?: string) => void;
+  lineKeyFn?: (txnName: string, idx: number, item: LegacyDispensedMedicationItem) => string;
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
@@ -771,7 +776,9 @@ function LegacyItemsTable({
         </thead>
         <tbody className="divide-y divide-slate-100 dark:divide-slate-700 bg-white dark:bg-gray-900/40">
           {items.map((item, idx) => {
-            const itemKey = legacyMedicationLineKey(txnName, idx, item);
+            const itemKey = lineKeyFn
+              ? lineKeyFn(txnName, idx, item)
+              : legacyMedicationLineKey(txnName, idx, item);
             const lineCode = resolveLegacyMedicationItemCode(item);
             const altCode = alternativeDrugs?.[itemKey]?.trim() || "";
             const checked = selectedKeys?.has(itemKey) ?? false;
@@ -1003,6 +1010,7 @@ export default function InpatientMedicationOrdersModal({
   pendingOrders,
   historyOrders,
   legacyDispensedOrders = [],
+  posDispensedOrders = [],
   subscriptionPlans = [],
   selectedOrders,
   onToggleOrder,
@@ -1155,11 +1163,14 @@ export default function InpatientMedicationOrdersModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, isHospitalMode, patientId, patientVisitCreatedSignal]);
 
-  // Legacy transactions open by default (each has a child table).
+  // Legacy + POS dispenses open by default.
   useEffect(() => {
     if (!isOpen) return;
-    setExpandedLegacyOrders(new Set(legacyDispensedOrders.map((t) => t.name)));
-  }, [isOpen, legacyDispensedOrders]);
+    setExpandedLegacyOrders(new Set([
+      ...legacyDispensedOrders.map((t) => `legacy::${t.name}`),
+      ...posDispensedOrders.map((t) => `pos::${t.name}`),
+    ]));
+  }, [isOpen, legacyDispensedOrders, posDispensedOrders]);
 
   // Prescription history orders open by default so items (with checkboxes / alt) are visible.
   useEffect(() => {
@@ -1189,6 +1200,31 @@ export default function InpatientMedicationOrdersModal({
       setMedicationOrderPrintFormats(formats.length ? formats : ["Standard"]);
     });
   }, [isOpen]);
+
+  const dispensedHistory = useMemo(() => {
+    type CombinedRow =
+      | { source: "legacy"; key: string; date: string; txn: LegacyDispensedTransaction }
+      | { source: "pos"; key: string; date: string; txn: PosDispensedTransaction };
+    const rows: CombinedRow[] = [];
+    for (const txn of legacyDispensedOrders) {
+      rows.push({
+        source: "legacy",
+        key: `legacy::${txn.name}`,
+        date: String(txn.trans_date || txn.date_created || ""),
+        txn,
+      });
+    }
+    for (const txn of posDispensedOrders) {
+      rows.push({
+        source: "pos",
+        key: `pos::${txn.name}`,
+        date: String(txn.transaction_date || ""),
+        txn,
+      });
+    }
+    rows.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return rows;
+  }, [legacyDispensedOrders, posDispensedOrders]);
 
   const openDocPrint = (doctype: string, name: string, format = "Standard") => {
     const params = new URLSearchParams();
@@ -1259,7 +1295,7 @@ export default function InpatientMedicationOrdersModal({
     { id: "visit" as const, label: "Patient Visit", count: null, icon: UserPlus },
     { id: "history" as const, label: "Prescription History", count: historyOrders.length, icon: Clock },
     { id: "patient_history" as const, label: "Patient History", count: null, icon: History },
-    { id: "legacy_dispensed" as const, label: "Legacy Dispensed Medicine", count: legacyDispensedOrders.length, icon: Package },
+    { id: "legacy_dispensed" as const, label: "Dispensed Medicine", count: dispensedHistory.length, icon: Package },
     { id: "monthly_medication" as const, label: "Monthly Medication", count: subscriptionPlans.length, icon: CalendarDays },
   ];
 
@@ -1870,17 +1906,114 @@ export default function InpatientMedicationOrdersModal({
             </div>
           )}
 
-          {/* ── LEGACY DISPENSED MEDICINE ── */}
+          {/* ── DISPENSED MEDICINE (POS + legacy) ── */}
           {isHospitalMode && activeTab === "legacy_dispensed" && (
-            legacyDispensedOrders.length === 0 ? (
+            dispensedHistory.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
                 <Package size={40} className="mb-3 opacity-30" />
-                <p className="text-sm font-medium">No legacy dispensed medicine found.</p>
+                <p className="text-sm font-medium">No dispensed medicine found.</p>
               </div>
             ) : (
               <div className="space-y-2">
-                {legacyDispensedOrders.map((txn) => {
-                  const isExpanded = expandedLegacyOrders.has(txn.name);
+                {dispensedHistory.map((row) => {
+                  const isExpanded = expandedLegacyOrders.has(row.key);
+                  if (row.source === "pos") {
+                    const txn = row.txn;
+                    const dateLabel = txn.transaction_date ? String(txn.transaction_date).slice(0, 10) : null;
+                    const mappedItems = (txn.items || []).map(posDispensedItemToLegacyShape);
+                    return (
+                      <div
+                        key={row.key}
+                        className="border border-emerald-200 dark:border-emerald-800/50 rounded-xl overflow-hidden bg-emerald-50/40 dark:bg-emerald-950/20"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedLegacyOrders((prev) => {
+                              const next = new Set(prev);
+                              next.has(row.key) ? next.delete(row.key) : next.add(row.key);
+                              return next;
+                            })
+                          }
+                          className="w-full flex items-center gap-2 px-4 py-3 bg-emerald-100/70 dark:bg-emerald-900/30 text-left"
+                        >
+                          <span className={`text-gray-400 transition-transform duration-150 flex-shrink-0 ${isExpanded ? "rotate-0" : "-rotate-90"}`}>
+                            <ChevronDown size={15} />
+                          </span>
+                          <span className="font-semibold text-sm text-gray-800 dark:text-white truncate font-mono">
+                            {txn.name}
+                          </span>
+                          <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-200/80 dark:bg-emerald-800/50 text-emerald-800 dark:text-emerald-200 flex-shrink-0">
+                            POS
+                          </span>
+                          <DispenseVisitTypeBadge
+                            visitType={txn.visit_type}
+                            referenceType={txn.custom_reference_type}
+                          />
+                          {dateLabel ? (
+                            <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">{dateLabel}</span>
+                          ) : null}
+                          {txn.set_warehouse ? (
+                            <span className="text-xs text-gray-500 dark:text-gray-400 truncate flex-shrink-0">
+                              {txn.set_warehouse}
+                            </span>
+                          ) : null}
+                          {txn.custom_reference_name ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300 flex-shrink-0">
+                              {txn.custom_reference_name}
+                            </span>
+                          ) : null}
+                          <span className="ml-auto text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
+                            {(txn.item_count ?? txn.items?.length ?? 0)} item(s)
+                            {txn.grand_total != null ? ` · ${formatLegacyAmount(txn.grand_total)}` : ""}
+                          </span>
+                        </button>
+
+                        {isExpanded && mappedItems.length > 0 && (
+                          <div className="px-4 py-3 border-t border-emerald-200 dark:border-emerald-800/50 bg-white/80 dark:bg-gray-900/30">
+                            <LegacyItemsTable
+                              items={mappedItems}
+                              txnName={txn.name}
+                              selectable={!!onToggleLegacyItem}
+                              selectedKeys={selectedLegacyItems}
+                              onToggle={onToggleLegacyItem}
+                              productAvailability={productAvailability}
+                              alternativeDrugs={legacyAlternativeDrugs}
+                              alternativeDrugLabels={legacyAlternativeDrugLabels}
+                              lineKeyFn={(name, idx) => posDispensedLineKey(name, idx, txn.items[idx] || {})}
+                              onAlternativeChange={(key, value, itemName) => {
+                                setLegacyAlternativeDrugs((prev) => {
+                                  const next = { ...prev };
+                                  if (value) next[key] = value;
+                                  else delete next[key];
+                                  return next;
+                                });
+                                setLegacyAlternativeDrugLabels((prev) => {
+                                  const next = { ...prev };
+                                  if (value && itemName) next[key] = itemName;
+                                  else delete next[key];
+                                  return next;
+                                });
+                              }}
+                            />
+                            {txn.custom_remarks ? (
+                              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap">
+                                {txn.custom_remarks}
+                              </p>
+                            ) : null}
+                          </div>
+                        )}
+
+                        {isExpanded && mappedItems.length === 0 && (
+                          <div className="px-4 py-4 border-t border-emerald-200 dark:border-emerald-800/50 text-sm text-gray-400 dark:text-gray-500 text-center bg-white/80 dark:bg-gray-900/30">
+                            No line items on this dispense.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  const txn = row.txn;
                   const title = txn.trans_no || txn.name;
                   const dateLabel = txn.trans_date
                     ? String(txn.trans_date).slice(0, 10)
@@ -1889,7 +2022,7 @@ export default function InpatientMedicationOrdersModal({
                       : null;
                   return (
                     <div
-                      key={txn.name}
+                      key={row.key}
                       className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-slate-900/20"
                     >
                       <button
@@ -1897,7 +2030,7 @@ export default function InpatientMedicationOrdersModal({
                         onClick={() =>
                           setExpandedLegacyOrders((prev) => {
                             const next = new Set(prev);
-                            next.has(txn.name) ? next.delete(txn.name) : next.add(txn.name);
+                            next.has(row.key) ? next.delete(row.key) : next.add(row.key);
                             return next;
                           })
                         }
@@ -1908,6 +2041,9 @@ export default function InpatientMedicationOrdersModal({
                         </span>
                         <span className="font-semibold text-sm text-gray-800 dark:text-white truncate font-mono">
                           {title}
+                        </span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 flex-shrink-0">
+                          Legacy
                         </span>
                         {dateLabel ? (
                           <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">{dateLabel}</span>
@@ -2326,7 +2462,7 @@ export default function InpatientMedicationOrdersModal({
               : activeTab === "patient_history"
               ? "Diagnosis, visits, warnings and allergies"
               : activeTab === "legacy_dispensed"
-              ? `${selectedLegacyItems.size} legacy item(s) selected`
+              ? `${selectedLegacyItems.size} item(s) selected`
               : activeTab === "monthly_medication"
               ? `${selectedSubscriptionItems.size} monthly item(s) selected`
               : lastCreatedVisit?.name

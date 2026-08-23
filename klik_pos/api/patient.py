@@ -668,6 +668,217 @@ def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
 		frappe.throw(f"Failed to fetch legacy dispensed medications: {str(e)}")
 
 
+def _pos_dispense_dn_items_by_sales_order(order_names):
+	"""Map Sales Order name -> Delivery Note Item rows (non-return DN)."""
+	if not order_names:
+		return {}
+
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			dni.against_sales_order AS sales_order,
+			dni.parent AS delivery_note,
+			dni.name AS dn_detail,
+			dni.so_detail,
+			dni.item_code,
+			dni.batch_no
+		FROM `tabDelivery Note Item` dni
+		INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+		WHERE dni.against_sales_order IN %(orders)s
+		  AND dn.docstatus = 1
+		  AND IFNULL(dn.is_return, 0) = 0
+		""",
+		{"orders": order_names},
+		as_dict=True,
+	)
+
+	dn_items_map = {}
+	for row in rows:
+		dn_items_map.setdefault(row.sales_order, []).append(row)
+	return dn_items_map
+
+
+def _pos_dispense_expiry_by_batch(batch_nos):
+	"""Batch name / batch_id -> expiry date string."""
+	names = [b for b in {str(b).strip() for b in (batch_nos or []) if b} if b]
+	if not names:
+		return {}
+
+	expiry_by_batch = {}
+	try:
+		rows = frappe.get_all(
+			"Batch",
+			filters={"name": ["in", names]},
+			fields=["name", "batch_id", "expiry_date"],
+			ignore_permissions=True,
+		)
+		found = {row.name for row in rows}
+		missing = [n for n in names if n not in found]
+		if missing:
+			rows.extend(
+				frappe.get_all(
+					"Batch",
+					filters={"batch_id": ["in", missing]},
+					fields=["name", "batch_id", "expiry_date"],
+					ignore_permissions=True,
+				)
+			)
+		for row in rows:
+			expiry = str(row.expiry_date) if row.get("expiry_date") else None
+			if row.get("name"):
+				expiry_by_batch[row.name] = expiry
+			if row.get("batch_id"):
+				expiry_by_batch[row.batch_id] = expiry
+	except Exception:
+		pass
+	return expiry_by_batch
+
+
+def _pos_dispense_item_to_dict(row, dn_match=None, expiry_by_batch=None) -> dict:
+	batch_no = None
+	if dn_match and dn_match.get("batch_no"):
+		batch_no = dn_match.get("batch_no")
+	else:
+		batch_no = row.get("batch_no") or row.get("custom_batch")
+
+	expiry = None
+	if batch_no and expiry_by_batch:
+		expiry = expiry_by_batch.get(batch_no)
+
+	return {
+		"name": row.name,
+		"idx": row.get("idx"),
+		"item_code": row.get("item_code"),
+		"item_name": row.get("item_name"),
+		"qty": row.get("qty"),
+		"uom": row.get("uom"),
+		"rate": row.get("rate"),
+		"amount": row.get("amount"),
+		"batch_no": batch_no,
+		"expiry_date": expiry,
+		"dosage": row.get("custom_dosage"),
+		"dispensing_lot": row.get("custom_dispensing_lot"),
+	}
+
+
+@frappe.whitelist()
+def get_patient_pos_dispensed_medications(patient: str, limit: int = 50):
+	"""
+	Submitted POS hospital dispenses (Sales Order + Delivery Note lines) for a patient.
+	Used by hospital pharmacy Medication Orders → Dispensed Medicine tab, alongside legacy sales.
+	"""
+	try:
+		if not patient:
+			return []
+		if not frappe.db.has_column("Sales Order", "custom_is_pos"):
+			return []
+
+		try:
+			limit = max(1, min(int(limit), 100))
+		except Exception:
+			limit = 50
+
+		customer = resolve_customer_from_patient(patient)
+		has_patient_field = frappe.get_meta("Sales Order").has_field("patient")
+
+		filters = {"custom_is_pos": 1, "docstatus": 1}
+		or_filters = []
+		if has_patient_field:
+			or_filters.append(["patient", "=", patient])
+		if customer:
+			or_filters.append(["customer", "=", customer])
+		if not or_filters:
+			return []
+
+		fields = [
+			"name",
+			"transaction_date",
+			"customer",
+			"customer_name",
+			"grand_total",
+			"status",
+			"docstatus",
+		]
+		if has_patient_field:
+			fields.append("patient")
+		if frappe.db.has_column("Sales Order", "custom_remarks"):
+			fields.append("custom_remarks")
+		if frappe.db.has_column("Sales Order", "custom_reference_type"):
+			fields.append("custom_reference_type")
+		if frappe.db.has_column("Sales Order", "custom_reference_name"):
+			fields.append("custom_reference_name")
+		if frappe.db.has_column("Sales Order", "set_warehouse"):
+			fields.append("set_warehouse")
+
+		orders = frappe.get_all(
+			"Sales Order",
+			fields=fields,
+			filters=filters,
+			or_filters=or_filters,
+			order_by="transaction_date desc, creation desc",
+			limit=limit,
+			ignore_permissions=True,
+		)
+		if not orders:
+			return []
+
+		order_names = [row.name for row in orders]
+		dn_items_by_order = _pos_dispense_dn_items_by_sales_order(order_names)
+
+		item_fields = ["name", "idx", "parent", "item_code", "item_name", "qty", "rate", "amount", "uom"]
+		for optional in ("batch_no", "custom_batch", "custom_dispensing_lot", "custom_dosage"):
+			if frappe.db.has_column("Sales Order Item", optional):
+				item_fields.append(optional)
+
+		item_rows = frappe.get_all(
+			"Sales Order Item",
+			filters={"parent": ["in", order_names]},
+			fields=item_fields,
+			order_by="idx asc",
+			ignore_permissions=True,
+		)
+
+		batch_nos = []
+		items_by_order = {}
+		for row in item_rows:
+			dn_match = None
+			for dn_item in dn_items_by_order.get(row.parent, []):
+				if dn_item.so_detail == row.name or (
+					not dn_item.so_detail and dn_item.item_code == row.item_code
+				):
+					dn_match = dn_item
+					break
+			batch_candidate = (dn_match.batch_no if dn_match else None) or row.get("batch_no") or row.get("custom_batch")
+			if batch_candidate:
+				batch_nos.append(batch_candidate)
+			items_by_order.setdefault(row.parent, []).append((row, dn_match))
+
+		expiry_by_batch = _pos_dispense_expiry_by_batch(batch_nos)
+
+		results = []
+		for order in orders:
+			raw_pairs = items_by_order.get(order.name, [])
+			items = [
+				_pos_dispense_item_to_dict(row, dn_match, expiry_by_batch)
+				for row, dn_match in raw_pairs
+			]
+			entry = dict(order)
+			entry["items"] = items
+			entry["item_count"] = len(items)
+			entry["source"] = "pos"
+			entry["visit_type"] = _visit_type_from_reference(getattr(order, "custom_reference_type", None))
+			entry["delivery_note"] = None
+			dn_rows = dn_items_by_order.get(order.name) or []
+			if dn_rows:
+				entry["delivery_note"] = dn_rows[0].delivery_note
+			results.append(entry)
+
+		return results
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Error fetching POS dispensed medications")
+		frappe.throw(f"Failed to fetch POS dispensed medications: {str(e)}")
+
+
 def _subscription_plan_item_to_dict(row) -> dict:
 	return {
 		"name": row.name,

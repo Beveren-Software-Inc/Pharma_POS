@@ -324,13 +324,22 @@ export function resolveLegacyMedicationDisplayName(item: LegacyDispensedMedicati
   );
 }
 
+export function dispensedMedicationLineKey(
+  source: "legacy" | "pos",
+  txnName: string,
+  idx: number,
+  code: string
+): string {
+  return `${source}::${txnName}::${idx}::${code}`;
+}
+
 export function legacyMedicationLineKey(
   txnName: string,
   idx: number,
   item: LegacyDispensedMedicationItem
 ): string {
   const code = resolveLegacyMedicationItemCode(item) || item.name || String(idx);
-  return `legacy::${txnName}::${idx}::${code}`;
+  return dispensedMedicationLineKey("legacy", txnName, idx, code);
 }
 
 export interface LegacyDispensedTransaction {
@@ -373,6 +382,97 @@ export async function getPatientLegacyDispensedMedications(
     return data?.message || [];
   } catch (error) {
     console.error('Error fetching legacy dispensed medications:', error);
+    return [];
+  }
+}
+
+export interface PosDispensedMedicationItem {
+  name?: string;
+  idx?: number | null;
+  item_code?: string;
+  item_name?: string;
+  qty?: number | null;
+  uom?: string;
+  rate?: number | null;
+  amount?: number | null;
+  batch_no?: string;
+  expiry_date?: string;
+  dosage?: string;
+  dispensing_lot?: string;
+}
+
+export function resolvePosDispensedItemCode(item: PosDispensedMedicationItem): string {
+  return (item.item_code || "").trim();
+}
+
+export function resolvePosDispensedDisplayName(item: PosDispensedMedicationItem): string {
+  return item.item_name?.trim() || item.item_code?.trim() || "—";
+}
+
+export function posDispensedLineKey(
+  txnName: string,
+  idx: number,
+  item: PosDispensedMedicationItem
+): string {
+  const code = resolvePosDispensedItemCode(item) || item.name || String(idx);
+  return dispensedMedicationLineKey("pos", txnName, idx, code);
+}
+
+export function posDispensedItemToLegacyShape(
+  item: PosDispensedMedicationItem
+): LegacyDispensedMedicationItem {
+  return {
+    name: item.name,
+    sr_num: item.idx ?? null,
+    item: item.item_code,
+    item_name: item.item_name,
+    item_num: item.item_code,
+    show_qty: item.qty ?? null,
+    show_uom: item.uom,
+    show_rate: item.rate ?? null,
+    show_amt: item.amount ?? null,
+    item_expiry_date: item.expiry_date,
+    ais_batch_num: item.batch_no,
+  };
+}
+
+export interface PosDispensedTransaction {
+  name: string;
+  source?: "pos";
+  transaction_date?: string;
+  customer?: string;
+  customer_name?: string;
+  patient?: string;
+  grand_total?: number | null;
+  status?: string;
+  custom_remarks?: string;
+  custom_reference_type?: string;
+  custom_reference_name?: string;
+  set_warehouse?: string;
+  visit_type?: string | null;
+  delivery_note?: string | null;
+  item_count?: number;
+  items: PosDispensedMedicationItem[];
+}
+
+export async function getPatientPosDispensedMedications(
+  patient: string,
+  limit = 50
+): Promise<PosDispensedTransaction[]> {
+  try {
+    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_pos_dispensed_medications?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch POS dispensed medications');
+    }
+    return data?.message || [];
+  } catch (error) {
+    console.error('Error fetching POS dispensed medications:', error);
     return [];
   }
 }
