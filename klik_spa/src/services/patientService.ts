@@ -756,9 +756,35 @@ export async function getOpenPharmacyPatientVisits(
   }
 }
 
+export async function getPatientVisitDate(
+  doctype: string,
+  name: string
+): Promise<string | null> {
+  try {
+    const params = new URLSearchParams({ doctype, name });
+    const response = await fetch(
+      `/api/method/klik_pos.api.patient.get_patient_visit_date?${params.toString()}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) return null;
+    const message = data?.message;
+    const raw = typeof message === "object" ? message?.date : message;
+    const iso = String(raw || "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : null;
+  } catch (error) {
+    console.error("Error fetching patient visit date:", error);
+    return null;
+  }
+}
+
 export async function createPatientVisit(
   patient: string
-): Promise<{ doctype: string; name: string; docstatus?: number; visit_type?: string | null; cost_center?: string | null } | null> {
+): Promise<{ doctype: string; name: string; docstatus?: number; visit_type?: string | null; cost_center?: string | null; visit_date?: string | null } | null> {
   try {
     const csrfToken = window.csrf_token;
     const response = await fetch('/api/method/klik_pos.api.patient.create_patient_visit', {

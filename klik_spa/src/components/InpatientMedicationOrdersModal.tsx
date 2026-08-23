@@ -42,7 +42,7 @@ interface InpatientMedicationOrdersModalProps {
   onToggleSubscriptionItem?: (itemKey: string) => void;
   onAddSubscriptionItemsToCart?: (alternatives?: Record<string, string>) => void;
   onCreateVisit: () => void;
-  onSelectVisit?: (visit: { doctype: string; name: string; visit_type?: string | null }) => void;
+  onSelectVisit?: (visit: { doctype: string; name: string; visit_type?: string | null; visit_date?: string | null }) => void;
   /** Reload pending orders; pass true to include Unsigned prescriptions. */
   onReloadPendingOrders?: (includeUnsigned: boolean) => Promise<void>;
   creatingVisit?: boolean;
@@ -51,7 +51,7 @@ interface InpatientMedicationOrdersModalProps {
   isHospitalMode?: boolean;
   defaultUom?: string;
   /** Shown on Patient Visit tab after a successful create/select (persists while modal can reopen). */
-  lastCreatedVisit?: { doctype: string; name: string; visit_type?: string | null } | null;
+  lastCreatedVisit?: { doctype: string; name: string; visit_type?: string | null; visit_date?: string | null } | null;
   /** Incremented on each successful visit create/select — switches modal to Patient Visit tab. */
   patientVisitCreatedSignal?: number;
   patientHistory?: PatientHistorySummary | null;
@@ -2253,6 +2253,7 @@ export default function InpatientMedicationOrdersModal({
                                   doctype: visit.doctype || "Patient Visit",
                                   name: visit.name,
                                   visit_type: visit.visit_type || null,
+                                  visit_date: visitDate || null,
                                 })
                               }
                               className={`flex-shrink-0 px-3 py-2 text-xs font-bold rounded-lg border-2 transition-colors ${

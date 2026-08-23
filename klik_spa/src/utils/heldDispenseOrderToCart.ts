@@ -11,7 +11,8 @@ type HoldPayload = {
   item_discounts?: Record<string, DraftLineDiscount>;
   patient?: Patient | null;
   dispense_remarks?: string;
-  created_visit_ref?: { doctype: string; name: string; visit_type?: string | null } | null;
+  created_visit_ref?: { doctype: string; name: string; visit_type?: string | null; visit_date?: string | null } | null;
+  dispense_date?: string | null;
 };
 
 type DraftSalesOrderItem = {
@@ -190,6 +191,7 @@ export async function addHeldDispenseOrderToCart(salesOrderName: string): Promis
       lineDiscounts,
       dispenseRemarks: holdPayload.dispense_remarks || data.custom_remarks || "",
       createdVisitRef: holdPayload.created_visit_ref || null,
+      dispenseDate: holdPayload.dispense_date || null,
     });
 
     return true;

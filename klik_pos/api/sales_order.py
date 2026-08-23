@@ -1,7 +1,7 @@
 import json
 
 import frappe
-from frappe.utils import flt, nowdate
+from frappe.utils import flt, getdate, nowdate, nowtime
 
 from klik_pos.api.patient import resolve_patient_from_customer
 
@@ -449,10 +449,40 @@ def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_prof
 	if not cost_center:
 		cost_center = _resolve_pos_cost_center(pos_profile)
 	_apply_cost_center_to_delivery_note(dn, cost_center)
+	_apply_delivery_note_posting_date(dn, sales_order_name)
 
 	dn.insert(ignore_permissions=True)
 	dn.submit()
 	return dn.name
+
+
+def _resolve_dispense_date(data):
+	"""Return the date the dispense should be recorded on (custom or today)."""
+	raw = (
+		(data or {}).get("transaction_date")
+		or (data or {}).get("posting_date")
+		or (data or {}).get("dispense_date")
+	)
+	if not raw:
+		return getdate(nowdate())
+	try:
+		parsed = getdate(raw)
+	except Exception:
+		frappe.throw(frappe._("Invalid dispense date: {0}").format(raw))
+	if not parsed:
+		frappe.throw(frappe._("Invalid dispense date: {0}").format(raw))
+	return parsed
+
+
+def _apply_delivery_note_posting_date(dn, sales_order_name):
+	posting_date = frappe.db.get_value("Sales Order", sales_order_name, "transaction_date")
+	if not posting_date:
+		return
+	if hasattr(dn, "set_posting_time"):
+		dn.set_posting_time = 1
+	dn.posting_date = posting_date
+	if hasattr(dn, "posting_time"):
+		dn.posting_time = nowtime()
 
 
 def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
@@ -462,8 +492,9 @@ def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
 		frappe.throw("Customer is required")
 
 	doc.customer = customer
-	doc.transaction_date = nowdate()
-	doc.delivery_date = nowdate()
+	dispense_date = _resolve_dispense_date(data)
+	doc.transaction_date = dispense_date
+	doc.delivery_date = dispense_date
 
 	if getattr(pos_profile, "company", None):
 		doc.company = pos_profile.company
@@ -576,7 +607,7 @@ def _append_hospital_sales_order_items(doc, items, pos_profile, cost_center):
 			"item_code": item_code,
 			"qty": qty,
 			"rate": rate,
-			"delivery_date": nowdate(),
+			"delivery_date": getattr(doc, "delivery_date", None) or nowdate(),
 		}
 		if item.get("uom"):
 			row["uom"] = item.get("uom")

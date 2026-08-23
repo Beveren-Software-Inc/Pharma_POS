@@ -1236,6 +1236,58 @@ def get_open_pharmacy_patient_visits(
 		frappe.throw(f"Failed to fetch open pharmacy visits: {str(e)}")
 
 
+_VISIT_DATE_FIELDS = (
+	"encounter_date",
+	"visit_date",
+	"posting_date",
+	"admission_date",
+	"transaction_date",
+)
+
+
+def _iso_date(value):
+	if not value:
+		return None
+	try:
+		return str(frappe.utils.getdate(value))
+	except Exception:
+		text = str(value).strip()
+		return text[:10] if len(text) >= 10 else None
+
+
+def _document_visit_date(doctype=None, name=None, doc=None):
+	"""Best-effort visit/encounter date from a healthcare reference document."""
+	if doc is None:
+		if not doctype or not name or not frappe.db.exists(doctype, name):
+			return None
+		meta = frappe.get_meta(doctype)
+		fields = {df.fieldname for df in meta.fields}
+		fetch = [field for field in _VISIT_DATE_FIELDS if field in fields]
+		if fetch:
+			row = frappe.db.get_value(doctype, name, fetch, as_dict=True) or {}
+			for field in fetch:
+				parsed = _iso_date(row.get(field))
+				if parsed:
+					return parsed
+		return _iso_date(frappe.db.get_value(doctype, name, "creation"))
+
+	meta = frappe.get_meta(doc.doctype)
+	fields = {df.fieldname for df in meta.fields}
+	for field in _VISIT_DATE_FIELDS:
+		if field in fields:
+			parsed = _iso_date(getattr(doc, field, None))
+			if parsed:
+				return parsed
+	return _iso_date(getattr(doc, "creation", None))
+
+
+@frappe.whitelist()
+def get_patient_visit_date(doctype: str, name: str):
+	if not doctype or not name:
+		frappe.throw("Document type and name are required")
+	return {"success": True, "date": _document_visit_date(doctype, name)}
+
+
 @frappe.whitelist()
 def create_patient_visit(patient: str):
 	"""
@@ -1316,6 +1368,7 @@ def create_patient_visit(patient: str):
 			"visit_type": getattr(doc, "visit_type", None),
 			"cost_center": getattr(doc, "cost_center", None),
 			"docstatus": doc.docstatus,
+			"visit_date": _document_visit_date(doc=doc),
 		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error creating Patient Visit")
