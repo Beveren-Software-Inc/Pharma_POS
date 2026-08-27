@@ -1,7 +1,7 @@
 import json
 
 import frappe
-from frappe.utils import flt, nowdate
+from frappe.utils import flt, getdate, nowdate, nowtime
 
 from klik_pos.api.patient import resolve_patient_from_customer
 
@@ -42,6 +42,17 @@ def _normalize_medication_orders(data):
 			orders = [o.strip() for o in base_reference_name.split(",") if o and o.strip()]
 
 	return [o for o in orders if isinstance(o, str) and o.strip()]
+
+
+def _unique_order_names(names):
+	seen = set()
+	unique = []
+	for name in names or []:
+		value = (name or "").strip() if isinstance(name, str) else ""
+		if value and value not in seen:
+			seen.add(value)
+			unique.append(value)
+	return unique
 
 
 def _sales_order_item_meta():
@@ -105,6 +116,34 @@ def _apply_hospital_so_item_hold_fields(row, item):
 	)
 	if frequency and _sales_order_item_has_field("custom_prescription_frequency"):
 		row["custom_prescription_frequency"] = frequency
+
+	order_name = _resolve_medication_order_name(item)
+	if order_name:
+		for fieldname in ("custom_medication_order", "medication_order"):
+			if _sales_order_item_has_field(fieldname):
+				row[fieldname] = order_name
+				break
+
+	entry_name = (item.get("medication_order_entry") or item.get("medicationOrderEntry") or "").strip()
+	if entry_name:
+		for fieldname in ("custom_medication_order_entry", "medication_order_entry"):
+			if _sales_order_item_has_field(fieldname):
+				row[fieldname] = entry_name
+				break
+
+	original_drug = (item.get("original_drug") or item.get("originalDrug") or "").strip()
+	if original_drug:
+		for fieldname in ("custom_original_drug", "original_drug"):
+			if _sales_order_item_has_field(fieldname):
+				row[fieldname] = original_drug
+				break
+
+	alternative_item = _extract_alternative_item_code(item)
+	if alternative_item:
+		for fieldname in ("custom_alternative_medicine", "alternative_medicine", "alternative_drug"):
+			if _sales_order_item_has_field(fieldname):
+				row[fieldname] = alternative_item
+				break
 
 
 def _normalize_batch_nos(batch_nos):
@@ -177,6 +216,69 @@ def _extract_alternative_item_code(item):
 	return ""
 
 
+def _collect_medication_orders_from_payload(data):
+	"""Header medication_orders plus any Patient Medication Order names on cart lines."""
+	orders = list(_normalize_medication_orders(data) or [])
+	for item in data.get("items") or []:
+		if not isinstance(item, dict):
+			continue
+		name = _resolve_medication_order_name(item)
+		if name:
+			orders.append(name)
+	return _unique_order_names(orders)
+
+
+def _resolve_medication_order_entry_name(item, order_name):
+	"""Resolve the PMO child row, even when an alternative item was dispensed."""
+	entry_name = (item.get("medication_order_entry") or item.get("medicationOrderEntry") or "").strip()
+	if entry_name and frappe.db.exists("Inpatient Medication Order Entry", entry_name):
+		return entry_name
+	if not order_name:
+		return None
+
+	try:
+		child_meta = frappe.get_meta("Inpatient Medication Order Entry")
+	except Exception:
+		return None
+
+	drug_field = None
+	for candidate in ("drug", "item_code", "medication"):
+		if child_meta.has_field(candidate):
+			drug_field = candidate
+			break
+	if not drug_field:
+		return None
+
+	original_drug = (item.get("original_drug") or item.get("originalDrug") or "").strip()
+	dispensed_item = (item.get("id") or item.get("item_code") or "").strip()
+	alternative_item = _extract_alternative_item_code(item)
+
+	lookup_drug = original_drug
+	if not lookup_drug and not alternative_item:
+		lookup_drug = dispensed_item
+	if not lookup_drug:
+		return None
+
+	filters = {"parent": order_name, drug_field: lookup_drug}
+	if child_meta.has_field("is_completed"):
+		incomplete = frappe.get_all(
+			"Inpatient Medication Order Entry",
+			filters={**filters, "is_completed": 0},
+			pluck="name",
+			limit=1,
+		)
+		if incomplete:
+			return incomplete[0]
+
+	rows = frappe.get_all(
+		"Inpatient Medication Order Entry",
+		filters=filters,
+		pluck="name",
+		limit=1,
+	)
+	return rows[0] if rows else None
+
+
 def _build_medication_order_entry_updates(items):
 	"""Map PMO child row names to field updates for dispensed lines."""
 	if not items:
@@ -187,11 +289,13 @@ def _build_medication_order_entry_updates(items):
 	updates_by_order = {}
 
 	for item in items:
-		order_name = _resolve_medication_order_name(item)
-		entry_name = (item.get("medication_order_entry") or item.get("medicationOrderEntry") or "").strip()
-		if not order_name or not entry_name:
+		if not isinstance(item, dict):
 			continue
-		if not frappe.db.exists("Patient Medication Order", order_name):
+		order_name = _resolve_medication_order_name(item)
+		if not order_name or not frappe.db.exists("Patient Medication Order", order_name):
+			continue
+		entry_name = _resolve_medication_order_entry_name(item, order_name)
+		if not entry_name:
 			continue
 
 		payload = updates_by_order.setdefault(order_name, {}).setdefault(entry_name, {})
@@ -260,8 +364,38 @@ def _sync_patient_medication_order_progress(order_name):
 		)
 
 
-def _finalize_medication_orders_after_dispense(items, medication_orders):
-	"""Mark dispensed child rows complete and sync PMO completed_orders/status."""
+def _link_patient_medication_order_to_sales_order(order_name, sales_order_name):
+	"""Point the Patient Medication Order at the POS Sales Order that dispensed it."""
+	if not order_name or not sales_order_name:
+		return
+	if not frappe.db.exists("Patient Medication Order", order_name):
+		return
+
+	meta = frappe.get_meta("Patient Medication Order")
+	updates = {}
+	if meta.has_field("reference_doctype"):
+		updates["reference_doctype"] = "Sales Order"
+	if meta.has_field("reference_document_name"):
+		updates["reference_document_name"] = sales_order_name
+	if not updates:
+		return
+
+	try:
+		frappe.db.set_value(
+			"Patient Medication Order",
+			order_name,
+			updates,
+			update_modified=True,
+		)
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(),
+			f"Failed to link Patient Medication Order {order_name} to Sales Order {sales_order_name}",
+		)
+
+
+def _finalize_medication_orders_after_dispense(items, medication_orders, sales_order_name=None):
+	"""Mark dispensed child rows complete, store alternative medicine, and sync PMO status."""
 	updates_by_order = _build_medication_order_entry_updates(items)
 
 	for order_name, entry_map in updates_by_order.items():
@@ -279,6 +413,8 @@ def _finalize_medication_orders_after_dispense(items, medication_orders):
 
 	for order_name in orders_to_sync:
 		_sync_patient_medication_order_progress(order_name)
+		if sales_order_name:
+			_link_patient_medication_order_to_sales_order(order_name, sales_order_name)
 
 
 def _derive_reference_from_medication_orders(reference_type, reference_name, medication_orders):
@@ -449,10 +585,40 @@ def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_prof
 	if not cost_center:
 		cost_center = _resolve_pos_cost_center(pos_profile)
 	_apply_cost_center_to_delivery_note(dn, cost_center)
+	_apply_delivery_note_posting_date(dn, sales_order_name)
 
 	dn.insert(ignore_permissions=True)
 	dn.submit()
 	return dn.name
+
+
+def _resolve_dispense_date(data):
+	"""Return the date the dispense should be recorded on (custom or today)."""
+	raw = (
+		(data or {}).get("transaction_date")
+		or (data or {}).get("posting_date")
+		or (data or {}).get("dispense_date")
+	)
+	if not raw:
+		return getdate(nowdate())
+	try:
+		parsed = getdate(raw)
+	except Exception:
+		frappe.throw(frappe._("Invalid dispense date: {0}").format(raw))
+	if not parsed:
+		frappe.throw(frappe._("Invalid dispense date: {0}").format(raw))
+	return parsed
+
+
+def _apply_delivery_note_posting_date(dn, sales_order_name):
+	posting_date = frappe.db.get_value("Sales Order", sales_order_name, "transaction_date")
+	if not posting_date:
+		return
+	if hasattr(dn, "set_posting_time"):
+		dn.set_posting_time = 1
+	dn.posting_date = posting_date
+	if hasattr(dn, "posting_time"):
+		dn.posting_time = nowtime()
 
 
 def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
@@ -462,8 +628,9 @@ def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
 		frappe.throw("Customer is required")
 
 	doc.customer = customer
-	doc.transaction_date = nowdate()
-	doc.delivery_date = nowdate()
+	dispense_date = _resolve_dispense_date(data)
+	doc.transaction_date = dispense_date
+	doc.delivery_date = dispense_date
 
 	if getattr(pos_profile, "company", None):
 		doc.company = pos_profile.company
@@ -476,7 +643,11 @@ def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
 
 	base_reference = data.get("base_reference") or "Patient Medication Order"
 	base_reference_name = data.get("base_reference_name")
-	medication_orders = _normalize_medication_orders(data)
+	medication_orders = _collect_medication_orders_from_payload(data)
+	if medication_orders:
+		base_reference = base_reference or "Patient Medication Order"
+		if not (base_reference_name or "").strip():
+			base_reference_name = ", ".join(medication_orders)
 	reference_type = data.get("reference_type")
 	reference_name = data.get("reference_name")
 	reference_type, reference_name = _derive_reference_from_medication_orders(
@@ -576,7 +747,7 @@ def _append_hospital_sales_order_items(doc, items, pos_profile, cost_center):
 			"item_code": item_code,
 			"qty": qty,
 			"rate": rate,
-			"delivery_date": nowdate(),
+			"delivery_date": getattr(doc, "delivery_date", None) or nowdate(),
 		}
 		if item.get("uom"):
 			row["uom"] = item.get("uom")
@@ -703,7 +874,9 @@ def create_and_submit_hospital_sales_order(data):
 			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(
 				doc.name, pos_profile, cost_center=cost_center
 			)
-			_finalize_medication_orders_after_dispense(items, medication_orders)
+			_finalize_medication_orders_after_dispense(
+				items, medication_orders, sales_order_name=doc.name
+			)
 		except Exception:
 			frappe.db.rollback(save_point=savepoint)
 			raise
@@ -1238,17 +1411,29 @@ def get_dispense_order_details(sales_order_name):
 		return {"success": False, "error": str(e)}
 
 
+def _apply_date_range_filter(filters, field, from_date=None, to_date=None):
+	from_val = str(from_date or "").strip()[:10]
+	to_val = str(to_date or "").strip()[:10]
+	if from_val and to_val:
+		filters[field] = ["between", [from_val, to_val]]
+	elif from_val:
+		filters[field] = [">=", from_val]
+	elif to_val:
+		filters[field] = ["<=", to_val]
+
+
 @frappe.whitelist()
-def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
+def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None, from_date=None, to_date=None):
 	"""List POS hospital dispense Sales Orders (submitted and held drafts)."""
 	try:
 		if not frappe.db.has_column("Sales Order", "custom_is_pos"):
 			return {"success": True, "data": [], "total_count": 0}
 
-		limit = int(limit or 100)
+		limit = min(max(int(limit or 100), 1), 500)
 		start = int(start or 0)
 
 		filters = {"custom_is_pos": 1, "docstatus": ["in", [0, 1]]}
+		_apply_date_range_filter(filters, "transaction_date", from_date, to_date)
 
 		if cashier_name and cashier_name != "all":
 			from klik_pos.api.sales_invoice import _get_user_ids_by_full_name

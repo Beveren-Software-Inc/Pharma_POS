@@ -394,8 +394,10 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
 
   if (typeof result === 'object' && result.success && result.item_code) {
     const itemCode = result.item_code
-    const batchId  = result.gs1?.lotNumber
-      ?? result.batch_no
+    // Prefer the server-resolved item-unique batch (e.g. `065J045_TRN-008877` when
+    // the same GS1 lot is shared across items) over the raw GS1 lot (`065J045`).
+    const batchId  = result.batch_no
+      ?? result.gs1?.lotNumber
       ?? (result.matched_type === 'batch' ? result.matched_value : undefined)
     const serialNo = result.gs1?.serialNumber
       ?? (result.matched_type === 'serial' || result.matched_type === 'dispensing_lot'

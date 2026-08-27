@@ -955,6 +955,11 @@ export default function PaymentDialog({
           dosage: discount?.dosage ?? item.dosage ?? null,
           prescriptionDosage: discount?.prescriptionDosage ?? item.prescriptionDosage ?? null,
           medicationOrder: medOrder || undefined,
+          medication_order: medOrder || undefined,
+          medication_order_entry: (item as { medication_order_entry?: string }).medication_order_entry || undefined,
+          original_drug: (item as { original_drug?: string }).original_drug || undefined,
+          alternative_drug: (item as { alternative_drug?: string }).alternative_drug || undefined,
+          alternative_medicine: (item as { alternative_drug?: string }).alternative_drug || undefined,
           item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
           additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
         };
@@ -1900,8 +1905,13 @@ const handleAutoFillPayment = (methodId: string) => {
         cartItems.forEach((item) => {
           const lineKey = getLineKeyHold(item);
           const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
-          const orderName = (discount as { medicationOrder?: string } | undefined)?.medicationOrder;
+          const orderName = (discount as { medicationOrder?: string } | undefined)?.medicationOrder
+            ?? (item as { medicationOrder?: string }).medicationOrder;
           if (orderName) orders.add(orderName);
+          const orderNames = (item as { medicationOrders?: string[] }).medicationOrders;
+          if (Array.isArray(orderNames)) {
+            orderNames.forEach((o) => o && orders.add(o));
+          }
         });
         return Array.from(orders);
       })(),

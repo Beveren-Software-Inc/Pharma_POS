@@ -2,6 +2,10 @@ export interface BatchStockOption {
   batch_id: string;
   qty: number;
   expiry_date?: string | null;
+  /** Original manufacturing lot (custom_original_batch_id). When the same GS1 lot is
+   *  reused across different items, beveren_health creates an item-unique batch with
+   *  batch_id = `ORIGINAL_ITEMCODE` and original_batch_id = the scanned lot. */
+  original_batch_id?: string | null;
 }
 
 const batchListCache = new Map<string, BatchStockOption[]>();

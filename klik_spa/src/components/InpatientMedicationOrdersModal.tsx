@@ -2,8 +2,8 @@
 
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package, CalendarDays, MessageCircle } from "lucide-react";
-import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, SubscriptionMedicationPlan, SubscriptionMedicationPlanItem, OpenPharmacyPatientVisit } from "../services/patientService";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package, CalendarDays, MessageCircle, FileSpreadsheet } from "lucide-react";
+import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, PosDispensedTransaction, SubscriptionMedicationPlan, SubscriptionMedicationPlanItem, OpenPharmacyPatientVisit } from "../services/patientService";
 import {
   searchPosStockItemsForAlternative,
   getPrintFormatsForDoctype,
@@ -12,15 +12,25 @@ import {
   resolveLegacyMedicationItemCode,
   resolveLegacyMedicationDisplayName,
   legacyMedicationLineKey,
+  posDispensedLineKey,
+  posDispensedItemToLegacyShape,
   resolveSubscriptionItemCode,
   resolveSubscriptionItemDisplayName,
   subscriptionMedicationLineKey,
   getOpenPharmacyPatientVisits,
+  getPatientLegacyDispensedMedications,
+  getPatientPosDispensedMedications,
 } from "../services/patientService";
 import { toast } from "react-toastify";
 import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
 import MedicationOrderDischargedBadge from "./MedicationOrderDischargedBadge";
 import SendSubscriptionMedicationWhatsAppModal from "./SendSubscriptionMedicationWhatsAppModal";
+import { usePOSDetails } from "../hooks/usePOSProfile";
+import {
+  exportDispenseHistoryToCSV,
+  exportDispenseHistoryToPDF,
+  patientDispensesToReportLines,
+} from "../utils/exportDispenseHistory";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -28,6 +38,7 @@ interface InpatientMedicationOrdersModalProps {
   pendingOrders: InpatientMedicationOrder[];
   historyOrders: InpatientMedicationOrder[];
   legacyDispensedOrders?: LegacyDispensedTransaction[];
+  posDispensedOrders?: PosDispensedTransaction[];
   subscriptionPlans?: SubscriptionMedicationPlan[];
   selectedOrders: Set<string>;
   onToggleOrder: (orderName: string) => void;
@@ -42,18 +53,41 @@ interface InpatientMedicationOrdersModalProps {
   onToggleSubscriptionItem?: (itemKey: string) => void;
   onAddSubscriptionItemsToCart?: (alternatives?: Record<string, string>) => void;
   onCreateVisit: () => void;
-  onSelectVisit?: (visit: { doctype: string; name: string; visit_type?: string | null }) => void;
+  onSelectVisit?: (visit: { doctype: string; name: string; visit_type?: string | null; visit_date?: string | null }) => void;
+  /** Reload pending orders; pass true to include Unsigned prescriptions. */
+  onReloadPendingOrders?: (includeUnsigned: boolean) => Promise<void>;
   creatingVisit?: boolean;
   patientName?: string;
   patientId?: string;
   isHospitalMode?: boolean;
   defaultUom?: string;
   /** Shown on Patient Visit tab after a successful create/select (persists while modal can reopen). */
-  lastCreatedVisit?: { doctype: string; name: string; visit_type?: string | null } | null;
+  lastCreatedVisit?: { doctype: string; name: string; visit_type?: string | null; visit_date?: string | null } | null;
   /** Incremented on each successful visit create/select — switches modal to Patient Visit tab. */
   patientVisitCreatedSignal?: number;
   patientHistory?: PatientHistorySummary | null;
   productAvailability?: Record<string, number>;
+}
+
+function localDateISO(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function defaultClosedVisitRange(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 7);
+  return { from: localDateISO(from), to: localDateISO(to) };
+}
+
+function defaultExportRange(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 30);
+  return { from: localDateISO(from), to: localDateISO(to) };
 }
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -166,6 +200,11 @@ function medicationLineLabel(item: ItemRow): string {
   return resolveMedicationDisplayName(item);
 }
 
+const MED_ITEM_NAME_CELL =
+  "px-3 py-2 align-top min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]";
+const MED_ALT_CELL =
+  "px-2 py-2 w-[10rem] min-w-[10rem] max-w-[10rem] overflow-hidden align-top sticky right-0 bg-inherit";
+
 function MedicationDrugCell({ item }: { item: ItemRow }) {
   const label = medicationLineLabel(item);
   const details = useMemo(
@@ -242,7 +281,7 @@ function MedicationDrugCell({ item }: { item: ItemRow }) {
   }, [hovered, updatePosition]);
 
   if (!details.length) {
-    return <span>{label}</span>;
+    return <span className="break-words [overflow-wrap:anywhere]">{label}</span>;
   }
 
   const tooltip =
@@ -286,7 +325,7 @@ function MedicationDrugCell({ item }: { item: ItemRow }) {
           setHovered(false);
           setCoords(null);
         }}
-        className="cursor-help underline decoration-dotted decoration-gray-300 dark:decoration-gray-600 underline-offset-2"
+        className="cursor-help underline decoration-dotted decoration-gray-300 dark:decoration-gray-600 underline-offset-2 break-words [overflow-wrap:anywhere]"
       >
         {label}
       </span>
@@ -571,20 +610,20 @@ function ItemsTable({
   const isPrn = (v: ItemRow["is_prn"]) => v === 1 || v === true || v === "1";
 
   return (
-    <div className={`rounded-lg border border-gray-200 dark:border-gray-700 text-xs ${showDetailsOnHover ? "overflow-visible" : "overflow-hidden"}`}>
-      <table className="w-full">
+    <div className="rounded-lg border border-gray-200 dark:border-gray-700 text-xs overflow-x-auto">
+      <table className="w-full table-fixed">
         <thead>
           <tr className="bg-gray-50 dark:bg-gray-800/70 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
             {selectable && <th className="px-3 py-2 w-8" />}
-            <th className="px-3 py-2 text-left">Drug</th>
-            <th className="px-3 py-2 text-left">Dosage</th>
-            <th className="px-3 py-2 text-left">Qty</th>
-            <th className="px-3 py-2 text-left">Frequency</th>
-            <th className="px-3 py-2 text-left">Type</th>
-            <th className="px-3 py-2 text-center">PRN</th>
-            {productAvailability && <th className="px-3 py-2 text-left">Stock</th>}
+            <th className="px-3 py-2 text-left w-[32%]">Drug</th>
+            <th className="px-3 py-2 text-left w-[12%]">Dosage</th>
+            <th className="px-3 py-2 text-left w-[10%]">Qty</th>
+            <th className="px-3 py-2 text-left w-[14%]">Frequency</th>
+            <th className="px-3 py-2 text-left w-[12%]">Type</th>
+            <th className="px-3 py-2 text-center w-12">PRN</th>
+            {productAvailability && <th className="px-3 py-2 text-left w-14">Stock</th>}
             {onAlternativeChange && (
-              <th className="px-2 py-2 text-left w-[160px] min-w-[160px] max-w-[160px]">Alt. Drug</th>
+              <th className={`${MED_ALT_CELL} text-left font-bold`}>Alt. Drug</th>
             )}
            </tr>
         </thead>
@@ -619,19 +658,19 @@ function ItemsTable({
                     />
                    </td>
                 )}
-                <td className="px-3 py-2 font-semibold text-gray-800 dark:text-gray-200 whitespace-nowrap">
+                <td className={`${MED_ITEM_NAME_CELL} font-semibold text-gray-800 dark:text-gray-200`}>
                   {showDetailsOnHover ? <MedicationDrugCell item={item} /> : medicationLineLabel(item)}
                  </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.dosage || "—"}
                  </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap align-top">
                   {formatMedicationQty(item)}
                  </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.patient_frequency || "—"}
                  </td>
-                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.medication_type || "—"}
                  </td>
                 <td className="px-3 py-2 text-center">
@@ -647,7 +686,7 @@ function ItemsTable({
                 )}
                 {onAlternativeChange && (
                   <td
-                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    className={MED_ALT_CELL}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <AlternativeDrugSelect
@@ -715,6 +754,7 @@ function LegacyItemsTable({
   alternativeDrugs,
   alternativeDrugLabels,
   onAlternativeChange,
+  lineKeyFn,
 }: {
   items: LegacyDispensedMedicationItem[];
   txnName: string;
@@ -725,24 +765,25 @@ function LegacyItemsTable({
   alternativeDrugs?: Record<string, string>;
   alternativeDrugLabels?: Record<string, string>;
   onAlternativeChange?: (key: string, value: string, itemName?: string) => void;
+  lineKeyFn?: (txnName: string, idx: number, item: LegacyDispensedMedicationItem) => string;
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
-      <table className="min-w-full text-sm">
+      <table className="w-full table-fixed text-sm">
         <thead className="bg-slate-50 dark:bg-slate-800/80 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
           <tr>
             {selectable && <th className="px-3 py-2 w-8" />}
-            <th className="px-3 py-2 text-left font-semibold">#</th>
-            <th className="px-3 py-2 text-left font-semibold">Item</th>
-            <th className="px-3 py-2 text-right font-semibold">Qty</th>
-            <th className="px-3 py-2 text-left font-semibold">UOM</th>
-            <th className="px-3 py-2 text-right font-semibold">Rate</th>
-            <th className="px-3 py-2 text-right font-semibold">Amount</th>
-            <th className="px-3 py-2 text-left font-semibold">Batch</th>
-            <th className="px-3 py-2 text-left font-semibold">Expiry</th>
-            {productAvailability && <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">Stock</th>}
+            <th className="px-3 py-2 text-left font-semibold w-10">#</th>
+            <th className="px-3 py-2 text-left font-semibold w-[28%]">Item</th>
+            <th className="px-3 py-2 text-right font-semibold w-14">Qty</th>
+            <th className="px-3 py-2 text-left font-semibold w-14">UOM</th>
+            <th className="px-3 py-2 text-right font-semibold w-16">Rate</th>
+            <th className="px-3 py-2 text-right font-semibold w-16">Amount</th>
+            <th className="px-3 py-2 text-left font-semibold w-[12%]">Batch</th>
+            <th className="px-3 py-2 text-left font-semibold w-20">Expiry</th>
+            {productAvailability && <th className="px-3 py-2 text-left font-semibold whitespace-nowrap w-14">Stock</th>}
             {onAlternativeChange && (
-              <th className="px-2 py-2 text-left font-semibold w-[160px] min-w-[160px] max-w-[160px]">
+              <th className={`${MED_ALT_CELL} text-left font-semibold`}>
                 Alt. Drug
               </th>
             )}
@@ -750,7 +791,9 @@ function LegacyItemsTable({
         </thead>
         <tbody className="divide-y divide-slate-100 dark:divide-slate-700 bg-white dark:bg-gray-900/40">
           {items.map((item, idx) => {
-            const itemKey = legacyMedicationLineKey(txnName, idx, item);
+            const itemKey = lineKeyFn
+              ? lineKeyFn(txnName, idx, item)
+              : legacyMedicationLineKey(txnName, idx, item);
             const lineCode = resolveLegacyMedicationItemCode(item);
             const altCode = alternativeDrugs?.[itemKey]?.trim() || "";
             const checked = selectedKeys?.has(itemKey) ?? false;
@@ -785,12 +828,12 @@ function LegacyItemsTable({
                   </td>
                 )}
                 <td className="px-3 py-2 text-slate-500 tabular-nums">{item.sr_num ?? idx + 1}</td>
-                <td className="px-3 py-2">
-                  <div className="font-medium text-slate-900 dark:text-white">
+                <td className={MED_ITEM_NAME_CELL}>
+                  <div className="font-medium text-slate-900 dark:text-white break-words [overflow-wrap:anywhere]">
                     {resolveLegacyMedicationDisplayName(item)}
                   </div>
                   {lineCode ? (
-                    <div className="text-xs text-slate-400 font-mono mt-0.5">{lineCode}</div>
+                    <div className="text-xs text-slate-400 font-mono mt-0.5 break-all">{lineCode}</div>
                   ) : null}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
@@ -822,7 +865,7 @@ function LegacyItemsTable({
                 )}
                 {onAlternativeChange && (
                   <td
-                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    className={MED_ALT_CELL}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <AlternativeDrugSelect
@@ -867,18 +910,18 @@ function SubscriptionItemsTable({
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-teal-200 dark:border-teal-800/50">
-      <table className="min-w-full text-sm">
+      <table className="w-full table-fixed text-sm">
         <thead className="bg-teal-50 dark:bg-teal-900/30 text-xs uppercase tracking-wide text-teal-700/80 dark:text-teal-300/80">
           <tr>
             {selectable && <th className="px-3 py-2 w-8" />}
-            <th className="px-3 py-2 text-left font-semibold">Drug</th>
-            <th className="px-3 py-2 text-left font-semibold">Dosage</th>
-            <th className="px-3 py-2 text-right font-semibold">Qty / cycle</th>
-            <th className="px-3 py-2 text-left font-semibold">Frequency</th>
-            <th className="px-3 py-2 text-center font-semibold">Active</th>
-            {productAvailability && <th className="px-3 py-2 text-left font-semibold">Stock</th>}
+            <th className="px-3 py-2 text-left font-semibold w-[32%]">Drug</th>
+            <th className="px-3 py-2 text-left font-semibold w-[14%]">Dosage</th>
+            <th className="px-3 py-2 text-right font-semibold w-20">Qty / cycle</th>
+            <th className="px-3 py-2 text-left font-semibold w-[16%]">Frequency</th>
+            <th className="px-3 py-2 text-center font-semibold w-14">Active</th>
+            {productAvailability && <th className="px-3 py-2 text-left font-semibold w-14">Stock</th>}
             {onAlternativeChange && (
-              <th className="px-2 py-2 text-left font-semibold w-[160px] min-w-[160px] max-w-[160px]">
+              <th className={`${MED_ALT_CELL} text-left font-semibold`}>
                 Alt. Drug
               </th>
             )}
@@ -923,21 +966,21 @@ function SubscriptionItemsTable({
                     />
                   </td>
                 )}
-                <td className="px-3 py-2">
-                  <div className="font-medium text-slate-900 dark:text-white">
+                <td className={MED_ITEM_NAME_CELL}>
+                  <div className="font-medium text-slate-900 dark:text-white break-words [overflow-wrap:anywhere]">
                     {resolveSubscriptionItemDisplayName(item)}
                   </div>
                   {lineCode ? (
-                    <div className="text-xs text-slate-400 font-mono mt-0.5">{lineCode}</div>
+                    <div className="text-xs text-slate-400 font-mono mt-0.5 break-all">{lineCode}</div>
                   ) : null}
                 </td>
-                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.dosage != null && item.dosage !== "" ? String(item.dosage) : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-slate-800 dark:text-slate-200">
                   {item.qty_per_cycle ?? 1}
                 </td>
-                <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                <td className="px-3 py-2 text-slate-600 dark:text-slate-300 whitespace-normal break-words [overflow-wrap:anywhere] align-top">
                   {item.patient_frequency || "—"}
                 </td>
                 <td className="px-3 py-2 text-center">
@@ -954,7 +997,7 @@ function SubscriptionItemsTable({
                 )}
                 {onAlternativeChange && (
                   <td
-                    className="px-2 py-2 w-[160px] min-w-[160px] max-w-[160px] overflow-hidden align-middle"
+                    className={MED_ALT_CELL}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <AlternativeDrugSelect
@@ -982,6 +1025,7 @@ export default function InpatientMedicationOrdersModal({
   pendingOrders,
   historyOrders,
   legacyDispensedOrders = [],
+  posDispensedOrders = [],
   subscriptionPlans = [],
   selectedOrders,
   onToggleOrder,
@@ -997,6 +1041,7 @@ export default function InpatientMedicationOrdersModal({
   onAddSubscriptionItemsToCart,
   onCreateVisit,
   onSelectVisit,
+  onReloadPendingOrders,
   creatingVisit = false,
   patientName,
   patientId,
@@ -1027,23 +1072,144 @@ export default function InpatientMedicationOrdersModal({
   const [medicationOrderPrintFormats, setMedicationOrderPrintFormats] = useState<string[]>(["Standard"]);
   const [openPharmacyVisits, setOpenPharmacyVisits] = useState<OpenPharmacyPatientVisit[]>([]);
   const [loadingOpenVisits, setLoadingOpenVisits] = useState(false);
+  const [includeClosedVisits, setIncludeClosedVisits] = useState(false);
+  const [closedVisitFrom, setClosedVisitFrom] = useState(() => defaultClosedVisitRange().from);
+  const [closedVisitTo, setClosedVisitTo] = useState(() => defaultClosedVisitRange().to);
+  const [showClosedVisitRangeModal, setShowClosedVisitRangeModal] = useState(false);
+  const [includeUnsignedPending, setIncludeUnsignedPending] = useState(false);
+  const [loadingUnsignedPending, setLoadingUnsignedPending] = useState(false);
+  const [showDispenseExportModal, setShowDispenseExportModal] = useState(false);
+  const [dispenseExportFormat, setDispenseExportFormat] = useState<"pdf" | "excel">("pdf");
+  const [dispenseExportFrom, setDispenseExportFrom] = useState(() => defaultExportRange().from);
+  const [dispenseExportTo, setDispenseExportTo] = useState(() => defaultExportRange().to);
+  const [exportingDispenseHistory, setExportingDispenseHistory] = useState(false);
   const printButtonRef = useRef<HTMLButtonElement | null>(null);
-
+  const { posDetails } = usePOSDetails();
   const MEDICATION_ORDER_DOCTYPE = "Patient Medication Order";
 
-  const loadOpenPharmacyVisits = useCallback(async () => {
+  const openDispenseExportModal = (format: "pdf" | "excel") => {
+    if (!patientId) {
+      toast.error("Select a patient first.");
+      return;
+    }
+    const range = defaultExportRange();
+    setDispenseExportFrom(range.from);
+    setDispenseExportTo(range.to);
+    setDispenseExportFormat(format);
+    setShowDispenseExportModal(true);
+  };
+
+  const confirmDispenseHistoryExport = async () => {
+    if (!patientId) {
+      toast.error("Select a patient first.");
+      return;
+    }
+    let from = dispenseExportFrom;
+    let to = dispenseExportTo;
+    if (!from || !to) {
+      toast.error("Choose both from and to dates.");
+      return;
+    }
+    if (from > to) {
+      [from, to] = [to, from];
+      setDispenseExportFrom(from);
+      setDispenseExportTo(to);
+    }
+
+    setExportingDispenseHistory(true);
+    try {
+      const [legacy, pos] = await Promise.all([
+        getPatientLegacyDispensedMedications(patientId, 500, { fromDate: from, toDate: to }),
+        getPatientPosDispensedMedications(patientId, 500, { fromDate: from, toDate: to }),
+      ]);
+      const lines = patientDispensesToReportLines({ pos, legacy });
+      if (!lines.length) {
+        toast.error("No dispensed medicine found in this date range.");
+        return;
+      }
+      if (dispenseExportFormat === "excel") {
+        exportDispenseHistoryToCSV(lines, `dispensed_history_${patientId}`);
+        toast.success(`Exported ${lines.length} line(s) to Excel`);
+      } else {
+        await exportDispenseHistoryToPDF(
+          lines,
+          {
+            title: "Dispensed Medicine Report",
+            patientName: patientName || patientId,
+            fromDate: from,
+            toDate: to,
+          },
+        posDetails && typeof posDetails.cost_center === "string" ? posDetails.cost_center : undefined
+        );
+        toast.success("PDF report ready to print");
+      }
+      setShowDispenseExportModal(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to export dispensed history");
+    } finally {
+      setExportingDispenseHistory(false);
+    }
+  };
+
+  const loadOpenPharmacyVisits = useCallback(async (opts?: {
+    includeClosed?: boolean;
+    fromDate?: string;
+    toDate?: string;
+  }) => {
     if (!patientId || !isHospitalMode) {
       setOpenPharmacyVisits([]);
       return;
     }
     setLoadingOpenVisits(true);
     try {
-      const visits = await getOpenPharmacyPatientVisits(patientId);
+      const includeClosed = opts?.includeClosed ?? includeClosedVisits;
+      const visits = await getOpenPharmacyPatientVisits(patientId, {
+        limit: includeClosed ? 50 : 20,
+        includeClosed,
+        fromDate: includeClosed ? (opts?.fromDate ?? closedVisitFrom) : undefined,
+        toDate: includeClosed ? (opts?.toDate ?? closedVisitTo) : undefined,
+      });
       setOpenPharmacyVisits(visits);
     } finally {
       setLoadingOpenVisits(false);
     }
-  }, [patientId, isHospitalMode]);
+  }, [patientId, isHospitalMode, includeClosedVisits, closedVisitFrom, closedVisitTo]);
+
+  const handleToggleUnsignedPending = async () => {
+    if (!onReloadPendingOrders) return;
+    const next = !includeUnsignedPending;
+    setLoadingUnsignedPending(true);
+    try {
+      await onReloadPendingOrders(next);
+      setIncludeUnsignedPending(next);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to reload pending orders");
+    } finally {
+      setLoadingUnsignedPending(false);
+    }
+  };
+
+  const applyClosedVisitRange = async () => {
+    let from = closedVisitFrom;
+    let to = closedVisitTo;
+    if (from && to && from > to) {
+      [from, to] = [to, from];
+      setClosedVisitFrom(from);
+      setClosedVisitTo(to);
+    }
+    setIncludeClosedVisits(true);
+    setShowClosedVisitRangeModal(false);
+    await loadOpenPharmacyVisits({ includeClosed: true, fromDate: from, toDate: to });
+  };
+
+  const clearClosedVisitFilter = async () => {
+    setIncludeClosedVisits(false);
+    const range = defaultClosedVisitRange();
+    setClosedVisitFrom(range.from);
+    setClosedVisitTo(range.to);
+    setShowClosedVisitRangeModal(false);
+    await loadOpenPharmacyVisits({ includeClosed: false });
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -1064,19 +1230,36 @@ export default function InpatientMedicationOrdersModal({
       setSubscriptionAlternativeDrugs({});
       setSubscriptionAlternativeDrugLabels({});
       setOpenPharmacyVisits([]);
+      setIncludeClosedVisits(false);
+      const range = defaultClosedVisitRange();
+      setClosedVisitFrom(range.from);
+      setClosedVisitTo(range.to);
+      setShowClosedVisitRangeModal(false);
+      setIncludeUnsignedPending(false);
+      setLoadingUnsignedPending(false);
+      setShowDispenseExportModal(false);
+      setExportingDispenseHistory(false);
+      const exportRange = defaultExportRange();
+      setDispenseExportFrom(exportRange.from);
+      setDispenseExportTo(exportRange.to);
     }
   }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen || !isHospitalMode || !patientId) return;
-    void loadOpenPharmacyVisits();
-  }, [isOpen, isHospitalMode, patientId, loadOpenPharmacyVisits, patientVisitCreatedSignal]);
+    void loadOpenPharmacyVisits({ includeClosed: includeClosedVisits });
+    // Intentionally only re-run when patient/modal/visit-create signal changes — not on every filter tweak.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, isHospitalMode, patientId, patientVisitCreatedSignal]);
 
-  // Legacy transactions open by default (each has a child table).
+  // Legacy + POS dispenses open by default.
   useEffect(() => {
     if (!isOpen) return;
-    setExpandedLegacyOrders(new Set(legacyDispensedOrders.map((t) => t.name)));
-  }, [isOpen, legacyDispensedOrders]);
+    setExpandedLegacyOrders(new Set([
+      ...legacyDispensedOrders.map((t) => `legacy::${t.name}`),
+      ...posDispensedOrders.map((t) => `pos::${t.name}`),
+    ]));
+  }, [isOpen, legacyDispensedOrders, posDispensedOrders]);
 
   // Prescription history orders open by default so items (with checkboxes / alt) are visible.
   useEffect(() => {
@@ -1106,6 +1289,31 @@ export default function InpatientMedicationOrdersModal({
       setMedicationOrderPrintFormats(formats.length ? formats : ["Standard"]);
     });
   }, [isOpen]);
+
+  const dispensedHistory = useMemo(() => {
+    type CombinedRow =
+      | { source: "legacy"; key: string; date: string; txn: LegacyDispensedTransaction }
+      | { source: "pos"; key: string; date: string; txn: PosDispensedTransaction };
+    const rows: CombinedRow[] = [];
+    for (const txn of legacyDispensedOrders) {
+      rows.push({
+        source: "legacy",
+        key: `legacy::${txn.name}`,
+        date: String(txn.trans_date || txn.date_created || ""),
+        txn,
+      });
+    }
+    for (const txn of posDispensedOrders) {
+      rows.push({
+        source: "pos",
+        key: `pos::${txn.name}`,
+        date: String(txn.transaction_date || ""),
+        txn,
+      });
+    }
+    rows.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return rows;
+  }, [legacyDispensedOrders, posDispensedOrders]);
 
   const openDocPrint = (doctype: string, name: string, format = "Standard") => {
     const params = new URLSearchParams();
@@ -1176,7 +1384,7 @@ export default function InpatientMedicationOrdersModal({
     { id: "visit" as const, label: "Patient Visit", count: null, icon: UserPlus },
     { id: "history" as const, label: "Prescription History", count: historyOrders.length, icon: Clock },
     { id: "patient_history" as const, label: "Patient History", count: null, icon: History },
-    { id: "legacy_dispensed" as const, label: "Legacy Dispensed Medicine", count: legacyDispensedOrders.length, icon: Package },
+    { id: "legacy_dispensed" as const, label: "Dispensed Medicine", count: dispensedHistory.length, icon: Package },
     { id: "monthly_medication" as const, label: "Monthly Medication", count: subscriptionPlans.length, icon: CalendarDays },
   ];
 
@@ -1199,49 +1407,119 @@ export default function InpatientMedicationOrdersModal({
               )}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/60 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {isHospitalMode && activeTab === "legacy_dispensed" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => openDispenseExportModal("pdf")}
+                  className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-xs font-semibold bg-beveren-600 text-white hover:bg-beveren-700 transition-colors"
+                  title="Print PDF report"
+                >
+                  <FileText size={14} />
+                  PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openDispenseExportModal("excel")}
+                  className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                  title="Export Excel"
+                >
+                  <FileSpreadsheet size={14} />
+                  Excel
+                </button>
+              </>
+            )}
+            <button
+              onClick={onClose}
+              className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/60 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Tab Bar */}
-        {isHospitalMode && (
+        {isHospitalMode ? (
           <div className="px-8 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-700/60">
-            <div className="flex items-stretch">
-              {tabs.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                return (
+            <div className="flex items-stretch justify-between gap-3">
+              <div className="flex items-stretch min-w-0 overflow-x-auto">
+                {tabs.map((tab) => {
+                  const Icon = tab.icon;
+                  const isActive = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`relative flex items-center gap-2 px-5 py-4 text-sm font-semibold transition-all duration-150 whitespace-nowrap
+                        ${isActive
+                          ? "text-beveren-600 dark:text-beveren-400"
+                          : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                        }`}
+                    >
+                      <Icon size={15} className={isActive ? "text-orange-500" : "text-gray-400"} />
+                      <span>{tab.label}</span>
+                      {tab.count !== null && (
+                        <span className={`ml-0.5 min-w-[20px] h-5 px-1.5 rounded-full text-xs flex items-center justify-center font-bold
+                          ${isActive ? "bg-beveren-600 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300"}`}>
+                          {tab.count}
+                        </span>
+                      )}
+                      {isActive && (
+                        <span className="absolute bottom-0 left-0 right-0 h-[3px] bg-beveren-600 dark:bg-beveren-400 rounded-t-full" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              {activeTab === "pending" && onReloadPendingOrders ? (
+                <div className="flex items-center flex-shrink-0 py-2">
                   <button
-                    key={tab.id}
                     type="button"
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`relative flex items-center gap-2 px-5 py-4 text-sm font-semibold transition-all duration-150
-                      ${isActive
-                        ? "text-beveren-600 dark:text-beveren-400"
-                        : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
-                      }`}
+                    onClick={() => void handleToggleUnsignedPending()}
+                    disabled={loadingUnsignedPending}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
+                      includeUnsignedPending
+                        ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300"
+                        : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 hover:border-orange-400 hover:text-orange-600"
+                    }`}
+                    title={
+                      includeUnsignedPending
+                        ? "Hide unsigned prescriptions"
+                        : "Also show Unsigned medication orders"
+                    }
                   >
-                    <Icon size={15} className={isActive ? "text-orange-500" : "text-gray-400"} />
-                    <span>{tab.label}</span>
-                    {tab.count !== null && (
-                      <span className={`ml-0.5 min-w-[20px] h-5 px-1.5 rounded-full text-xs flex items-center justify-center font-bold
-                        ${isActive ? "bg-beveren-600 text-white" : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300"}`}>
-                        {tab.count}
-                      </span>
-                    )}
-                    {isActive && (
-                      <span className="absolute bottom-0 left-0 right-0 h-[3px] bg-beveren-600 dark:bg-beveren-400 rounded-t-full" />
-                    )}
+                    {loadingUnsignedPending
+                      ? "Loading…"
+                      : includeUnsignedPending
+                        ? "Hide unsigned"
+                        : "Display even unsigned"}
                   </button>
-                );
-              })}
+                </div>
+              ) : null}
             </div>
           </div>
-        )}
+        ) : onReloadPendingOrders ? (
+          <div className="px-8 py-2 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-100 dark:border-gray-700/60 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void handleToggleUnsignedPending()}
+              disabled={loadingUnsignedPending}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
+                includeUnsignedPending
+                  ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300"
+                  : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 hover:border-orange-400 hover:text-orange-600"
+              }`}
+            >
+              {loadingUnsignedPending
+                ? "Loading…"
+                : includeUnsignedPending
+                  ? "Hide unsigned"
+                  : "Display even unsigned"}
+            </button>
+          </div>
+        ) : null}
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-8 py-6 bg-white dark:bg-gray-900">
@@ -1251,7 +1529,20 @@ export default function InpatientMedicationOrdersModal({
             pendingOrders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
                 <ClipboardList size={40} className="mb-3 opacity-30" />
-                <p className="text-sm font-medium">No pending medication orders found.</p>
+                <p className="text-sm font-medium">
+                  {includeUnsignedPending
+                    ? "No pending or unsigned medication orders found."
+                    : "No pending medication orders found."}
+                </p>
+                {!includeUnsignedPending && onReloadPendingOrders ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleUnsignedPending()}
+                    className="mt-3 text-xs font-bold text-orange-600 hover:underline"
+                  >
+                    Display even unsigned
+                  </button>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-3">
@@ -1278,6 +1569,7 @@ export default function InpatientMedicationOrdersModal({
                         </div>
                         <div className="flex items-center gap-2 flex-1 min-w-0">
                           <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate">{order.name}</h3>
+                          <StatusBadge status={order.status} hideStatuses={["Draft", "Completed"]} />
                           <DispenseVisitTypeBadge
                             visitType={order.visit_type}
                             referenceType={order.custom_reference_type}
@@ -1727,17 +2019,114 @@ export default function InpatientMedicationOrdersModal({
             </div>
           )}
 
-          {/* ── LEGACY DISPENSED MEDICINE ── */}
+          {/* ── DISPENSED MEDICINE (POS + legacy) ── */}
           {isHospitalMode && activeTab === "legacy_dispensed" && (
-            legacyDispensedOrders.length === 0 ? (
+            dispensedHistory.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
                 <Package size={40} className="mb-3 opacity-30" />
-                <p className="text-sm font-medium">No legacy dispensed medicine found.</p>
+                <p className="text-sm font-medium">No dispensed medicine found.</p>
               </div>
             ) : (
               <div className="space-y-2">
-                {legacyDispensedOrders.map((txn) => {
-                  const isExpanded = expandedLegacyOrders.has(txn.name);
+                {dispensedHistory.map((row) => {
+                  const isExpanded = expandedLegacyOrders.has(row.key);
+                  if (row.source === "pos") {
+                    const txn = row.txn;
+                    const dateLabel = txn.transaction_date ? String(txn.transaction_date).slice(0, 10) : null;
+                    const mappedItems = (txn.items || []).map(posDispensedItemToLegacyShape);
+                    return (
+                      <div
+                        key={row.key}
+                        className="border border-emerald-200 dark:border-emerald-800/50 rounded-xl overflow-hidden bg-emerald-50/40 dark:bg-emerald-950/20"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedLegacyOrders((prev) => {
+                              const next = new Set(prev);
+                              next.has(row.key) ? next.delete(row.key) : next.add(row.key);
+                              return next;
+                            })
+                          }
+                          className="w-full flex items-center gap-2 px-4 py-3 bg-emerald-100/70 dark:bg-emerald-900/30 text-left"
+                        >
+                          <span className={`text-gray-400 transition-transform duration-150 flex-shrink-0 ${isExpanded ? "rotate-0" : "-rotate-90"}`}>
+                            <ChevronDown size={15} />
+                          </span>
+                          <span className="font-semibold text-sm text-gray-800 dark:text-white truncate font-mono">
+                            {txn.name}
+                          </span>
+                          <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-200/80 dark:bg-emerald-800/50 text-emerald-800 dark:text-emerald-200 flex-shrink-0">
+                            POS
+                          </span>
+                          <DispenseVisitTypeBadge
+                            visitType={txn.visit_type}
+                            referenceType={txn.custom_reference_type}
+                          />
+                          {dateLabel ? (
+                            <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">{dateLabel}</span>
+                          ) : null}
+                          {txn.set_warehouse ? (
+                            <span className="text-xs text-gray-500 dark:text-gray-400 truncate flex-shrink-0">
+                              {txn.set_warehouse}
+                            </span>
+                          ) : null}
+                          {txn.custom_reference_name ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300 flex-shrink-0">
+                              {txn.custom_reference_name}
+                            </span>
+                          ) : null}
+                          <span className="ml-auto text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
+                            {(txn.item_count ?? txn.items?.length ?? 0)} item(s)
+                            {txn.grand_total != null ? ` · ${formatLegacyAmount(txn.grand_total)}` : ""}
+                          </span>
+                        </button>
+
+                        {isExpanded && mappedItems.length > 0 && (
+                          <div className="px-4 py-3 border-t border-emerald-200 dark:border-emerald-800/50 bg-white/80 dark:bg-gray-900/30">
+                            <LegacyItemsTable
+                              items={mappedItems}
+                              txnName={txn.name}
+                              selectable={!!onToggleLegacyItem}
+                              selectedKeys={selectedLegacyItems}
+                              onToggle={onToggleLegacyItem}
+                              productAvailability={productAvailability}
+                              alternativeDrugs={legacyAlternativeDrugs}
+                              alternativeDrugLabels={legacyAlternativeDrugLabels}
+                              lineKeyFn={(name, idx) => posDispensedLineKey(name, idx, txn.items[idx] || {})}
+                              onAlternativeChange={(key, value, itemName) => {
+                                setLegacyAlternativeDrugs((prev) => {
+                                  const next = { ...prev };
+                                  if (value) next[key] = value;
+                                  else delete next[key];
+                                  return next;
+                                });
+                                setLegacyAlternativeDrugLabels((prev) => {
+                                  const next = { ...prev };
+                                  if (value && itemName) next[key] = itemName;
+                                  else delete next[key];
+                                  return next;
+                                });
+                              }}
+                            />
+                            {txn.custom_remarks ? (
+                              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap">
+                                {txn.custom_remarks}
+                              </p>
+                            ) : null}
+                          </div>
+                        )}
+
+                        {isExpanded && mappedItems.length === 0 && (
+                          <div className="px-4 py-4 border-t border-emerald-200 dark:border-emerald-800/50 text-sm text-gray-400 dark:text-gray-500 text-center bg-white/80 dark:bg-gray-900/30">
+                            No line items on this dispense.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  const txn = row.txn;
                   const title = txn.trans_no || txn.name;
                   const dateLabel = txn.trans_date
                     ? String(txn.trans_date).slice(0, 10)
@@ -1746,7 +2135,7 @@ export default function InpatientMedicationOrdersModal({
                       : null;
                   return (
                     <div
-                      key={txn.name}
+                      key={row.key}
                       className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-slate-900/20"
                     >
                       <button
@@ -1754,7 +2143,7 @@ export default function InpatientMedicationOrdersModal({
                         onClick={() =>
                           setExpandedLegacyOrders((prev) => {
                             const next = new Set(prev);
-                            next.has(txn.name) ? next.delete(txn.name) : next.add(txn.name);
+                            next.has(row.key) ? next.delete(row.key) : next.add(row.key);
                             return next;
                           })
                         }
@@ -1765,6 +2154,9 @@ export default function InpatientMedicationOrdersModal({
                         </span>
                         <span className="font-semibold text-sm text-gray-800 dark:text-white truncate font-mono">
                           {title}
+                        </span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 flex-shrink-0">
+                          Legacy
                         </span>
                         {dateLabel ? (
                           <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">{dateLabel}</span>
@@ -1990,31 +2382,70 @@ export default function InpatientMedicationOrdersModal({
 
               <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div className="px-6 py-4 bg-sky-50 dark:bg-sky-900/20 border-b border-sky-100 dark:border-sky-800/30">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center">
-                      <ClipboardList size={17} className="text-white" />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-sky-600 flex items-center justify-center flex-shrink-0">
+                        <ClipboardList size={17} className="text-white" />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-gray-900 dark:text-white text-base">
+                          {includeClosedVisits ? "Open & closed visits" : "Open patient visits"}
+                        </h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          {includeClosedVisits
+                            ? `Open visits plus closed visits from ${closedVisitFrom} to ${closedVisitTo}`
+                            : "Reuse a visit already opened by reception — avoids duplicates"}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-gray-900 dark:text-white text-base">
-                        Open Pharmacy visits
-                      </h3>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        Reuse a visit already opened by reception — avoids duplicates
-                      </p>
+                    <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                      <button
+                        type="button"
+                        disabled={!patientId || loadingOpenVisits}
+                        onClick={() => {
+                          if (includeClosedVisits) {
+                            void clearClosedVisitFilter();
+                          } else {
+                            const range = defaultClosedVisitRange();
+                            setClosedVisitFrom(range.from);
+                            setClosedVisitTo(range.to);
+                            setShowClosedVisitRangeModal(true);
+                          }
+                        }}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
+                          includeClosedVisits
+                            ? "border-sky-600 bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+                            : "border-sky-600 text-sky-700 bg-white hover:bg-sky-50"
+                        }`}
+                        title="Include closed visits in a date range"
+                      >
+                        {includeClosedVisits ? "Open only" : "Include closed…"}
+                      </button>
+                      {includeClosedVisits ? (
+                        <button
+                          type="button"
+                          className="text-[11px] font-semibold text-sky-700 hover:underline"
+                          onClick={() => setShowClosedVisitRangeModal(true)}
+                        >
+                          Change dates
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </div>
                 <div className="px-4 py-3">
                   {!patientId ? (
-                    <p className="text-sm text-gray-500 px-2 py-3">Select a patient to see open Pharmacy visits.</p>
+                    <p className="text-sm text-gray-500 px-2 py-3">Select a patient to see open visits.</p>
                   ) : loadingOpenVisits ? (
                     <div className="flex items-center justify-center gap-2 py-6 text-sm text-gray-500">
                       <span className="w-4 h-4 border-2 border-sky-600/30 border-t-sky-600 rounded-full animate-spin" />
-                      Loading open visits…
+                      Loading visits…
                     </div>
                   ) : openPharmacyVisits.length === 0 ? (
                     <p className="text-sm text-gray-500 px-2 py-3">
-                      No open Pharmacy visits for this patient. Create one below if needed.
+                      {includeClosedVisits
+                        ? "No matching visits in this date range. Create one below if needed."
+                        : "No open visits for this patient. Create one below if needed."}
                     </p>
                   ) : (
                     <div className="space-y-2">
@@ -2023,6 +2454,9 @@ export default function InpatientMedicationOrdersModal({
                           visit.encounter_date || visit.visit_date || visit.posting_date || ""
                         ).slice(0, 10);
                         const isSelected = lastCreatedVisit?.name === visit.name;
+                        const isClosed = ["Completed", "External Referral", "Cancelled"].includes(
+                          String(visit.status || "")
+                        );
                         return (
                           <div
                             key={visit.name}
@@ -2038,7 +2472,20 @@ export default function InpatientMedicationOrdersModal({
                               </div>
                               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
                                 {visitDate ? <span>Date: <span className="tabular-nums font-medium text-gray-700 dark:text-gray-200">{visitDate}</span></span> : null}
-                                {visit.status ? <span>Status: <span className="font-medium text-gray-700 dark:text-gray-200">{visit.status}</span></span> : null}
+                                {visit.status ? (
+                                  <span>
+                                    Status:{" "}
+                                    <span
+                                      className={`font-medium ${
+                                        isClosed
+                                          ? "text-amber-700 dark:text-amber-300"
+                                          : "text-gray-700 dark:text-gray-200"
+                                      }`}
+                                    >
+                                      {visit.status}
+                                    </span>
+                                  </span>
+                                ) : null}
                                 {visit.visit_type ? <span>Type: <span className="font-medium text-gray-700 dark:text-gray-200">{visit.visit_type}</span></span> : null}
                               </div>
                               {visit.practitioner_name ? (
@@ -2055,6 +2502,7 @@ export default function InpatientMedicationOrdersModal({
                                   doctype: visit.doctype || "Patient Visit",
                                   name: visit.name,
                                   visit_type: visit.visit_type || null,
+                                  visit_date: visitDate || null,
                                 })
                               }
                               className={`flex-shrink-0 px-3 py-2 text-xs font-bold rounded-lg border-2 transition-colors ${
@@ -2084,7 +2532,7 @@ export default function InpatientMedicationOrdersModal({
                         {lastCreatedVisit?.name ? "Create another visit" : "Create Patient Visit"}
                       </h3>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        Only if there is no open Pharmacy visit to reuse
+                        Creates a Pharmacy visit. Use only if there is no open visit to reuse.
                       </p>
                     </div>
                   </div>
@@ -2127,13 +2575,13 @@ export default function InpatientMedicationOrdersModal({
               : activeTab === "patient_history"
               ? "Diagnosis, visits, warnings and allergies"
               : activeTab === "legacy_dispensed"
-              ? `${selectedLegacyItems.size} legacy item(s) selected`
+              ? `${selectedLegacyItems.size} item(s) selected`
               : activeTab === "monthly_medication"
               ? `${selectedSubscriptionItems.size} monthly item(s) selected`
               : lastCreatedVisit?.name
               ? "Visit linked — used when you dispense"
               : openPharmacyVisits.length > 0
-              ? "Select an open Pharmacy visit, or create a new one"
+              ? "Select an open visit, or create a new Pharmacy visit"
               : "Create a new encounter above"}
           </div>
           <div className="flex items-center gap-2">
@@ -2183,6 +2631,153 @@ export default function InpatientMedicationOrdersModal({
         </div>
 
         {printMenu}
+
+        {showClosedVisitRangeModal && typeof document !== "undefined"
+          ? createPortal(
+              <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+                <div
+                  className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                  onClick={() => setShowClosedVisitRangeModal(false)}
+                />
+                <div
+                  className="relative bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-sm border border-gray-200 dark:border-gray-700 p-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white">
+                    Include closed visits
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Show open visits plus closed visits in this date range (default: last 7 days).
+                  </p>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                        From
+                      </label>
+                      <input
+                        type="date"
+                        value={closedVisitFrom}
+                        onChange={(e) => setClosedVisitFrom(e.target.value)}
+                        className="w-full h-9 px-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                        To
+                      </label>
+                      <input
+                        type="date"
+                        value={closedVisitTo}
+                        onChange={(e) => setClosedVisitTo(e.target.value)}
+                        className="w-full h-9 px-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-sky-700 hover:underline"
+                      onClick={() => {
+                        const range = defaultClosedVisitRange();
+                        setClosedVisitFrom(range.from);
+                        setClosedVisitTo(range.to);
+                      }}
+                    >
+                      Last 7 days
+                    </button>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowClosedVisitRangeModal(false)}
+                      className="px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void applyClosedVisitRange()}
+                      className="px-3 py-2 text-xs font-bold rounded-lg border-2 border-sky-600 text-sky-700 bg-sky-50 hover:bg-sky-100"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )
+          : null}
+
+        {showDispenseExportModal && typeof document !== "undefined"
+          ? createPortal(
+              <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+                <div
+                  className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                  onClick={() => !exportingDispenseHistory && setShowDispenseExportModal(false)}
+                />
+                <div
+                  className="relative bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-sm border border-gray-200 dark:border-gray-700 p-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white">
+                    {dispenseExportFormat === "excel" ? "Export Excel" : "Print PDF"}
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Choose the date range for this dispensed medicine report.
+                  </p>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                        From
+                      </label>
+                      <input
+                        type="date"
+                        value={dispenseExportFrom}
+                        max={dispenseExportTo || undefined}
+                        onChange={(e) => setDispenseExportFrom(e.target.value)}
+                        className="w-full h-9 px-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                        To
+                      </label>
+                      <input
+                        type="date"
+                        value={dispenseExportTo}
+                        min={dispenseExportFrom || undefined}
+                        onChange={(e) => setDispenseExportTo(e.target.value)}
+                        className="w-full h-9 px-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={exportingDispenseHistory}
+                      onClick={() => setShowDispenseExportModal(false)}
+                      className="px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={exportingDispenseHistory}
+                      onClick={() => void confirmDispenseHistoryExport()}
+                      className="px-3 py-2 text-xs font-bold rounded-lg border-2 border-beveren-600 text-beveren-700 bg-beveren-50 hover:bg-beveren-100 disabled:opacity-50"
+                    >
+                      {exportingDispenseHistory
+                        ? "Preparing…"
+                        : dispenseExportFormat === "excel"
+                          ? "Export Excel"
+                          : "Print PDF"}
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )
+          : null}
 
         {reminderPlan && (
           <SendSubscriptionMedicationWhatsAppModal

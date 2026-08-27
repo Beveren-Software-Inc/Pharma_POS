@@ -10,6 +10,7 @@ import {
   User,
   Building,
   Pill,
+  Pencil,
   Printer,
   CopyPlus,
 } from "lucide-react";
@@ -55,7 +56,7 @@ import { useCustomerPermission } from "../hooks/useCustomerPermission";
 import { useCartStore } from "../stores/cartStore";
 import { useUiStore } from "../stores/uiStore";
 import { getPrescriptionFrequencies, type PrescriptionFrequency } from "../services/prescriptionFrequencyService";
-import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientLegacyDispensedMedications, getSubscriptionMedicationPlans, getPatientHistorySummary, createPatientVisit, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, resolveLegacyMedicationItemCode, resolveLegacyMedicationDisplayName, legacyMedicationLineKey, resolveSubscriptionItemCode, resolveSubscriptionItemDisplayName, subscriptionMedicationLineKey, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type LegacyDispensedTransaction, type SubscriptionMedicationPlan, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
+import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicationOrderHistory, getPatientLegacyDispensedMedications, getPatientPosDispensedMedications, getSubscriptionMedicationPlans, getPatientHistorySummary, createPatientVisit, getPatientVisitDate, resolvePatientForCustomer, resolveCustomerForPatient, resolveMedicationItemCode, resolveMedicationDisplayName, resolveLegacyMedicationItemCode, resolveLegacyMedicationDisplayName, legacyMedicationLineKey, posDispensedLineKey, resolvePosDispensedItemCode, resolvePosDispensedDisplayName, resolveSubscriptionItemCode, resolveSubscriptionItemDisplayName, subscriptionMedicationLineKey, getPatientDisplayName, getPatientSecondaryLabel, type Patient, type InpatientMedicationOrder, type LegacyDispensedTransaction, type PosDispensedTransaction, type SubscriptionMedicationPlan, type PatientHistorySummary, type ResolvedCustomer } from "../services/patientService";
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, createDraftHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
@@ -94,6 +95,33 @@ interface DispensedLabelItem {
   frequency: string;
   batchNo: string;
   expiryDate: string;
+}
+
+type CartMedicationFields = CartItem & {
+  cartLineId?: string;
+  medicationOrder?: string;
+  medicationOrders?: string[];
+  medication_order_entry?: string;
+  original_drug?: string;
+  alternative_drug?: string;
+};
+
+function collectMedicationOrderNames(
+  items: CartItem[],
+  discounts: Record<string, { medicationOrder?: string }>,
+  getKey: (item: CartItem) => string
+): string[] {
+  const orders = new Set<string>();
+  for (const item of items) {
+    const line = item as CartMedicationFields;
+    if (line.medicationOrder) orders.add(line.medicationOrder);
+    for (const name of line.medicationOrders || []) {
+      if (name) orders.add(name);
+    }
+    const discount = discounts[getKey(item)] || discounts[item.id];
+    if (discount?.medicationOrder) orders.add(discount.medicationOrder);
+  }
+  return Array.from(orders);
 }
 
 const getCartSignature = (items: CartItem[]) =>
@@ -1041,6 +1069,46 @@ const DosageSelectField = ({ itemId: _itemId, options, value, onChange, isMobile
   );
 };
 
+type PharmacyVisitRef = {
+  doctype: string;
+  name: string;
+  visit_type?: string | null;
+  visit_date?: string | null;
+};
+
+function toDateOnly(value?: string | number | null): string {
+  if (value == null) return "";
+  const text = String(value).trim();
+  if (!text) return "";
+  const iso = text.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : "";
+}
+
+function todayISODate(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatDispenseDateLabel(iso: string): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  if (!year || !month || !day) return iso;
+  return new Date(year, month - 1, day).toLocaleDateString();
+}
+
+function visitDateFromRecord(record?: Record<string, unknown> | PharmacyVisitRef | null): string {
+  if (!record) return "";
+  const row = record as Record<string, unknown>;
+  return (
+    toDateOnly(row.visit_date as string) ||
+    toDateOnly(row.encounter_date as string) ||
+    toDateOnly(row.posting_date as string) ||
+    ""
+  );
+}
+
 function getSelectedPartyDisplayName(
   selectedPatient: Patient | null | undefined,
   selectedCustomer: Customer | null | undefined
@@ -1179,17 +1247,22 @@ export default function OrderSummary({
   const [medicationOrders, setMedicationOrders] = useState<InpatientMedicationOrder[]>([]);
   const [medicationOrderHistory, setMedicationOrderHistory] = useState<InpatientMedicationOrder[]>([]);
   const [legacyDispensedMedications, setLegacyDispensedMedications] = useState<LegacyDispensedTransaction[]>([]);
+  const [posDispensedMedications, setPosDispensedMedications] = useState<PosDispensedTransaction[]>([]);
   const [subscriptionMedicationPlans, setSubscriptionMedicationPlans] = useState<SubscriptionMedicationPlan[]>([]);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [selectedHistoryItems, setSelectedHistoryItems] = useState<Set<string>>(new Set());
   const [selectedLegacyItems, setSelectedLegacyItems] = useState<Set<string>>(new Set());
   const [selectedSubscriptionItems, setSelectedSubscriptionItems] = useState<Set<string>>(new Set());
   const [isCreatingVisit, setIsCreatingVisit] = useState(false);
-  const [createdVisitRef, setCreatedVisitRef] = useState<{ doctype: string; name: string; visit_type?: string | null } | null>(null);
+  const [createdVisitRef, setCreatedVisitRef] = useState<PharmacyVisitRef | null>(null);
   const [patientVisitCreatedSignal, setPatientVisitCreatedSignal] = useState(0);
   const [isDispensing, setIsDispensing] = useState(false);
   const [showClinicalAppropriatenessConfirm, setShowClinicalAppropriatenessConfirm] = useState(false);
   const [dispenseRemarks, setDispenseRemarks] = useState("");
+  const [dispenseRecordDate, setDispenseRecordDate] = useState<string | null>(null);
+  const [showDispenseDateModal, setShowDispenseDateModal] = useState(false);
+  const [dispenseDateDraft, setDispenseDateDraft] = useState(todayISODate);
+  const [isResolvingVisitDate, setIsResolvingVisitDate] = useState(false);
 
   useEffect(() => {
     const closeTransientUi = () => {
@@ -1202,6 +1275,7 @@ export default function OrderSummary({
       setShowPharmacyServiceModal(false);
       setShowAddCustomerModal(false);
       setShowClinicalAppropriatenessConfirm(false);
+      setShowDispenseDateModal(false);
     };
 
     window.addEventListener(POS_BEFORE_NAVIGATE_EVENT, closeTransientUi);
@@ -1528,6 +1602,9 @@ export default function OrderSummary({
         prescriptionDosage?: string; // From Prescription Frequency doctype (dropdown)
         dosage?: string; // Free text dosage copied from patient medication order
         medicationOrder?: string; // Patient Medication Order (when items added from order)
+        medicationOrderEntry?: string;
+        originalDrug?: string;
+        alternativeDrug?: string;
       }
     >
   >({});
@@ -1769,6 +1846,9 @@ export default function OrderSummary({
     }
     if (cached.createdVisitRef) {
       setCreatedVisitRef(cached.createdVisitRef);
+    }
+    if (cached.dispenseDate) {
+      setDispenseRecordDate(toDateOnly(cached.dispenseDate) || null);
     }
     heldRestoreKeyRef.current = cached.salesOrderId;
   }, [cartItems.length]);
@@ -2128,6 +2208,9 @@ export default function OrderSummary({
         }
         if (itemToAdd.medication_order) {
           updateItemDiscount(lineKey, "medicationOrder", itemToAdd.medication_order);
+          if (itemToAdd.medication_order_entry) {
+            updateItemDiscount(lineKey, "medicationOrderEntry", itemToAdd.medication_order_entry);
+          }
           const s = medsByItem.get(product.id) ?? new Set<string>();
           s.add(itemToAdd.medication_order);
           extraOrderNames.forEach((o) => s.add(o));
@@ -2147,6 +2230,8 @@ export default function OrderSummary({
           });
         }
         if (itemToAdd.alternative_item_code) {
+          updateItemDiscount(lineKey, "originalDrug", itemToAdd.item_code);
+          updateItemDiscount(lineKey, "alternativeDrug", itemToAdd.alternative_item_code);
           updateItemMetadata(lineKey, {
             original_drug: itemToAdd.item_code,
             alternative_drug: itemToAdd.alternative_item_code,
@@ -2200,6 +2285,12 @@ export default function OrderSummary({
             medicationOrder: itemToAdd.medication_order,
             medicationOrders: [itemToAdd.medication_order],
           }),
+          ...(isAlternative
+            ? {
+                original_drug: itemToAdd.item_code,
+                alternative_drug: itemToAdd.alternative_item_code,
+              }
+            : {}),
         },
         cartQuantity
       );
@@ -2208,7 +2299,7 @@ export default function OrderSummary({
         qtyByItem.set(product.id, cartQuantity);
       }
 
-      setTimeout(() => applyLineMeta(metaKey), 100);
+      applyLineMeta(metaKey);
       return "added";
     },
     [
@@ -2324,17 +2415,19 @@ export default function OrderSummary({
     
     // Load medication orders and open modal — user adds items from there
     try {
-      const [orders, history, historySummary, legacyDispensed, subscriptionPlans] = await Promise.all([
+      const [orders, history, historySummary, legacyDispensed, posDispensed, subscriptionPlans] = await Promise.all([
         getPendingInpatientMedicationOrders(patient.name),
         getPatientMedicationOrderHistory(patient.name, 50),
         getPatientHistorySummary(patient.name, 10),
         getPatientLegacyDispensedMedications(patient.name, 50),
+        getPatientPosDispensedMedications(patient.name, 50),
         getSubscriptionMedicationPlans({ patient: patient.name, limit: 50 }),
       ]);
       setMedicationOrders(orders);
       setMedicationOrderHistory(history);
       setPatientHistorySummary(historySummary);
       setLegacyDispensedMedications(legacyDispensed);
+      setPosDispensedMedications(posDispensed);
       setSubscriptionMedicationPlans(subscriptionPlans);
       setSelectedOrders(new Set(orders.map((o) => o.name)));
       setSelectedSubscriptionItems(new Set());
@@ -2498,17 +2591,19 @@ export default function OrderSummary({
       return;
     }
     try {
-      const [orders, history, historySummary, legacyDispensed, subscriptionPlans] = await Promise.all([
+      const [orders, history, historySummary, legacyDispensed, posDispensed, subscriptionPlans] = await Promise.all([
         getPendingInpatientMedicationOrders(patientId),
         getPatientMedicationOrderHistory(patientId, 50),
         getPatientHistorySummary(patientId, 10),
         getPatientLegacyDispensedMedications(patientId, 50),
+        getPatientPosDispensedMedications(patientId, 50),
         getSubscriptionMedicationPlans({ patient: patientId, limit: 50 }),
       ]);
       setMedicationOrders(orders);
       setMedicationOrderHistory(history);
       setPatientHistorySummary(historySummary);
       setLegacyDispensedMedications(legacyDispensed);
+      setPosDispensedMedications(posDispensed);
       setSubscriptionMedicationPlans(subscriptionPlans);
       setSelectedOrders(new Set(orders.map(o => o.name)));
       setSelectedSubscriptionItems(new Set());
@@ -2641,7 +2736,7 @@ export default function OrderSummary({
 
   const handleAddLegacyItemsToCart = async (alternatives?: Record<string, string>) => {
     if (selectedLegacyItems.size === 0) {
-      toast.warning("Please select at least one legacy item.");
+      toast.warning("Please select at least one dispensed item.");
       return;
     }
 
@@ -2649,55 +2744,88 @@ export default function OrderSummary({
     const availability = productAvailability();
     let validationFailed = false;
 
+    const pushDispensedLine = (opts: {
+      lineKey: string;
+      itemCode: string;
+      displayName: string;
+      qty: number;
+      uom?: string;
+      referenceNo?: string;
+    }) => {
+      const alternativeCode = alternatives?.[opts.lineKey]?.trim();
+      const effectiveCode = alternativeCode || opts.itemCode;
+
+      if (!effectiveCode) {
+        toast.error(`Select an alternative drug for ${opts.displayName}.`);
+        validationFailed = true;
+        return;
+      }
+
+      const avail = availability[effectiveCode];
+      if (avail === undefined) {
+        if (!alternativeCode) {
+          toast.error(
+            `${opts.displayName} uses code ${opts.itemCode || "—"}. Select an alternative drug.`
+          );
+          validationFailed = true;
+          return;
+        }
+        toast.error(`Alternative ${effectiveCode} not found in product list.`);
+        validationFailed = true;
+        return;
+      }
+
+      if (avail <= 0 || avail < opts.qty) {
+        if (!alternativeCode) {
+          toast.error(`Insufficient stock for ${opts.displayName}. Select an alternative drug.`);
+          validationFailed = true;
+        }
+      }
+
+      itemsToAdd.push({
+        item_code: alternativeCode ? opts.itemCode || alternativeCode : effectiveCode,
+        quantity: opts.qty,
+        uom: opts.uom,
+        drug_name: opts.displayName || undefined,
+        alternative_item_code: alternativeCode || undefined,
+        line_key: opts.lineKey,
+        reference_no: opts.referenceNo,
+      });
+    };
+
+    for (const txn of posDispensedMedications) {
+      for (let idx = 0; idx < (txn.items || []).length; idx++) {
+        const item = txn.items[idx];
+        const lineKey = posDispensedLineKey(txn.name, idx, item);
+        if (!selectedLegacyItems.has(lineKey)) continue;
+        if (validationFailed) break;
+
+        pushDispensedLine({
+          lineKey,
+          itemCode: resolvePosDispensedItemCode(item),
+          displayName: resolvePosDispensedDisplayName(item),
+          qty: Number(item.qty ?? 1) || 1,
+          uom: item.uom || undefined,
+          referenceNo: txn.name,
+        });
+      }
+      if (validationFailed) break;
+    }
+
     for (const txn of legacyDispensedMedications) {
       for (let idx = 0; idx < (txn.items || []).length; idx++) {
         const item = txn.items[idx];
         const lineKey = legacyMedicationLineKey(txn.name, idx, item);
         if (!selectedLegacyItems.has(lineKey)) continue;
+        if (validationFailed) break;
 
-        const legacyCode = resolveLegacyMedicationItemCode(item);
-        const displayName = resolveLegacyMedicationDisplayName(item);
-        const alternativeCode = alternatives?.[lineKey]?.trim();
-        const effectiveCode = alternativeCode || legacyCode;
-
-        if (!effectiveCode) {
-          toast.error(`Select an alternative drug for ${displayName}.`);
-          validationFailed = true;
-          break;
-        }
-
-        const avail = availability[effectiveCode];
-        if (avail === undefined) {
-          if (!alternativeCode) {
-            toast.error(
-              `${displayName} uses legacy code ${legacyCode || "—"}. Select an alternative drug.`
-            );
-            validationFailed = true;
-            break;
-          }
-          toast.error(`Alternative ${effectiveCode} not found in product list.`);
-          validationFailed = true;
-          break;
-        }
-
-        const qty = Number(item.show_qty ?? 1) || 1;
-        if (avail <= 0 || avail < qty) {
-          if (!alternativeCode) {
-            toast.error(`Insufficient stock for ${displayName}. Select an alternative drug.`);
-            validationFailed = true;
-            break;
-          }
-        }
-
-        // Dispense the mapped POS item; keep legacy code as original when an alt was chosen.
-        itemsToAdd.push({
-          item_code: alternativeCode ? legacyCode || alternativeCode : effectiveCode,
-          quantity: qty,
+        pushDispensedLine({
+          lineKey,
+          itemCode: resolveLegacyMedicationItemCode(item),
+          displayName: resolveLegacyMedicationDisplayName(item),
+          qty: Number(item.show_qty ?? 1) || 1,
           uom: item.show_uom || undefined,
-          drug_name: displayName || undefined,
-          alternative_item_code: alternativeCode || undefined,
-          line_key: lineKey,
-          reference_no: txn.trans_no || txn.name,
+          referenceNo: txn.trans_no || txn.name,
         });
       }
       if (validationFailed) break;
@@ -2707,7 +2835,7 @@ export default function OrderSummary({
       return;
     }
 
-    const loadingToast = toast.loading(`Adding ${itemsToAdd.length} legacy item(s) to cart...`);
+    const loadingToast = toast.loading(`Adding ${itemsToAdd.length} dispensed item(s) to cart...`);
     try {
       let addedCount = 0;
       let notFoundCount = 0;
@@ -2737,19 +2865,19 @@ export default function OrderSummary({
       }
 
       if (addedCount > 0 && notFoundCount === 0) {
-        toast.success(`Successfully added ${addedCount} legacy item(s) to cart.`);
+        toast.success(`Successfully added ${addedCount} dispensed item(s) to cart.`);
       } else if (addedCount > 0) {
         toast.warning(`Added ${addedCount} item(s). ${notFoundCount} item(s) not found.`);
       } else {
-        toast.error("No legacy items were added.");
+        toast.error("No dispensed items were added.");
       }
 
       setShowMedicationOrdersModal(false);
       setSelectedLegacyItems(new Set());
     } catch (error) {
-      console.error("Error adding legacy items to cart:", error);
+      console.error("Error adding dispensed items to cart:", error);
       toast.dismiss(loadingToast);
-      toast.error("Failed to add legacy items to cart.");
+      toast.error("Failed to add dispensed items to cart.");
     }
   };
 
@@ -2890,6 +3018,7 @@ export default function OrderSummary({
           doctype: result.doctype,
           name: result.name,
           visit_type: result.visit_type || null,
+          visit_date: toDateOnly(result.visit_date) || todayISODate(),
         });
         setPatientVisitCreatedSignal((s) => s + 1);
         toast.success(`Created pharmacy visit: ${result.name}`);
@@ -2903,12 +3032,18 @@ export default function OrderSummary({
     }
   };
 
-  const handleSelectPatientVisit = (visit: { doctype: string; name: string; visit_type?: string | null }) => {
+  const handleSelectPatientVisit = (visit: {
+    doctype: string;
+    name: string;
+    visit_type?: string | null;
+    visit_date?: string | null;
+  }) => {
     if (!visit?.name) return;
     setCreatedVisitRef({
       doctype: visit.doctype || "Patient Visit",
       name: visit.name,
       visit_type: visit.visit_type || null,
+      visit_date: toDateOnly(visit.visit_date) || null,
     });
     setPatientVisitCreatedSignal((s) => s + 1);
     toast.success(`Using pharmacy visit: ${visit.name}`);
@@ -3233,15 +3368,7 @@ const pages = labels.map((label) => `
       };
     }
 
-    const linkedOrders = Array.from(
-      new Set(
-        cartItems.flatMap((item) => {
-          const many = (item as CartItem & { medicationOrders?: string[] }).medicationOrders || [];
-          const one = (item as CartItem & { medicationOrder?: string }).medicationOrder;
-          return [...many, ...(one ? [one] : [])].filter(Boolean);
-        })
-      )
-    );
+    const linkedOrders = collectMedicationOrderNames(cartItems, itemDiscounts, getLineKey);
 
     for (const orderName of linkedOrders) {
       const sourceOrder = [...medicationOrders, ...medicationOrderHistory].find((o) => o.name === orderName);
@@ -3254,6 +3381,63 @@ const pages = labels.map((label) => `
     }
 
     return null;
+  };
+
+  const openDispenseDateModal = () => {
+    setDispenseDateDraft(dispenseRecordDate || todayISODate());
+    setShowDispenseDateModal(true);
+  };
+
+  const applyDispenseDateDraft = () => {
+    const next = toDateOnly(dispenseDateDraft);
+    if (!next) {
+      toast.error("Enter a valid dispense date.");
+      return;
+    }
+    setDispenseRecordDate(next);
+    setShowDispenseDateModal(false);
+  };
+
+  const usePatientVisitDate = async () => {
+    const fromVisitRef = visitDateFromRecord(createdVisitRef);
+    if (fromVisitRef) {
+      setDispenseDateDraft(fromVisitRef);
+      setDispenseRecordDate(fromVisitRef);
+      setShowDispenseDateModal(false);
+      return;
+    }
+
+    const careReference = getHospitalCareReference();
+    const historyMatch = (patientHistorySummary?.visits || []).find((visit) => {
+      const row = visit as Record<string, unknown>;
+      return String(row.name || "") === (careReference?.name || createdVisitRef?.name || "");
+    });
+    const fromHistory = visitDateFromRecord(historyMatch as Record<string, unknown> | undefined);
+    if (fromHistory) {
+      setDispenseDateDraft(fromHistory);
+      setDispenseRecordDate(fromHistory);
+      setShowDispenseDateModal(false);
+      return;
+    }
+
+    if (!careReference?.name) {
+      toast.error("Select or create a Patient Visit first.");
+      return;
+    }
+
+    setIsResolvingVisitDate(true);
+    try {
+      const fetched = await getPatientVisitDate(careReference.type, careReference.name);
+      if (!fetched) {
+        toast.error("Could not load the patient visit date.");
+        return;
+      }
+      setDispenseDateDraft(fetched);
+      setDispenseRecordDate(fetched);
+      setShowDispenseDateModal(false);
+    } finally {
+      setIsResolvingVisitDate(false);
+    }
   };
 
   const validateHospitalDispense = (): boolean => {
@@ -3317,15 +3501,7 @@ const pages = labels.map((label) => `
   const buildHospitalDispensePayload = async () => {
     if (!selectedCustomer) return null;
 
-    const allMedicationOrders = Array.from(
-      new Set(
-        cartItems.flatMap((item) => {
-          const many = (item as CartItem & { medicationOrders?: string[] }).medicationOrders || [];
-          const one = (item as CartItem & { medicationOrder?: string }).medicationOrder;
-          return [...many, ...(one ? [one] : [])].filter(Boolean);
-        })
-      )
-    );
+    const allMedicationOrders = collectMedicationOrderNames(cartItems, itemDiscounts, getLineKey);
     const careReference = getHospitalCareReference();
     const finalReferenceType = careReference?.type || "Patient Visit";
     const finalReferenceName = careReference?.name || "";
@@ -3360,9 +3536,14 @@ const pages = labels.map((label) => `
           dosage?: string;
           prescriptionDosage?: string;
           medicationOrder?: string;
+          medicationOrderEntry?: string;
+          originalDrug?: string;
+          alternativeDrug?: string;
         };
-        const cartLine = item as CartItem;
-        const effectiveItemCode = cartLine.alternative_drug || item.item_code || item.id;
+        const cartLine = item as CartMedicationFields;
+        const originalDrug = cartLine.original_drug || lineDiscount.originalDrug;
+        const alternativeDrug = cartLine.alternative_drug || lineDiscount.alternativeDrug;
+        const effectiveItemCode = alternativeDrug || item.item_code || item.id;
         const medicationOrderName =
           cartLine.medicationOrder ||
           lineDiscount.medicationOrder ||
@@ -3381,12 +3562,12 @@ const pages = labels.map((label) => `
           dosage: lineDiscount.dosage ?? cartLine.dosage,
           prescriptionDosage: lineDiscount.prescriptionDosage ?? cartLine.prescriptionDosage,
           medication_order: medicationOrderName,
-          medication_order_entry: cartLine.medication_order_entry,
+          medication_order_entry: cartLine.medication_order_entry || lineDiscount.medicationOrderEntry,
           reference_no: cartLine.reference_no,
           is_pink: cartLine.is_pink ? 1 : 0,
-          alternative_drug: cartLine.alternative_drug || undefined,
-          alternative_medicine: cartLine.alternative_drug || undefined,
-          original_drug: cartLine.original_drug || undefined,
+          alternative_drug: alternativeDrug || undefined,
+          alternative_medicine: alternativeDrug || undefined,
+          original_drug: originalDrug || undefined,
           item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
         };
       }),
@@ -3396,12 +3577,14 @@ const pages = labels.map((label) => `
       reference_type: finalReferenceType,
       reference_name: finalReferenceName,
       ...(dispenseRemarks.trim() ? { custom_remarks: dispenseRemarks.trim() } : {}),
+      ...(dispenseRecordDate ? { transaction_date: dispenseRecordDate } : {}),
       hold_payload: {
         cart_items: cartSnapshot,
         item_discounts: itemDiscounts,
         patient: selectedPatient,
         dispense_remarks: dispenseRemarks,
         created_visit_ref: createdVisitRef,
+        dispense_date: dispenseRecordDate,
       },
     };
   };
@@ -3431,6 +3614,7 @@ const pages = labels.map((label) => `
       setLastDispensedSalesOrder(soName);
       setLastDispensedCartSignature(dispensedCartSignature);
       setDispenseRemarks("");
+      setDispenseRecordDate(null);
       clearHeldDispenseOrderCache();
       toast.success(`Dispensed successfully. Sales Order: ${soName}`);
     } catch (error) {
@@ -3507,6 +3691,7 @@ const pages = labels.map((label) => `
         lineDiscounts: itemDiscounts,
         dispenseRemarks,
         createdVisitRef,
+        dispenseDate: dispenseRecordDate,
       });
 
       handleClearCart();
@@ -3534,21 +3719,16 @@ const pages = labels.map((label) => `
             ?? null,
           dosage: discount?.dosage ?? item.dosage ?? null,
           prescriptionDosage: discount?.prescriptionDosage ?? item.prescriptionDosage ?? null,
+          medicationOrder:
+            discount?.medicationOrder
+            ?? (item as CartMedicationFields).medicationOrder
+            ?? undefined,
           item_tax_template: (item as { item_tax_template?: string }).item_tax_template || null,
           additional_amount: (item as { additional_amount?: number }).additional_amount || 0,
         };
       }),
       customer: selectedCustomer,
-      medicationOrder: (() => {
-        const orders = new Set<string>();
-        cartItems.forEach((item) => {
-          const lineKey = getLineKeyHold(item);
-          const discount = itemDiscounts[lineKey] || itemDiscounts[item.id];
-          const orderName = discount?.medicationOrder;
-          if (orderName) orders.add(orderName);
-        });
-        return Array.from(orders);
-      })(),
+      medicationOrder: collectMedicationOrderNames(cartItems, itemDiscounts, getLineKeyHold),
       subtotal,
       total,
       appliedCoupons,
@@ -3629,6 +3809,7 @@ const pages = labels.map((label) => `
       setLastDispensedCartSignature(null);
       setDispenseRemarks("");
       setCreatedVisitRef(null);
+      setDispenseRecordDate(null);
       try {
         await refreshStockOnly();
         if (items.length > 0) {
@@ -4465,6 +4646,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         setMedicationOrders([]);
                         setMedicationOrderHistory([]);
                         setLegacyDispensedMedications([]);
+                        setPosDispensedMedications([]);
                         setSelectedOrders(new Set());
                         setSelectedHistoryItems(new Set());
                       }}
@@ -4644,6 +4826,7 @@ const handleSetSerial = (event: CustomEvent) => {
                       setMedicationOrders([]);
                       setMedicationOrderHistory([]);
                       setLegacyDispensedMedications([]);
+                      setPosDispensedMedications([]);
                       setSelectedOrders(new Set());
                       setSelectedHistoryItems(new Set());
                       setShowCustomerDropdown(false);
@@ -5535,9 +5718,28 @@ const handleSetSerial = (event: CustomEvent) => {
               <div className="w-10 h-10 rounded-full bg-beveren-100 dark:bg-beveren-900/30 flex items-center justify-center flex-shrink-0">
                 <Pill size={20} className="text-beveren-600 dark:text-beveren-400" />
               </div>
-              <h3 className="text-base font-semibold text-gray-900 dark:text-white">
-                Confirm dispense
-              </h3>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+                    Confirm dispense
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={openDispenseDateModal}
+                    disabled={isDispensing}
+                    className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-beveren-600 dark:hover:text-beveren-400 disabled:opacity-50"
+                    title="Change dispense date"
+                    aria-label="Change dispense date"
+                  >
+                    <Pencil size={16} />
+                  </button>
+                </div>
+                {dispenseRecordDate ? (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    Recorded as {formatDispenseDateLabel(dispenseRecordDate)}
+                  </p>
+                ) : null}
+              </div>
             </div>
             <p className="px-5 py-4 text-sm text-gray-600 dark:text-gray-300">
               Medication checked for clinical appropriateness?
@@ -5571,6 +5773,60 @@ const handleSetSerial = (event: CustomEvent) => {
                 className="px-4 py-2 text-sm font-semibold text-white bg-beveren-600 hover:bg-beveren-700 rounded-lg disabled:opacity-50"
               >
                 {isDispensing ? "Dispensing..." : "OK"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDispenseDateModal && (
+        <div
+          className="fixed inset-0 lg:left-20 z-[110] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setShowDispenseDateModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-xs border border-gray-200 dark:border-gray-700"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+                Dispense date
+              </h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Choose the date this dispense should be recorded on.
+              </p>
+            </div>
+            <div className="px-4 py-3 space-y-3">
+              <input
+                type="date"
+                value={dispenseDateDraft}
+                max={todayISODate()}
+                onChange={(e) => setDispenseDateDraft(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+              />
+              <button
+                type="button"
+                onClick={() => void usePatientVisitDate()}
+                disabled={isResolvingVisitDate}
+                className="w-full px-3 py-2 text-sm font-medium rounded-lg border border-beveren-200 dark:border-beveren-800 text-beveren-700 dark:text-beveren-300 bg-beveren-50 dark:bg-beveren-900/20 hover:bg-beveren-100 dark:hover:bg-beveren-900/40 disabled:opacity-50"
+              >
+                {isResolvingVisitDate ? "Loading visit date..." : "Use patient visit date"}
+              </button>
+            </div>
+            <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDispenseDateModal(false)}
+                className="px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={applyDispenseDateDraft}
+                className="px-3 py-1.5 text-sm font-semibold text-white bg-beveren-600 hover:bg-beveren-700 rounded-lg"
+              >
+                Apply
               </button>
             </div>
           </div>
@@ -5632,6 +5888,7 @@ const handleSetSerial = (event: CustomEvent) => {
         pendingOrders={medicationOrders}
         historyOrders={medicationOrderHistory}
         legacyDispensedOrders={legacyDispensedMedications}
+        posDispensedOrders={posDispensedMedications}
         subscriptionPlans={subscriptionMedicationPlans}
         selectedOrders={selectedOrders}
         onToggleOrder={(orderName) => {
@@ -5678,6 +5935,16 @@ const handleSetSerial = (event: CustomEvent) => {
         onAddSubscriptionItemsToCart={handleAddSubscriptionItemsToCart}
         onCreateVisit={handleCreatePatientVisit}
         onSelectVisit={handleSelectPatientVisit}
+        onReloadPendingOrders={async (includeUnsigned) => {
+          const patientId =
+            selectedPatient?.name || selectedCustomer?.id || selectedCustomer?.name;
+          if (!patientId) return;
+          const orders = await getPendingInpatientMedicationOrders(patientId, {
+            includeUnsigned,
+          });
+          setMedicationOrders(orders);
+          setSelectedOrders(new Set(orders.map((o) => o.name)));
+        }}
         creatingVisit={isCreatingVisit}
         patientName={selectedPatient?.patient_name || selectedPatient?.name}
         patientId={

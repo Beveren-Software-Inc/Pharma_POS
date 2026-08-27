@@ -12,7 +12,8 @@ interface HeldDispenseOrderCache {
   patient: Patient | null;
   lineDiscounts?: Record<string, DraftLineDiscount>;
   dispenseRemarks?: string;
-  createdVisitRef?: { doctype: string; name: string; visit_type?: string | null } | null;
+  createdVisitRef?: { doctype: string; name: string; visit_type?: string | null; visit_date?: string | null } | null;
+  dispenseDate?: string | null;
 }
 
 const CACHE_KEY = "held-dispense-order-cache";

@@ -238,10 +238,18 @@ export async function getPrintFormatsForDoctype(
   }
 }
 
-export async function getPendingInpatientMedicationOrders(patient: string): Promise<InpatientMedicationOrder[]> {
+export async function getPendingInpatientMedicationOrders(
+  patient: string,
+  opts?: { includeUnsigned?: boolean }
+): Promise<InpatientMedicationOrder[]> {
   try {
-    const apiUrl = `/api/method/klik_pos.api.patient.get_pending_inpatient_medication_orders?patient=${encodeURIComponent(patient)}`;
-    
+    const params = new URLSearchParams();
+    params.set("patient", patient);
+    if (opts?.includeUnsigned) {
+      params.set("include_unsigned", "1");
+    }
+    const apiUrl = `/api/method/klik_pos.api.patient.get_pending_inpatient_medication_orders?${params.toString()}`;
+
     const response = await fetch(apiUrl, {
       method: 'GET',
       headers: {
@@ -316,13 +324,22 @@ export function resolveLegacyMedicationDisplayName(item: LegacyDispensedMedicati
   );
 }
 
+export function dispensedMedicationLineKey(
+  source: "legacy" | "pos",
+  txnName: string,
+  idx: number,
+  code: string
+): string {
+  return `${source}::${txnName}::${idx}::${code}`;
+}
+
 export function legacyMedicationLineKey(
   txnName: string,
   idx: number,
   item: LegacyDispensedMedicationItem
 ): string {
   const code = resolveLegacyMedicationItemCode(item) || item.name || String(idx);
-  return `legacy::${txnName}::${idx}::${code}`;
+  return dispensedMedicationLineKey("legacy", txnName, idx, code);
 }
 
 export interface LegacyDispensedTransaction {
@@ -349,10 +366,17 @@ export interface LegacyDispensedTransaction {
 
 export async function getPatientLegacyDispensedMedications(
   patient: string,
-  limit = 50
+  limit = 50,
+  opts?: { fromDate?: string; toDate?: string }
 ): Promise<LegacyDispensedTransaction[]> {
   try {
-    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_legacy_dispensed_medications?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const params = new URLSearchParams({
+      patient,
+      limit: String(limit),
+    });
+    if (opts?.fromDate) params.set("from_date", opts.fromDate);
+    if (opts?.toDate) params.set("to_date", opts.toDate);
+    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_legacy_dispensed_medications?${params.toString()}`;
     const response = await fetch(apiUrl, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
@@ -365,6 +389,104 @@ export async function getPatientLegacyDispensedMedications(
     return data?.message || [];
   } catch (error) {
     console.error('Error fetching legacy dispensed medications:', error);
+    return [];
+  }
+}
+
+export interface PosDispensedMedicationItem {
+  name?: string;
+  idx?: number | null;
+  item_code?: string;
+  item_name?: string;
+  qty?: number | null;
+  uom?: string;
+  rate?: number | null;
+  amount?: number | null;
+  batch_no?: string;
+  expiry_date?: string;
+  dosage?: string;
+  dispensing_lot?: string;
+}
+
+export function resolvePosDispensedItemCode(item: PosDispensedMedicationItem): string {
+  return (item.item_code || "").trim();
+}
+
+export function resolvePosDispensedDisplayName(item: PosDispensedMedicationItem): string {
+  return item.item_name?.trim() || item.item_code?.trim() || "—";
+}
+
+export function posDispensedLineKey(
+  txnName: string,
+  idx: number,
+  item: PosDispensedMedicationItem
+): string {
+  const code = resolvePosDispensedItemCode(item) || item.name || String(idx);
+  return dispensedMedicationLineKey("pos", txnName, idx, code);
+}
+
+export function posDispensedItemToLegacyShape(
+  item: PosDispensedMedicationItem
+): LegacyDispensedMedicationItem {
+  return {
+    name: item.name,
+    sr_num: item.idx ?? null,
+    item: item.item_code,
+    item_name: item.item_name,
+    item_num: item.item_code,
+    show_qty: item.qty ?? null,
+    show_uom: item.uom,
+    show_rate: item.rate ?? null,
+    show_amt: item.amount ?? null,
+    item_expiry_date: item.expiry_date,
+    ais_batch_num: item.batch_no,
+  };
+}
+
+export interface PosDispensedTransaction {
+  name: string;
+  source?: "pos";
+  transaction_date?: string;
+  customer?: string;
+  customer_name?: string;
+  patient?: string;
+  grand_total?: number | null;
+  status?: string;
+  custom_remarks?: string;
+  custom_reference_type?: string;
+  custom_reference_name?: string;
+  set_warehouse?: string;
+  visit_type?: string | null;
+  delivery_note?: string | null;
+  item_count?: number;
+  items: PosDispensedMedicationItem[];
+}
+
+export async function getPatientPosDispensedMedications(
+  patient: string,
+  limit = 50,
+  opts?: { fromDate?: string; toDate?: string }
+): Promise<PosDispensedTransaction[]> {
+  try {
+    const params = new URLSearchParams({
+      patient,
+      limit: String(limit),
+    });
+    if (opts?.fromDate) params.set("from_date", opts.fromDate);
+    if (opts?.toDate) params.set("to_date", opts.toDate);
+    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_pos_dispensed_medications?${params.toString()}`;
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch POS dispensed medications');
+    }
+    return data?.message || [];
+  } catch (error) {
+    console.error('Error fetching POS dispensed medications:', error);
     return [];
   }
 }
@@ -707,10 +829,24 @@ export interface OpenPharmacyPatientVisit {
 
 export async function getOpenPharmacyPatientVisits(
   patient: string,
-  limit = 20
+  opts?: {
+    limit?: number;
+    includeClosed?: boolean;
+    fromDate?: string;
+    toDate?: string;
+  }
 ): Promise<OpenPharmacyPatientVisit[]> {
   try {
-    const apiUrl = `/api/method/klik_pos.api.patient.get_open_pharmacy_patient_visits?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const limit = opts?.limit ?? 20;
+    const params = new URLSearchParams();
+    params.set("patient", patient);
+    params.set("limit", String(limit));
+    if (opts?.includeClosed) {
+      params.set("include_closed", "1");
+      if (opts.fromDate) params.set("from_date", opts.fromDate);
+      if (opts.toDate) params.set("to_date", opts.toDate);
+    }
+    const apiUrl = `/api/method/klik_pos.api.patient.get_open_pharmacy_patient_visits?${params.toString()}`;
     const response = await fetch(apiUrl, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
@@ -734,9 +870,35 @@ export async function getOpenPharmacyPatientVisits(
   }
 }
 
+export async function getPatientVisitDate(
+  doctype: string,
+  name: string
+): Promise<string | null> {
+  try {
+    const params = new URLSearchParams({ doctype, name });
+    const response = await fetch(
+      `/api/method/klik_pos.api.patient.get_patient_visit_date?${params.toString()}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) return null;
+    const message = data?.message;
+    const raw = typeof message === "object" ? message?.date : message;
+    const iso = String(raw || "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : null;
+  } catch (error) {
+    console.error("Error fetching patient visit date:", error);
+    return null;
+  }
+}
+
 export async function createPatientVisit(
   patient: string
-): Promise<{ doctype: string; name: string; docstatus?: number; visit_type?: string | null; cost_center?: string | null } | null> {
+): Promise<{ doctype: string; name: string; docstatus?: number; visit_type?: string | null; cost_center?: string | null; visit_date?: string | null } | null> {
   try {
     const csrfToken = window.csrf_token;
     const response = await fetch('/api/method/klik_pos.api.patient.create_patient_visit', {

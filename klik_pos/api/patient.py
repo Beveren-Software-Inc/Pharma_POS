@@ -135,8 +135,8 @@ def _resolve_pharmacy_visit_type():
 	return "Pharmacy"
 
 
-def _pharmacy_visit_type_values():
-	"""Return visit type names that count as Pharmacy for open-visit lookup."""
+def _legacy_pharmacy_visit_type_values():
+	"""Hardcoded Pharmacy visit type names — used only when the POS flag is unavailable."""
 	types = []
 	for candidate in PHARMACY_VISIT_TYPE_CANDIDATES:
 		if frappe.db.exists("DocType", "Patient Visit Type") and frappe.db.exists(
@@ -147,7 +147,6 @@ def _pharmacy_visit_type_values():
 			types.append(candidate)
 		else:
 			types.append(candidate)
-	# Deduplicate while preserving order
 	seen = set()
 	out = []
 	for value in types:
@@ -155,6 +154,27 @@ def _pharmacy_visit_type_values():
 			seen.add(value)
 			out.append(value)
 	return out
+
+
+def _pos_display_visit_type_values():
+	"""Visit types that should appear on Pharmacy POS (Display On Pharmacy POS).
+
+	Creation still uses Pharmacy via `_resolve_pharmacy_visit_type`. Display is
+	driven by Patient Visit Type.display_on_pharmacy_pos so reception can show
+	OP / follow-up / etc. without changing what POS creates.
+	"""
+	if frappe.db.exists("DocType", "Patient Visit Type") and frappe.db.has_column(
+		"Patient Visit Type", "display_on_pharmacy_pos"
+	):
+		filters = {"display_on_pharmacy_pos": 1}
+		if frappe.db.has_column("Patient Visit Type", "disabled"):
+			filters["disabled"] = 0
+		return frappe.get_all(
+			"Patient Visit Type",
+			filters=filters,
+			pluck="name",
+		)
+	return _legacy_pharmacy_visit_type_values()
 
 
 def _extract_medication_order_items(order_doc):
@@ -427,27 +447,30 @@ def search_patients(search_query: str):
 
 
 @frappe.whitelist()
-def get_pending_inpatient_medication_orders(patient: str):
+def get_pending_inpatient_medication_orders(patient: str, include_unsigned: int | str | bool = 0):
 	"""
 	Get Inpatient Medication Orders for dispensing.
-	Excludes Completed, Draft, and Unsigned prescriptions from the pending tab.
+	By default excludes Completed, Draft, and Unsigned from the pending tab.
+	Pass include_unsigned=1 to also return Unsigned prescriptions.
 	"""
 	try:
 		# Check if Patient Medication Order doctype exists
 		if not frappe.db.exists("DocType", "Patient Medication Order"):
 			frappe.throw("Patient Medication Order doctype not found. Please ensure the healthcare app is installed.")
-		
+
+		include_unsigned = bool(frappe.utils.cint(include_unsigned))
+
 		# Get the doctype meta to check which fields exist
 		order_meta = frappe.get_meta("Patient Medication Order")
 		available_fields = [f.fieldname for f in order_meta.fields]
-		
+
 		# Build fields list based on what's available
 		fields_to_fetch = ["name", "patient", "patient_name", "status"]
 		for f in ("inpatient_record", "reference_doctype"):
 			if f in available_fields:
 				fields_to_fetch.append(f)
 		order_by_field = None
-		
+
 		# Check if posting_date exists
 		if "posting_date" in available_fields:
 			fields_to_fetch.append("posting_date")
@@ -456,14 +479,18 @@ def get_pending_inpatient_medication_orders(patient: str):
 			# Fallback to creation date if posting_date doesn't exist
 			fields_to_fetch.append("creation")
 			order_by_field = "creation desc"
-		
-		# Pending tab: active orders only (exclude completed, draft, unsigned)
+
+		excluded_statuses = ["Completed", "Draft"]
+		if not include_unsigned:
+			excluded_statuses.append("Unsigned")
+
+		# Pending tab: active orders (optionally including Unsigned)
 		orders = frappe.get_all(
 			"Patient Medication Order",
 			fields=fields_to_fetch,
 			filters={
 				"patient": patient,
-				"status": ["not in", ["Completed", "Draft", "Unsigned"]],
+				"status": ["not in", excluded_statuses],
 			},
 			order_by=order_by_field if order_by_field else "name desc"
 		)
@@ -561,8 +588,19 @@ def _legacy_sales_item_to_dict(row) -> dict:
 	}
 
 
+def _apply_date_range_filter(filters, field, from_date=None, to_date=None):
+	from_val = str(from_date or "").strip()[:10]
+	to_val = str(to_date or "").strip()[:10]
+	if from_val and to_val:
+		filters[field] = ["between", [from_val, to_val]]
+	elif from_val:
+		filters[field] = [">=", from_val]
+	elif to_val:
+		filters[field] = ["<=", to_val]
+
+
 @frappe.whitelist()
-def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
+def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50, from_date=None, to_date=None):
 	"""
 	Legacy Sales Transactions (+ line items) for a patient.
 	Used by hospital pharmacy Medication Orders → Legacy Dispensed Medicine tab.
@@ -574,9 +612,13 @@ def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
 			return []
 
 		try:
-			limit = max(1, min(int(limit), 100))
+			max_limit = 500 if (from_date or to_date) else 100
+			limit = max(1, min(int(limit), max_limit))
 		except Exception:
 			limit = 50
+
+		filters = {"patient": patient}
+		_apply_date_range_filter(filters, "trans_date", from_date, to_date)
 
 		# POS pharmacists may not have Desk read on this DocType — whitelist is gated by login.
 		transactions = frappe.get_all(
@@ -600,7 +642,7 @@ def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
 				"pink_presc_num",
 				"trans_remarks",
 			],
-			filters={"patient": patient},
+			filters=filters,
 			order_by="trans_date desc, creation desc",
 			limit=limit,
 			ignore_permissions=True,
@@ -639,6 +681,219 @@ def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching legacy dispensed medications")
 		frappe.throw(f"Failed to fetch legacy dispensed medications: {str(e)}")
+
+
+def _pos_dispense_dn_items_by_sales_order(order_names):
+	"""Map Sales Order name -> Delivery Note Item rows (non-return DN)."""
+	if not order_names:
+		return {}
+
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			dni.against_sales_order AS sales_order,
+			dni.parent AS delivery_note,
+			dni.name AS dn_detail,
+			dni.so_detail,
+			dni.item_code,
+			dni.batch_no
+		FROM `tabDelivery Note Item` dni
+		INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+		WHERE dni.against_sales_order IN %(orders)s
+		  AND dn.docstatus = 1
+		  AND IFNULL(dn.is_return, 0) = 0
+		""",
+		{"orders": order_names},
+		as_dict=True,
+	)
+
+	dn_items_map = {}
+	for row in rows:
+		dn_items_map.setdefault(row.sales_order, []).append(row)
+	return dn_items_map
+
+
+def _pos_dispense_expiry_by_batch(batch_nos):
+	"""Batch name / batch_id -> expiry date string."""
+	names = [b for b in {str(b).strip() for b in (batch_nos or []) if b} if b]
+	if not names:
+		return {}
+
+	expiry_by_batch = {}
+	try:
+		rows = frappe.get_all(
+			"Batch",
+			filters={"name": ["in", names]},
+			fields=["name", "batch_id", "expiry_date"],
+			ignore_permissions=True,
+		)
+		found = {row.name for row in rows}
+		missing = [n for n in names if n not in found]
+		if missing:
+			rows.extend(
+				frappe.get_all(
+					"Batch",
+					filters={"batch_id": ["in", missing]},
+					fields=["name", "batch_id", "expiry_date"],
+					ignore_permissions=True,
+				)
+			)
+		for row in rows:
+			expiry = str(row.expiry_date) if row.get("expiry_date") else None
+			if row.get("name"):
+				expiry_by_batch[row.name] = expiry
+			if row.get("batch_id"):
+				expiry_by_batch[row.batch_id] = expiry
+	except Exception:
+		pass
+	return expiry_by_batch
+
+
+def _pos_dispense_item_to_dict(row, dn_match=None, expiry_by_batch=None) -> dict:
+	batch_no = None
+	if dn_match and dn_match.get("batch_no"):
+		batch_no = dn_match.get("batch_no")
+	else:
+		batch_no = row.get("batch_no") or row.get("custom_batch")
+
+	expiry = None
+	if batch_no and expiry_by_batch:
+		expiry = expiry_by_batch.get(batch_no)
+
+	return {
+		"name": row.name,
+		"idx": row.get("idx"),
+		"item_code": row.get("item_code"),
+		"item_name": row.get("item_name"),
+		"qty": row.get("qty"),
+		"uom": row.get("uom"),
+		"rate": row.get("rate"),
+		"amount": row.get("amount"),
+		"batch_no": batch_no,
+		"expiry_date": expiry,
+		"dosage": row.get("custom_dosage"),
+		"dispensing_lot": row.get("custom_dispensing_lot"),
+	}
+
+
+@frappe.whitelist()
+def get_patient_pos_dispensed_medications(patient: str, limit: int = 50, from_date=None, to_date=None):
+	"""
+	Submitted POS hospital dispenses (Sales Order + Delivery Note lines) for a patient.
+	Used by hospital pharmacy Medication Orders → Dispensed Medicine tab, alongside legacy sales.
+	"""
+	try:
+		if not patient:
+			return []
+		if not frappe.db.has_column("Sales Order", "custom_is_pos"):
+			return []
+
+		try:
+			max_limit = 500 if (from_date or to_date) else 100
+			limit = max(1, min(int(limit), max_limit))
+		except Exception:
+			limit = 50
+
+		customer = resolve_customer_from_patient(patient)
+		has_patient_field = frappe.get_meta("Sales Order").has_field("patient")
+
+		filters = {"custom_is_pos": 1, "docstatus": 1}
+		_apply_date_range_filter(filters, "transaction_date", from_date, to_date)
+		or_filters = []
+		if has_patient_field:
+			or_filters.append(["patient", "=", patient])
+		if customer:
+			or_filters.append(["customer", "=", customer])
+		if not or_filters:
+			return []
+
+		fields = [
+			"name",
+			"transaction_date",
+			"customer",
+			"customer_name",
+			"grand_total",
+			"status",
+			"docstatus",
+		]
+		if has_patient_field:
+			fields.append("patient")
+		if frappe.db.has_column("Sales Order", "custom_remarks"):
+			fields.append("custom_remarks")
+		if frappe.db.has_column("Sales Order", "custom_reference_type"):
+			fields.append("custom_reference_type")
+		if frappe.db.has_column("Sales Order", "custom_reference_name"):
+			fields.append("custom_reference_name")
+		if frappe.db.has_column("Sales Order", "set_warehouse"):
+			fields.append("set_warehouse")
+
+		orders = frappe.get_all(
+			"Sales Order",
+			fields=fields,
+			filters=filters,
+			or_filters=or_filters,
+			order_by="transaction_date desc, creation desc",
+			limit=limit,
+			ignore_permissions=True,
+		)
+		if not orders:
+			return []
+
+		order_names = [row.name for row in orders]
+		dn_items_by_order = _pos_dispense_dn_items_by_sales_order(order_names)
+
+		item_fields = ["name", "idx", "parent", "item_code", "item_name", "qty", "rate", "amount", "uom"]
+		for optional in ("batch_no", "custom_batch", "custom_dispensing_lot", "custom_dosage"):
+			if frappe.db.has_column("Sales Order Item", optional):
+				item_fields.append(optional)
+
+		item_rows = frappe.get_all(
+			"Sales Order Item",
+			filters={"parent": ["in", order_names]},
+			fields=item_fields,
+			order_by="idx asc",
+			ignore_permissions=True,
+		)
+
+		batch_nos = []
+		items_by_order = {}
+		for row in item_rows:
+			dn_match = None
+			for dn_item in dn_items_by_order.get(row.parent, []):
+				if dn_item.so_detail == row.name or (
+					not dn_item.so_detail and dn_item.item_code == row.item_code
+				):
+					dn_match = dn_item
+					break
+			batch_candidate = (dn_match.batch_no if dn_match else None) or row.get("batch_no") or row.get("custom_batch")
+			if batch_candidate:
+				batch_nos.append(batch_candidate)
+			items_by_order.setdefault(row.parent, []).append((row, dn_match))
+
+		expiry_by_batch = _pos_dispense_expiry_by_batch(batch_nos)
+
+		results = []
+		for order in orders:
+			raw_pairs = items_by_order.get(order.name, [])
+			items = [
+				_pos_dispense_item_to_dict(row, dn_match, expiry_by_batch)
+				for row, dn_match in raw_pairs
+			]
+			entry = dict(order)
+			entry["items"] = items
+			entry["item_count"] = len(items)
+			entry["source"] = "pos"
+			entry["visit_type"] = _visit_type_from_reference(getattr(order, "custom_reference_type", None))
+			entry["delivery_note"] = None
+			dn_rows = dn_items_by_order.get(order.name) or []
+			if dn_rows:
+				entry["delivery_note"] = dn_rows[0].delivery_note
+			results.append(entry)
+
+		return results
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Error fetching POS dispensed medications")
+		frappe.throw(f"Failed to fetch POS dispensed medications: {str(e)}")
 
 
 def _subscription_plan_item_to_dict(row) -> dict:
@@ -1063,21 +1318,31 @@ def get_patient_history_summary(patient: str, limit: int = 10):
 
 
 @frappe.whitelist()
-def get_open_pharmacy_patient_visits(patient: str, limit: int = 20):
+def get_open_pharmacy_patient_visits(
+	patient: str,
+	limit: int = 20,
+	include_closed: int | str | bool = 0,
+	from_date: str | None = None,
+	to_date: str | None = None,
+):
 	"""
-	Return open Patient Visits for this patient with visit type Pharmacy.
+	Return Patient Visits whose visit type is flagged Display On Pharmacy POS.
 
-	Used by POS so pharmacists can reuse a visit created earlier by reception
-	instead of opening a duplicate pharmacy visit.
+	Default: open visits only.
+	With include_closed=1: also include closed visits (Completed / External Referral)
+	in the given date range (defaults to the last 7 days). Cancelled stays excluded.
+	Creating a visit from POS still uses the Pharmacy visit type.
 	"""
 	try:
 		if not patient:
 			frappe.throw("Patient is required")
 
 		try:
-			limit = max(1, min(int(limit), 50))
+			limit = max(1, min(int(limit), 100))
 		except Exception:
 			limit = 20
+
+		include_closed = bool(frappe.utils.cint(include_closed))
 
 		if not frappe.db.exists("DocType", "Patient Visit"):
 			return {"success": True, "visits": [], "doctype": None}
@@ -1089,36 +1354,166 @@ def get_open_pharmacy_patient_visits(patient: str, limit: int = 20):
 			if candidate in fields:
 				fetch.append(candidate)
 
+		date_field = next(
+			(f for f in ("encounter_date", "visit_date", "posting_date") if f in fields),
+			None,
+		)
+
+		if include_closed:
+			today = frappe.utils.getdate()
+			if from_date:
+				from_date = frappe.utils.getdate(from_date)
+			else:
+				from_date = frappe.utils.add_days(today, -7)
+			if to_date:
+				to_date = frappe.utils.getdate(to_date)
+			else:
+				to_date = today
+			if from_date > to_date:
+				from_date, to_date = to_date, from_date
+
 		filters = {
 			"patient": patient,
 			"docstatus": ["<", 2],
 		}
-		if "status" in fields:
-			filters["status"] = ["not in", list(CLOSED_PATIENT_VISIT_STATUSES)]
 
-		pharmacy_types = _pharmacy_visit_type_values()
-		# Also match common reception labels that contain "Pharmacy"
-		or_filters = None
 		if "visit_type" in fields:
-			or_filters = [["visit_type", "in", pharmacy_types], ["visit_type", "like", "%Pharmacy%"]]
+			pos_types = _pos_display_visit_type_values()
+			if not pos_types:
+				return {
+					"success": True,
+					"visits": [],
+					"doctype": "Patient Visit",
+					"include_closed": include_closed,
+					"from_date": str(from_date) if include_closed else None,
+					"to_date": str(to_date) if include_closed else None,
+				}
+			filters["visit_type"] = ["in", pos_types]
 
-		order_by = "encounter_date desc, creation desc" if "encounter_date" in fields else "modified desc"
+		or_filters = None
+		if "status" in fields:
+			if include_closed:
+				# Open visits always; closed (non-cancelled) only within the date window.
+				closed_for_reuse = [s for s in CLOSED_PATIENT_VISIT_STATUSES if s != "Cancelled"]
+				or_filters = [
+					["status", "not in", list(CLOSED_PATIENT_VISIT_STATUSES)],
+				]
+				if date_field and closed_for_reuse:
+					or_filters.append(
+						["status", "in", closed_for_reuse],
+					)
+					# Date filter applied after fetch for closed rows (or_filters can't AND
+					# status+date across branches cleanly with get_all). Filter in Python below.
+				elif not closed_for_reuse:
+					filters["status"] = ["not in", list(CLOSED_PATIENT_VISIT_STATUSES)]
+					or_filters = None
+			else:
+				filters["status"] = ["not in", list(CLOSED_PATIENT_VISIT_STATUSES)]
+
+		order_by = f"{date_field} desc, creation desc" if date_field else "modified desc"
+		# Wider page when including closed so date filtering still yields enough rows.
+		fetch_limit = min(200, max(limit * 5, 50)) if include_closed else limit
 		rows = frappe.get_all(
 			"Patient Visit",
 			filters=filters,
 			or_filters=or_filters,
 			fields=fetch,
 			order_by=order_by,
-			limit=limit,
+			limit=fetch_limit,
 			ignore_permissions=True,
 		)
+
+		if include_closed and "status" in fields:
+			closed_for_reuse = {s for s in CLOSED_PATIENT_VISIT_STATUSES if s != "Cancelled"}
+			filtered = []
+			for row in rows:
+				status = row.get("status") or ""
+				if status == "Cancelled":
+					continue
+				if status in closed_for_reuse:
+					if not date_field:
+						filtered.append(row)
+						continue
+					raw = row.get(date_field)
+					if not raw:
+						continue
+					try:
+						d = frappe.utils.getdate(raw)
+					except Exception:
+						continue
+					if d < from_date or d > to_date:
+						continue
+				filtered.append(row)
+			rows = filtered[:limit]
+		else:
+			rows = rows[:limit]
+
 		for row in rows:
 			row["doctype"] = "Patient Visit"
 
-		return {"success": True, "visits": rows, "doctype": "Patient Visit"}
+		return {
+			"success": True,
+			"visits": rows,
+			"doctype": "Patient Visit",
+			"include_closed": include_closed,
+			"from_date": str(from_date) if include_closed else None,
+			"to_date": str(to_date) if include_closed else None,
+		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching open pharmacy patient visits")
 		frappe.throw(f"Failed to fetch open pharmacy visits: {str(e)}")
+
+
+_VISIT_DATE_FIELDS = (
+	"encounter_date",
+	"visit_date",
+	"posting_date",
+	"admission_date",
+	"transaction_date",
+)
+
+
+def _iso_date(value):
+	if not value:
+		return None
+	try:
+		return str(frappe.utils.getdate(value))
+	except Exception:
+		text = str(value).strip()
+		return text[:10] if len(text) >= 10 else None
+
+
+def _document_visit_date(doctype=None, name=None, doc=None):
+	"""Best-effort visit/encounter date from a healthcare reference document."""
+	if doc is None:
+		if not doctype or not name or not frappe.db.exists(doctype, name):
+			return None
+		meta = frappe.get_meta(doctype)
+		fields = {df.fieldname for df in meta.fields}
+		fetch = [field for field in _VISIT_DATE_FIELDS if field in fields]
+		if fetch:
+			row = frappe.db.get_value(doctype, name, fetch, as_dict=True) or {}
+			for field in fetch:
+				parsed = _iso_date(row.get(field))
+				if parsed:
+					return parsed
+		return _iso_date(frappe.db.get_value(doctype, name, "creation"))
+
+	meta = frappe.get_meta(doc.doctype)
+	fields = {df.fieldname for df in meta.fields}
+	for field in _VISIT_DATE_FIELDS:
+		if field in fields:
+			parsed = _iso_date(getattr(doc, field, None))
+			if parsed:
+				return parsed
+	return _iso_date(getattr(doc, "creation", None))
+
+
+@frappe.whitelist()
+def get_patient_visit_date(doctype: str, name: str):
+	if not doctype or not name:
+		frappe.throw("Document type and name are required")
+	return {"success": True, "date": _document_visit_date(doctype, name)}
 
 
 @frappe.whitelist()
@@ -1201,6 +1596,7 @@ def create_patient_visit(patient: str):
 			"visit_type": getattr(doc, "visit_type", None),
 			"cost_center": getattr(doc, "cost_center", None),
 			"docstatus": doc.docstatus,
+			"visit_date": _document_visit_date(doc=doc),
 		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error creating Patient Visit")

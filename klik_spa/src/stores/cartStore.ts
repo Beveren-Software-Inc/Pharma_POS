@@ -49,27 +49,82 @@ function getMaxQtyInItemUOM(item: CartItem): number | null {
   return available / cf;
 }
 
-// Preserve batch_no/serial_no from current cart when replacing with merged items (avoids losing them when applyPricingRules runs after scan)
+type CartMedicationMeta = CartItem & {
+  medicationOrder?: string;
+  medicationOrders?: string[];
+  medication_order_entry?: string;
+  original_drug?: string;
+  alternative_drug?: string;
+  skip_stock_validation?: boolean;
+};
+
+function findMatchingCartLine(item: CartItem, currentCart: CartItem[]): CartItem | undefined {
+  const lineId = (item as { cartLineId?: string }).cartLineId;
+  return lineId
+    ? currentCart.find((c) => (c as { cartLineId?: string }).cartLineId === lineId)
+    : currentCart.find((c) => c.id === item.id && !(c as { cartLineId?: string }).cartLineId);
+}
+
+function mergeMedicationMeta(
+  existing: CartItem,
+  incoming: Partial<CartMedicationMeta>
+): Partial<CartMedicationMeta> {
+  const existingMeta = existing as CartMedicationMeta;
+  const orders = new Set<string>([
+    ...(existingMeta.medicationOrders || []),
+    ...(incoming.medicationOrders || []),
+  ].filter(Boolean));
+  if (existingMeta.medicationOrder) orders.add(existingMeta.medicationOrder);
+  if (incoming.medicationOrder) orders.add(incoming.medicationOrder);
+
+  return {
+    ...(incoming.medicationOrder || existingMeta.medicationOrder
+      ? { medicationOrder: incoming.medicationOrder || existingMeta.medicationOrder }
+      : {}),
+    ...(orders.size ? { medicationOrders: Array.from(orders) } : {}),
+    ...(incoming.medication_order_entry || existingMeta.medication_order_entry
+      ? {
+          medication_order_entry:
+            incoming.medication_order_entry || existingMeta.medication_order_entry,
+        }
+      : {}),
+    ...(incoming.original_drug || existingMeta.original_drug
+      ? { original_drug: incoming.original_drug || existingMeta.original_drug }
+      : {}),
+    ...(incoming.alternative_drug || existingMeta.alternative_drug
+      ? { alternative_drug: incoming.alternative_drug || existingMeta.alternative_drug }
+      : {}),
+    ...(incoming.skip_stock_validation || existingMeta.skip_stock_validation
+      ? { skip_stock_validation: true }
+      : {}),
+  };
+}
+
+// Preserve batch/serial and Patient Medication Order metadata when pricing replaces cart lines.
 function preserveBatchAndSerial(merged: CartItem[], currentCart: CartItem[]): CartItem[] {
   return merged.map((item) => {
-    const lineId = (item as { cartLineId?: string }).cartLineId;
-    const current = lineId
-      ? currentCart.find((c) => (c as { cartLineId?: string }).cartLineId === lineId)
-      : currentCart.find((c) => c.id === item.id && !(c as { cartLineId?: string }).cartLineId);
-    if (current && (
-      (current as { batch_no?: string }).batch_no != null ||
-      (current as { serial_no?: string }).serial_no != null ||
-      (current as { dispensing_lot?: string }).dispensing_lot != null
-    )) {
-      return {
-        ...item,
-        batch_no: (current as { batch_no?: string }).batch_no,
-        serial_no: (current as { serial_no?: string }).serial_no,
-        dispensing_lot: (current as { dispensing_lot?: string }).dispensing_lot,
-        stock_uom: (current as { stock_uom?: string }).stock_uom,
-      };
-    }
-    return item;
+    const current = findMatchingCartLine(item, currentCart);
+    if (!current) return item;
+
+    const currentMeta = current as CartMedicationMeta;
+    const hasBatchOrSerial =
+      currentMeta.batch_no != null ||
+      currentMeta.serial_no != null ||
+      currentMeta.dispensing_lot != null;
+    const withBatch = hasBatchOrSerial
+      ? {
+          ...item,
+          batch_no: currentMeta.batch_no,
+          serial_no: currentMeta.serial_no,
+          dispensing_lot: currentMeta.dispensing_lot,
+          stock_uom: currentMeta.stock_uom,
+        }
+      : item;
+
+    return {
+      ...withBatch,
+      ...mergeMedicationMeta(current, withBatch as CartMedicationMeta),
+    };
   });
 }
 
@@ -277,12 +332,17 @@ export const useCartStore = create<CartState>()(
 
           const lineKey =
             (existingItem as { cartLineId?: string }).cartLineId || existingItem.id;
+          const incomingMeta = item as CartMedicationMeta;
           set((state) => ({
             cartItems: state.cartItems.map((cartItem) => {
               const key =
                 (cartItem as { cartLineId?: string }).cartLineId || cartItem.id;
               return key === lineKey
-                ? { ...cartItem, quantity: cartItem.quantity + quantity }
+                ? {
+                    ...cartItem,
+                    quantity: cartItem.quantity + quantity,
+                    ...mergeMedicationMeta(cartItem, incomingMeta),
+                  }
                 : cartItem;
             }),
           }));
