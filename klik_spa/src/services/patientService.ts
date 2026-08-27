@@ -366,10 +366,17 @@ export interface LegacyDispensedTransaction {
 
 export async function getPatientLegacyDispensedMedications(
   patient: string,
-  limit = 50
+  limit = 50,
+  opts?: { fromDate?: string; toDate?: string }
 ): Promise<LegacyDispensedTransaction[]> {
   try {
-    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_legacy_dispensed_medications?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const params = new URLSearchParams({
+      patient,
+      limit: String(limit),
+    });
+    if (opts?.fromDate) params.set("from_date", opts.fromDate);
+    if (opts?.toDate) params.set("to_date", opts.toDate);
+    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_legacy_dispensed_medications?${params.toString()}`;
     const response = await fetch(apiUrl, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
@@ -457,10 +464,17 @@ export interface PosDispensedTransaction {
 
 export async function getPatientPosDispensedMedications(
   patient: string,
-  limit = 50
+  limit = 50,
+  opts?: { fromDate?: string; toDate?: string }
 ): Promise<PosDispensedTransaction[]> {
   try {
-    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_pos_dispensed_medications?patient=${encodeURIComponent(patient)}&limit=${encodeURIComponent(String(limit))}`;
+    const params = new URLSearchParams({
+      patient,
+      limit: String(limit),
+    });
+    if (opts?.fromDate) params.set("from_date", opts.fromDate);
+    if (opts?.toDate) params.set("to_date", opts.toDate);
+    const apiUrl = `/api/method/klik_pos.api.patient.get_patient_pos_dispensed_medications?${params.toString()}`;
     const response = await fetch(apiUrl, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },

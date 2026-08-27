@@ -6,7 +6,9 @@ const DISPENSE_STATUS = "Dispensed medicine" as const;
 export function usePosDispenseHistory(
   searchTerm: string = "",
   cashierName?: string,
-  enabled = true
+  enabled = true,
+  fromDate?: string,
+  toDate?: string
 ) {
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [isLoading, setIsLoading] = useState(enabled);
@@ -17,7 +19,7 @@ export function usePosDispenseHistory(
   const [totalLoaded, setTotalLoaded] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
 
-  const LIMIT = 100;
+  const LIMIT = fromDate || toDate ? 500 : 100;
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(searchTerm);
 
   useEffect(() => {
@@ -46,9 +48,11 @@ export function usePosDispenseHistory(
           cashierName && cashierName !== "all"
             ? `&cashier_name=${encodeURIComponent(cashierName)}`
             : "";
+        const fromParam = fromDate ? `&from_date=${encodeURIComponent(fromDate)}` : "";
+        const toParam = toDate ? `&to_date=${encodeURIComponent(toDate)}` : "";
 
         const response = await fetch(
-          `/api/method/klik_pos.api.sales_order.get_pos_dispense_history?limit=${LIMIT}&start=${start}${searchParam}${cashierParam}`,
+          `/api/method/klik_pos.api.sales_order.get_pos_dispense_history?limit=${LIMIT}&start=${start}${searchParam}${cashierParam}${fromParam}${toParam}`,
           {
             method: "GET",
             headers: {
@@ -169,7 +173,7 @@ export function usePosDispenseHistory(
         setIsLoadingMore(false);
       }
     },
-    [debouncedSearchTerm, cashierName, enabled]
+    [debouncedSearchTerm, cashierName, enabled, fromDate, toDate, LIMIT]
   );
 
   const loadMore = useCallback(() => {
@@ -196,7 +200,7 @@ export function usePosDispenseHistory(
     setTotalLoaded(0);
     setHasMore(true);
     fetchDispenses(0, false);
-  }, [debouncedSearchTerm, cashierName, enabled, fetchDispenses]);
+  }, [debouncedSearchTerm, cashierName, enabled, fromDate, toDate, fetchDispenses]);
 
   return {
     invoices,

@@ -2,7 +2,7 @@
 
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package, CalendarDays, MessageCircle } from "lucide-react";
+import { X, Check, ChevronDown, Printer, ClipboardList, Clock, UserPlus, CheckCircle, History, AlertTriangle, Stethoscope, Search, FileText, ExternalLink, Package, CalendarDays, MessageCircle, FileSpreadsheet } from "lucide-react";
 import type { InpatientMedicationOrder, PatientHistorySummary, ItemAlternativeOption, PatientUploadDocument, LegacyDispensedTransaction, LegacyDispensedMedicationItem, PosDispensedTransaction, SubscriptionMedicationPlan, SubscriptionMedicationPlanItem, OpenPharmacyPatientVisit } from "../services/patientService";
 import {
   searchPosStockItemsForAlternative,
@@ -18,11 +18,19 @@ import {
   resolveSubscriptionItemDisplayName,
   subscriptionMedicationLineKey,
   getOpenPharmacyPatientVisits,
+  getPatientLegacyDispensedMedications,
+  getPatientPosDispensedMedications,
 } from "../services/patientService";
 import { toast } from "react-toastify";
 import DispenseVisitTypeBadge from "./DispenseVisitTypeBadge";
 import MedicationOrderDischargedBadge from "./MedicationOrderDischargedBadge";
 import SendSubscriptionMedicationWhatsAppModal from "./SendSubscriptionMedicationWhatsAppModal";
+import { usePOSDetails } from "../hooks/usePOSProfile";
+import {
+  exportDispenseHistoryToCSV,
+  exportDispenseHistoryToPDF,
+  patientDispensesToReportLines,
+} from "../utils/exportDispenseHistory";
 
 interface InpatientMedicationOrdersModalProps {
   isOpen: boolean;
@@ -72,6 +80,13 @@ function defaultClosedVisitRange(): { from: string; to: string } {
   const to = new Date();
   const from = new Date();
   from.setDate(from.getDate() - 7);
+  return { from: localDateISO(from), to: localDateISO(to) };
+}
+
+function defaultExportRange(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 30);
   return { from: localDateISO(from), to: localDateISO(to) };
 }
 
@@ -1063,9 +1078,78 @@ export default function InpatientMedicationOrdersModal({
   const [showClosedVisitRangeModal, setShowClosedVisitRangeModal] = useState(false);
   const [includeUnsignedPending, setIncludeUnsignedPending] = useState(false);
   const [loadingUnsignedPending, setLoadingUnsignedPending] = useState(false);
+  const [showDispenseExportModal, setShowDispenseExportModal] = useState(false);
+  const [dispenseExportFormat, setDispenseExportFormat] = useState<"pdf" | "excel">("pdf");
+  const [dispenseExportFrom, setDispenseExportFrom] = useState(() => defaultExportRange().from);
+  const [dispenseExportTo, setDispenseExportTo] = useState(() => defaultExportRange().to);
+  const [exportingDispenseHistory, setExportingDispenseHistory] = useState(false);
   const printButtonRef = useRef<HTMLButtonElement | null>(null);
-
+  const { posDetails } = usePOSDetails();
   const MEDICATION_ORDER_DOCTYPE = "Patient Medication Order";
+
+  const openDispenseExportModal = (format: "pdf" | "excel") => {
+    if (!patientId) {
+      toast.error("Select a patient first.");
+      return;
+    }
+    const range = defaultExportRange();
+    setDispenseExportFrom(range.from);
+    setDispenseExportTo(range.to);
+    setDispenseExportFormat(format);
+    setShowDispenseExportModal(true);
+  };
+
+  const confirmDispenseHistoryExport = async () => {
+    if (!patientId) {
+      toast.error("Select a patient first.");
+      return;
+    }
+    let from = dispenseExportFrom;
+    let to = dispenseExportTo;
+    if (!from || !to) {
+      toast.error("Choose both from and to dates.");
+      return;
+    }
+    if (from > to) {
+      [from, to] = [to, from];
+      setDispenseExportFrom(from);
+      setDispenseExportTo(to);
+    }
+
+    setExportingDispenseHistory(true);
+    try {
+      const [legacy, pos] = await Promise.all([
+        getPatientLegacyDispensedMedications(patientId, 500, { fromDate: from, toDate: to }),
+        getPatientPosDispensedMedications(patientId, 500, { fromDate: from, toDate: to }),
+      ]);
+      const lines = patientDispensesToReportLines({ pos, legacy });
+      if (!lines.length) {
+        toast.error("No dispensed medicine found in this date range.");
+        return;
+      }
+      if (dispenseExportFormat === "excel") {
+        exportDispenseHistoryToCSV(lines, `dispensed_history_${patientId}`);
+        toast.success(`Exported ${lines.length} line(s) to Excel`);
+      } else {
+        await exportDispenseHistoryToPDF(
+          lines,
+          {
+            title: "Dispensed Medicine Report",
+            patientName: patientName || patientId,
+            fromDate: from,
+            toDate: to,
+          },
+        posDetails && typeof posDetails.cost_center === "string" ? posDetails.cost_center : undefined
+        );
+        toast.success("PDF report ready to print");
+      }
+      setShowDispenseExportModal(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to export dispensed history");
+    } finally {
+      setExportingDispenseHistory(false);
+    }
+  };
 
   const loadOpenPharmacyVisits = useCallback(async (opts?: {
     includeClosed?: boolean;
@@ -1153,6 +1237,11 @@ export default function InpatientMedicationOrdersModal({
       setShowClosedVisitRangeModal(false);
       setIncludeUnsignedPending(false);
       setLoadingUnsignedPending(false);
+      setShowDispenseExportModal(false);
+      setExportingDispenseHistory(false);
+      const exportRange = defaultExportRange();
+      setDispenseExportFrom(exportRange.from);
+      setDispenseExportTo(exportRange.to);
     }
   }, [isOpen]);
 
@@ -1318,12 +1407,36 @@ export default function InpatientMedicationOrdersModal({
               )}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/60 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {isHospitalMode && activeTab === "legacy_dispensed" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => openDispenseExportModal("pdf")}
+                  className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-xs font-semibold bg-beveren-600 text-white hover:bg-beveren-700 transition-colors"
+                  title="Print PDF report"
+                >
+                  <FileText size={14} />
+                  PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openDispenseExportModal("excel")}
+                  className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                  title="Export Excel"
+                >
+                  <FileSpreadsheet size={14} />
+                  Excel
+                </button>
+              </>
+            )}
+            <button
+              onClick={onClose}
+              className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/60 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Tab Bar */}
@@ -2587,6 +2700,77 @@ export default function InpatientMedicationOrdersModal({
                       className="px-3 py-2 text-xs font-bold rounded-lg border-2 border-sky-600 text-sky-700 bg-sky-50 hover:bg-sky-100"
                     >
                       Apply
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )
+          : null}
+
+        {showDispenseExportModal && typeof document !== "undefined"
+          ? createPortal(
+              <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+                <div
+                  className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                  onClick={() => !exportingDispenseHistory && setShowDispenseExportModal(false)}
+                />
+                <div
+                  className="relative bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-sm border border-gray-200 dark:border-gray-700 p-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white">
+                    {dispenseExportFormat === "excel" ? "Export Excel" : "Print PDF"}
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Choose the date range for this dispensed medicine report.
+                  </p>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                        From
+                      </label>
+                      <input
+                        type="date"
+                        value={dispenseExportFrom}
+                        max={dispenseExportTo || undefined}
+                        onChange={(e) => setDispenseExportFrom(e.target.value)}
+                        className="w-full h-9 px-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+                        To
+                      </label>
+                      <input
+                        type="date"
+                        value={dispenseExportTo}
+                        min={dispenseExportFrom || undefined}
+                        onChange={(e) => setDispenseExportTo(e.target.value)}
+                        className="w-full h-9 px-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={exportingDispenseHistory}
+                      onClick={() => setShowDispenseExportModal(false)}
+                      className="px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={exportingDispenseHistory}
+                      onClick={() => void confirmDispenseHistoryExport()}
+                      className="px-3 py-2 text-xs font-bold rounded-lg border-2 border-beveren-600 text-beveren-700 bg-beveren-50 hover:bg-beveren-100 disabled:opacity-50"
+                    >
+                      {exportingDispenseHistory
+                        ? "Preparing…"
+                        : dispenseExportFormat === "excel"
+                          ? "Export Excel"
+                          : "Print PDF"}
                     </button>
                   </div>
                 </div>

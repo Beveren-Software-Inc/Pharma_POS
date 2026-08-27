@@ -1411,17 +1411,29 @@ def get_dispense_order_details(sales_order_name):
 		return {"success": False, "error": str(e)}
 
 
+def _apply_date_range_filter(filters, field, from_date=None, to_date=None):
+	from_val = str(from_date or "").strip()[:10]
+	to_val = str(to_date or "").strip()[:10]
+	if from_val and to_val:
+		filters[field] = ["between", [from_val, to_val]]
+	elif from_val:
+		filters[field] = [">=", from_val]
+	elif to_val:
+		filters[field] = ["<=", to_val]
+
+
 @frappe.whitelist()
-def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None):
+def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None, from_date=None, to_date=None):
 	"""List POS hospital dispense Sales Orders (submitted and held drafts)."""
 	try:
 		if not frappe.db.has_column("Sales Order", "custom_is_pos"):
 			return {"success": True, "data": [], "total_count": 0}
 
-		limit = int(limit or 100)
+		limit = min(max(int(limit or 100), 1), 500)
 		start = int(start or 0)
 
 		filters = {"custom_is_pos": 1, "docstatus": ["in", [0, 1]]}
+		_apply_date_range_filter(filters, "transaction_date", from_date, to_date)
 
 		if cashier_name and cashier_name != "all":
 			from klik_pos.api.sales_invoice import _get_user_ids_by_full_name

@@ -588,8 +588,19 @@ def _legacy_sales_item_to_dict(row) -> dict:
 	}
 
 
+def _apply_date_range_filter(filters, field, from_date=None, to_date=None):
+	from_val = str(from_date or "").strip()[:10]
+	to_val = str(to_date or "").strip()[:10]
+	if from_val and to_val:
+		filters[field] = ["between", [from_val, to_val]]
+	elif from_val:
+		filters[field] = [">=", from_val]
+	elif to_val:
+		filters[field] = ["<=", to_val]
+
+
 @frappe.whitelist()
-def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
+def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50, from_date=None, to_date=None):
 	"""
 	Legacy Sales Transactions (+ line items) for a patient.
 	Used by hospital pharmacy Medication Orders → Legacy Dispensed Medicine tab.
@@ -601,9 +612,13 @@ def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
 			return []
 
 		try:
-			limit = max(1, min(int(limit), 100))
+			max_limit = 500 if (from_date or to_date) else 100
+			limit = max(1, min(int(limit), max_limit))
 		except Exception:
 			limit = 50
+
+		filters = {"patient": patient}
+		_apply_date_range_filter(filters, "trans_date", from_date, to_date)
 
 		# POS pharmacists may not have Desk read on this DocType — whitelist is gated by login.
 		transactions = frappe.get_all(
@@ -627,7 +642,7 @@ def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50):
 				"pink_presc_num",
 				"trans_remarks",
 			],
-			filters={"patient": patient},
+			filters=filters,
 			order_by="trans_date desc, creation desc",
 			limit=limit,
 			ignore_permissions=True,
@@ -762,7 +777,7 @@ def _pos_dispense_item_to_dict(row, dn_match=None, expiry_by_batch=None) -> dict
 
 
 @frappe.whitelist()
-def get_patient_pos_dispensed_medications(patient: str, limit: int = 50):
+def get_patient_pos_dispensed_medications(patient: str, limit: int = 50, from_date=None, to_date=None):
 	"""
 	Submitted POS hospital dispenses (Sales Order + Delivery Note lines) for a patient.
 	Used by hospital pharmacy Medication Orders → Dispensed Medicine tab, alongside legacy sales.
@@ -774,7 +789,8 @@ def get_patient_pos_dispensed_medications(patient: str, limit: int = 50):
 			return []
 
 		try:
-			limit = max(1, min(int(limit), 100))
+			max_limit = 500 if (from_date or to_date) else 100
+			limit = max(1, min(int(limit), max_limit))
 		except Exception:
 			limit = 50
 
@@ -782,6 +798,7 @@ def get_patient_pos_dispensed_medications(patient: str, limit: int = 50):
 		has_patient_field = frappe.get_meta("Sales Order").has_field("patient")
 
 		filters = {"custom_is_pos": 1, "docstatus": 1}
+		_apply_date_range_filter(filters, "transaction_date", from_date, to_date)
 		or_filters = []
 		if has_patient_field:
 			or_filters.append(["patient", "=", patient])

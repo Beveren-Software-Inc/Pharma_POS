@@ -9,7 +9,6 @@ import {
   AlertTriangle,
   FilePlus,
   RefreshCw,
-  Download,
   Search,
   DollarSign,
   Grid3X3,
@@ -26,6 +25,7 @@ import {
   Printer,
   CalendarDays,
   MessageCircle,
+  FileSpreadsheet,
 } from "lucide-react";
 
 import InvoiceViewModal from "../components/InvoiceViewModal";
@@ -60,6 +60,12 @@ import {
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { isToday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
 import { exportInvoicesToCSV, getExportFilename, type ExportableInvoice } from "../utils/exportUtils";
+import { exportToPDF } from "../utils/exportInvoice";
+import {
+  exportDispenseHistoryToCSV,
+  exportDispenseHistoryToPDF,
+  invoicesToDispenseReportLines,
+} from "../utils/exportDispenseHistory";
 import { getPrintFormatsForDoctype, getSubscriptionMedicationPlans, resolveSubscriptionItemCode, resolveSubscriptionItemDisplayName, type SubscriptionMedicationPlan } from "../services/patientService";
 import SendSubscriptionMedicationWhatsAppModal from "../components/SendSubscriptionMedicationWhatsAppModal";
 import {
@@ -70,12 +76,29 @@ import {
 } from "../utils/dispenseReturnStatus";
 // import InvoiceViewPage from "./InvoiceViewPage";
 
+function localDateISO(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function defaultCustomRange(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 30);
+  return { from: localDateISO(from), to: localDateISO(to) };
+}
+
 export default function InvoiceHistoryPage() {
   const navigate = useNavigate();
   const isMobile = useMediaQuery("(max-width: 1024px)");
   const [activeTab, setActiveTab] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [dateFilter, setDateFilter] = useState("all");
+  const [customFromDate, setCustomFromDate] = useState(() => defaultCustomRange().from);
+  const [customToDate, setCustomToDate] = useState(() => defaultCustomRange().to);
+  const [exportingDispenseReport, setExportingDispenseReport] = useState(false);
   const [paymentFilter, setPaymentFilter] = useState("all");
   const [cashierFilter, setCashierFilter] = useState("all");
   const [viewMode, setViewMode] = useState<"cards" | "list">("list");
@@ -130,7 +153,15 @@ export default function InvoiceHistoryPage() {
   } = useProducts();
 
   const salesInvoiceQuery = useSalesInvoices(searchTerm, true, cashierFilter, !isHospitalPharmacy);
-  const dispenseQuery = usePosDispenseHistory(searchTerm, cashierFilter, isHospitalPharmacy);
+  const customFrom = dateFilter === "custom" ? customFromDate : undefined;
+  const customTo = dateFilter === "custom" ? customToDate : undefined;
+  const dispenseQuery = usePosDispenseHistory(
+    searchTerm,
+    cashierFilter,
+    isHospitalPharmacy,
+    customFrom,
+    customTo
+  );
   const {
     invoices,
     isLoading,
@@ -303,6 +334,14 @@ export default function InvoiceHistoryPage() {
       return isThisYear(invoiceDateStr);
     }
 
+    if (dateFilter === "custom") {
+      const day = String(invoiceDateStr || "").slice(0, 10);
+      if (!day) return false;
+      if (customFromDate && day < customFromDate) return false;
+      if (customToDate && day > customToDate) return false;
+      return true;
+    }
+
     return true;
   };
 
@@ -383,7 +422,7 @@ const getStatusBadge = (status: string) => {
     }
 
     return filtered;
-  }, [invoices, activeTab, dateFilter, paymentFilter, cashierFilter, isLoading, error]);
+  }, [invoices, activeTab, dateFilter, customFromDate, customToDate, paymentFilter, cashierFilter, isLoading, error, isHospitalPharmacy]);
 
   const uniqueCashiers = useMemo(() => {
     return [...new Set(invoices.map(invoice => invoice.cashier).filter(Boolean))];
@@ -542,7 +581,15 @@ const getStatusBadge = (status: string) => {
           <>
         <select
           value={dateFilter}
-          onChange={(e) => setDateFilter(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setDateFilter(next);
+            if (next === "custom" && (!customFromDate || !customToDate)) {
+              const range = defaultCustomRange();
+              setCustomFromDate(range.from);
+              setCustomToDate(range.to);
+            }
+          }}
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
         >
           <option value="all">All Time</option>
@@ -551,6 +598,7 @@ const getStatusBadge = (status: string) => {
           <option value="week">This Week</option>
           <option value="month">This Month</option>
           <option value="year">This Year</option>
+          <option value="custom">Custom</option>
         </select>
         <select
           value={cashierFilter}
@@ -587,6 +635,34 @@ const getStatusBadge = (status: string) => {
           </>
         )}
       </div>
+      {activeTab !== "monthly" && dateFilter === "custom" && (
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+              From
+            </label>
+            <input
+              type="date"
+              value={customFromDate}
+              max={customToDate || undefined}
+              onChange={(e) => setCustomFromDate(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1">
+              To
+            </label>
+            <input
+              type="date"
+              value={customToDate}
+              min={customFromDate || undefined}
+              onChange={(e) => setCustomToDate(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+          </div>
+        </div>
+      )}
         {activeTab !== "monthly" && hasMore && (
           <div className="mt-3 text-center">
             <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -1642,8 +1718,98 @@ const getStatusBadge = (status: string) => {
     setCustomerSearchQuery("");
   };
 
+  const handleExportDispenseHistory = async (format: "pdf" | "excel") => {
+    try {
+      if (dateFilter === "custom" && customFromDate && customToDate && customFromDate > customToDate) {
+        toast.error("From date must be on or before To date");
+        return;
+      }
+
+      const sourceInvoices =
+        activeTab === "monthly"
+          ? invoices.filter((invoice) => {
+              const matchesCashier = cashierFilter === "all" || invoice.cashier === cashierFilter;
+              return matchesCashier && filterInvoiceByDate(invoice.date);
+            })
+          : filteredInvoices;
+      if (!sourceInvoices.length) {
+        toast.error("No dispensed medicine to export");
+        return;
+      }
+
+      setExportingDispenseReport(true);
+      const lines = invoicesToDispenseReportLines(sourceInvoices);
+      const periodLabel =
+        dateFilter === "custom" && (customFromDate || customToDate)
+          ? `${customFromDate || "…"} to ${customToDate || "…"}`
+          : dateFilter === "all"
+            ? "all_time"
+            : dateFilter;
+
+      if (format === "excel") {
+        exportDispenseHistoryToCSV(lines, `dispensed_history_${periodLabel.replace(/\s+/g, "_")}`);
+        toast.success(`Exported ${lines.length} line(s) to Excel`);
+        return;
+      }
+
+      await exportDispenseHistoryToPDF(
+        lines,
+        {
+          title: "Dispensed Medicine Report",
+          fromDate: dateFilter === "custom" ? customFromDate : undefined,
+          toDate: dateFilter === "custom" ? customToDate : undefined,
+        },
+        posDetails && typeof posDetails.cost_center === "string" ? posDetails.cost_center : undefined
+      );
+      toast.success("PDF report ready to print");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to export dispensed history";
+      toast.error(message);
+    } finally {
+      setExportingDispenseReport(false);
+    }
+  };
+
+  const renderHospitalExportButtons = (compact = false) => (
+    <div className="flex items-center space-x-2">
+      <button
+        type="button"
+        disabled={exportingDispenseReport}
+        onClick={() => void handleExportDispenseHistory("pdf")}
+        className={`flex items-center space-x-2 ${compact ? "px-3 py-2 text-sm" : "px-4 py-2"} bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors disabled:opacity-50`}
+      >
+        <FileText className={compact ? "w-4 h-4" : "w-4 h-4"} />
+        <span>PDF</span>
+      </button>
+      <button
+        type="button"
+        disabled={exportingDispenseReport}
+        onClick={() => void handleExportDispenseHistory("excel")}
+        className={`flex items-center space-x-2 ${compact ? "px-3 py-2 text-sm" : "px-4 py-2"} bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50`}
+      >
+        <FileSpreadsheet className="w-4 h-4" />
+        <span>Excel</span>
+      </button>
+    </div>
+  );
+
   // Export functionality
-  const handleExportInvoices = () => {
+  const invoiceReportPeriod = () => {
+    if (dateFilter === "custom") {
+      if (customFromDate && customToDate) return `${customFromDate} to ${customToDate}`;
+      if (customFromDate) return `From ${customFromDate}`;
+      if (customToDate) return `Until ${customToDate}`;
+      return "Custom";
+    }
+    if (dateFilter === "today") return "Today";
+    if (dateFilter === "yesterday") return "Yesterday";
+    if (dateFilter === "week") return "This Week";
+    if (dateFilter === "month") return "This Month";
+    if (dateFilter === "year") return "This Year";
+    return "All Time";
+  };
+
+  const handleExportInvoicesExcel = () => {
     try {
       if (!filteredInvoices || filteredInvoices.length === 0) {
         toast.error("No invoices to export");
@@ -1678,13 +1844,64 @@ const getStatusBadge = (status: string) => {
       // Export to CSV
       exportInvoicesToCSV(exportableInvoices, filename);
 
-      toast.success(`Exported ${exportableInvoices.length} invoices successfully`);
+      toast.success(`Excel downloaded (${exportableInvoices.length} invoices)`);
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
-      console.error('Export error:', error);
-      toast.error(`Failed to export invoices: ${error.message}`);
+      console.error('Excel download error:', error);
+      toast.error(`Failed to download Excel: ${error.message}`);
     }
   };
+
+  const handleExportInvoicesPDF = async () => {
+    try {
+      if (!filteredInvoices || filteredInvoices.length === 0) {
+        toast.error("No invoices to print");
+        return;
+      }
+      await exportToPDF(
+        filteredInvoices,
+        posDetails?.currency || "USD",
+        posDetails && typeof posDetails.cost_center === "string" ? posDetails.cost_center : undefined,
+        {
+          title: "Daily Closing Report",
+          period: invoiceReportPeriod(),
+          fromDate: dateFilter === "custom" ? customFromDate : undefined,
+          toDate: dateFilter === "custom" ? customToDate : undefined,
+        }
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to print PDF";
+      toast.error(message);
+    }
+  };
+
+  const renderRetailInvoiceButtons = (compact = false) => (
+    <div className={`flex items-center ${compact ? "space-x-2" : "space-x-3"}`}>
+      <button
+        onClick={handleMultiReturnClick}
+        className={`flex items-center space-x-2 ${compact ? "px-3 py-2 text-sm" : "px-4 py-2"} bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors`}
+      >
+        {compact ? <Users className="w-4 h-4" /> : <FileMinus className="w-4 h-4" />}
+        <span>{compact ? "Multi Return" : "Multi-Invoice Return"}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => void handleExportInvoicesPDF()}
+        className={`flex items-center space-x-2 ${compact ? "px-3 py-2 text-sm" : "px-4 py-2"} bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors`}
+      >
+        <FileText className="w-4 h-4" />
+        <span>PDF</span>
+      </button>
+      <button
+        type="button"
+        onClick={handleExportInvoicesExcel}
+        className={`flex items-center space-x-2 ${compact ? "px-3 py-2 text-sm" : "px-4 py-2"} bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors`}
+      >
+        <FileSpreadsheet className="w-4 h-4" />
+        <span>Excel</span>
+      </button>
+    </div>
+  );
 
   // Mobile layout: full-width content and persistent bottom navigation
   if (isMobile) {
@@ -1697,23 +1914,10 @@ const getStatusBadge = (status: string) => {
               <h1 className="text-lg font-bold text-gray-900 dark:text-white">
                 {isHospitalPharmacy ? "Dispense History" : "Invoice History"}
               </h1>
-              {!isHospitalPharmacy && (
-              <div className="flex items-center space-x-2">
-                                  <button
-                    onClick={handleMultiReturnClick}
-                    className="flex items-center space-x-2 px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm"
-                  >
-                  <Users className="w-4 h-4" />
-                  <span>Multi Return</span>
-                </button>
-                <button
-                  onClick={handleExportInvoices}
-                  className="flex items-center space-x-2 px-3 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors text-sm"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Export</span>
-                </button>
-              </div>
+              {isHospitalPharmacy ? (
+                renderHospitalExportButtons(true)
+              ) : (
+                renderRetailInvoiceButtons(true)
               )}
             </div>
           </div>
@@ -1890,23 +2094,10 @@ const getStatusBadge = (status: string) => {
                   {isHospitalPharmacy ? "Dispense History" : "Invoice History"}
                 </h1>
               </div>
-              {!isHospitalPharmacy && (
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={handleMultiReturnClick}
-                  className="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
-                >
-                  <FileMinus className="w-4 h-4" />
-                  <span>Multi-Invoice Return</span>
-                </button>
-                <button
-                  onClick={handleExportInvoices}
-                  className="flex items-center space-x-2 px-4 py-2 bg-beveren-600 text-white rounded-lg hover:bg-beveren-700 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Export</span>
-                </button>
-              </div>
+              {isHospitalPharmacy ? (
+                renderHospitalExportButtons()
+              ) : (
+                renderRetailInvoiceButtons()
               )}
             </div>
           </div>
