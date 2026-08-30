@@ -138,88 +138,101 @@ export const formatTime = (timeString: unknown): string => {
   return timeStr;
 };
 
+type CalendarDate = { y: number; m: number; d: number };
+
+function parseCalendarDate(dateString: string): CalendarDate | null {
+  if (!dateString) return null;
+  const datePart = String(dateString).trim().slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!match) return null;
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  if (!y || !m || !d) return null;
+  return { y, m, d };
+}
+
+function localCalendarToday(): CalendarDate {
+  const now = new Date();
+  return { y: now.getFullYear(), m: now.getMonth() + 1, d: now.getDate() };
+}
+
+function calendarToUtcMs(date: CalendarDate): number {
+  return Date.UTC(date.y, date.m - 1, date.d);
+}
+
+function addCalendarDays(date: CalendarDate, days: number): CalendarDate {
+  const next = new Date(date.y, date.m - 1, date.d + days);
+  return { y: next.getFullYear(), m: next.getMonth() + 1, d: next.getDate() };
+}
+
 /**
- * Get system timezone date (for server-side filtering)
- * This ensures "Today" filter works based on server timezone, not user's local timezone
- * @returns Date object in system timezone
+ * Local calendar "now" for date filters.
+ * posting_date is a date-only value (YYYY-MM-DD), so compare calendar days
+ * rather than UTC timestamps.
  */
 export const getSystemDate = (): Date => {
-  // For now, we'll use UTC as the system timezone
-  // In a real implementation, you might want to get this from the backend
   return new Date();
 };
 
 /**
- * Check if a date is today in system timezone
- * @param dateString - Date string to check
- * @returns True if the date is today in system timezone
+ * Check if a posting date is today in the local calendar.
  */
 export const isToday = (dateString: string): boolean => {
-  if (!dateString) return false;
-
-  const inputDate = new Date(dateString);
-  const today = getSystemDate();
-
-  return (
-    inputDate.getUTCFullYear() === today.getUTCFullYear() &&
-    inputDate.getUTCMonth() === today.getUTCMonth() &&
-    inputDate.getUTCDate() === today.getUTCDate()
-  );
+  const date = parseCalendarDate(dateString);
+  if (!date) return false;
+  const today = localCalendarToday();
+  return date.y === today.y && date.m === today.m && date.d === today.d;
 };
 
 /**
- * Check if a date is within the current week in system timezone
- * @param dateString - Date string to check
- * @returns True if the date is within the current week
+ * Check if a posting date is yesterday in the local calendar.
+ */
+export const isYesterday = (dateString: string): boolean => {
+  const date = parseCalendarDate(dateString);
+  if (!date) return false;
+  const yesterday = addCalendarDays(localCalendarToday(), -1);
+  return date.y === yesterday.y && date.m === yesterday.m && date.d === yesterday.d;
+};
+
+/**
+ * Check if a posting date is within the current local week (Sunday–Saturday).
  */
 export const isThisWeek = (dateString: string): boolean => {
-  if (!dateString) return false;
+  const date = parseCalendarDate(dateString);
+  if (!date) return false;
 
-  const inputDate = new Date(dateString);
-  const today = getSystemDate();
-
-  // Get start of week (Sunday)
-  const startOfWeek = new Date(today);
-  startOfWeek.setUTCDate(today.getUTCDate() - today.getUTCDay());
-  startOfWeek.setUTCHours(0, 0, 0, 0);
-
-  // Get end of week (Saturday)
+  const today = localCalendarToday();
+  const todayDate = new Date(today.y, today.m - 1, today.d);
+  const startOfWeek = new Date(todayDate);
+  startOfWeek.setDate(todayDate.getDate() - todayDate.getDay());
   const endOfWeek = new Date(startOfWeek);
-  endOfWeek.setUTCDate(startOfWeek.getUTCDate() + 6);
-  endOfWeek.setUTCHours(23, 59, 59, 999);
+  endOfWeek.setDate(startOfWeek.getDate() + 6);
 
-  return inputDate >= startOfWeek && inputDate <= endOfWeek;
-};
-
-/**
- * Check if a date is within the current month in system timezone
- * @param dateString - Date string to check
- * @returns True if the date is within the current month
- */
-export const isThisMonth = (dateString: string): boolean => {
-  if (!dateString) return false;
-
-  const inputDate = new Date(dateString);
-  const today = getSystemDate();
-
+  const value = calendarToUtcMs(date);
   return (
-    inputDate.getUTCFullYear() === today.getUTCFullYear() &&
-    inputDate.getUTCMonth() === today.getUTCMonth()
+    value >= Date.UTC(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate()) &&
+    value <= Date.UTC(endOfWeek.getFullYear(), endOfWeek.getMonth(), endOfWeek.getDate())
   );
 };
 
 /**
- * Check if a date is within the current year in system timezone
- * @param dateString - Date string to check
- * @returns True if the date is within the current year
+ * Check if a posting date is in the current local month.
+ */
+export const isThisMonth = (dateString: string): boolean => {
+  const date = parseCalendarDate(dateString);
+  if (!date) return false;
+  const today = localCalendarToday();
+  return date.y === today.y && date.m === today.m;
+};
+
+/**
+ * Check if a posting date is in the current local year.
  */
 export const isThisYear = (dateString: string): boolean => {
-  if (!dateString) return false;
-
-  const inputDate = new Date(dateString);
-  const today = getSystemDate();
-
-  return inputDate.getUTCFullYear() === today.getUTCFullYear();
+  const date = parseCalendarDate(dateString);
+  if (!date) return false;
+  return date.y === localCalendarToday().y;
 };
 
 /**

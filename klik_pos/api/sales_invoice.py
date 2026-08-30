@@ -76,19 +76,62 @@ def get_current_pos_opening_entry():
 		return None
 
 
+def _as_bool(value):
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, (int, float)):
+		return bool(value)
+	return str(value or "").strip().lower() in ("true", "1", "yes")
+
+
+def _can_view_all_branches():
+	roles = set(frappe.get_roles())
+	return bool(roles & {"Administrator", "System Manager", "Sales Manager"})
+
+
+def _apply_pos_cost_center_filter(filters, include_all_branches=False):
+	"""Limit Invoice History to the current POS Profile cost center (branch).
+
+	Only Administrator / System Manager / Sales Manager may request all branches.
+	"""
+	if _as_bool(include_all_branches) and _can_view_all_branches():
+		return
+
+	try:
+		pos = get_current_pos_profile()
+	except Exception:
+		pos = None
+	if not pos:
+		return
+
+	cost_center = getattr(pos, "cost_center", None)
+	if cost_center and frappe.db.has_column("Sales Invoice", "cost_center"):
+		filters["cost_center"] = cost_center
+	elif getattr(pos, "name", None):
+		filters["pos_profile"] = pos.name
+
+
 @frappe.whitelist(allow_guest=True)
-def get_sales_invoices(limit=100, start=0, search="", skip_opening_entry_filter=False, cashier_name=None):
+def get_sales_invoices(
+	limit=100,
+	start=0,
+	search="",
+	skip_opening_entry_filter=False,
+	cashier_name=None,
+	include_all_branches=False,
+):
 	"""
 	Get sales invoices with proper filtering based on user role and POS opening entry.
 
 	Args:
 		skip_opening_entry_filter: If True, skip filtering by opening entry (for Invoice History page)
 		cashier_name: Filter by cashier name (full name). If provided, only returns invoices for that cashier.
+		include_all_branches: If True, privileged users may see invoices across cost centers.
 	"""
 	try:
 		# Convert string to boolean if needed (Frappe passes query params as strings)
-		if isinstance(skip_opening_entry_filter, str):
-			skip_opening_entry_filter = skip_opening_entry_filter.lower() in ("true", "1", "yes")
+		skip_opening_entry_filter = _as_bool(skip_opening_entry_filter)
+		include_all_branches = _as_bool(include_all_branches)
 
 		# Get user IDs for cashier filter if cashier_name is provided
 		cashier_user_ids = None
@@ -99,7 +142,9 @@ def get_sales_invoices(limit=100, start=0, search="", skip_opening_entry_filter=
 				return {"success": True, "data": [], "total_count": 0}
 
 		filters, fields = _build_filters_and_fields(
-			skip_opening_entry_filter=skip_opening_entry_filter, cashier_user_ids=cashier_user_ids
+			skip_opening_entry_filter=skip_opening_entry_filter,
+			cashier_user_ids=cashier_user_ids,
+			include_all_branches=include_all_branches,
 		)
 
 		# Build search filters
@@ -150,12 +195,15 @@ def _get_user_ids_by_full_name(full_name):
 		return []
 
 
-def _build_filters_and_fields(skip_opening_entry_filter=False, cashier_user_ids=None):
+def _build_filters_and_fields(
+	skip_opening_entry_filter=False, cashier_user_ids=None, include_all_branches=False
+):
 	"""Build filters and fields list based on user role and metadata.
 
 	Args:
 		skip_opening_entry_filter: If True, skip filtering by opening entry (show all invoices)
 		cashier_user_ids: List of user IDs to filter by. If provided, only returns invoices for these users.
+		include_all_branches: Privileged users may skip the POS cost-center (branch) filter.
 	"""
 	current_opening_entry = get_current_pos_opening_entry()
 
@@ -165,9 +213,10 @@ def _build_filters_and_fields(skip_opening_entry_filter=False, cashier_user_ids=
 
 	if skip_opening_entry_filter:
 		frappe.logger().info(
-			f"Skipping opening entry filter - showing all invoices for user {frappe.session.user}"
+			f"Skipping opening entry filter - showing invoices for user {frappe.session.user}"
 		)
 		filters = {}
+		_apply_pos_cost_center_filter(filters, include_all_branches)
 	elif is_admin_user:
 		frappe.logger().info(
 			f"Admin user {frappe.session.user} with roles {user_roles} - showing all POS invoices"
@@ -198,6 +247,9 @@ def _build_filters_and_fields(skip_opening_entry_filter=False, cashier_user_ids=
 		"pos_profile",
 		"currency",
 	]
+
+	if frappe.db.has_column("Sales Invoice", "cost_center"):
+		fields.append("cost_center")
 
 	if has_zatca_status:
 		fields.append("custom_zatca_submit_status")

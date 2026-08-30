@@ -26,6 +26,7 @@ import {
   CalendarDays,
   MessageCircle,
   FileSpreadsheet,
+  Building2,
 } from "lucide-react";
 
 import InvoiceViewModal from "../components/InvoiceViewModal";
@@ -58,7 +59,7 @@ import {
   getOriginalHeldDispenseOrderId,
 } from "../utils/heldDispenseOrderCache";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
-import { isToday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
+import { isToday, isYesterday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
 import { exportInvoicesToCSV, getExportFilename, type ExportableInvoice } from "../utils/exportUtils";
 import { exportToPDF } from "../utils/exportInvoice";
 import {
@@ -95,10 +96,11 @@ export default function InvoiceHistoryPage() {
   const isMobile = useMediaQuery("(max-width: 1024px)");
   const [activeTab, setActiveTab] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [dateFilter, setDateFilter] = useState("all");
+  const [dateFilter, setDateFilter] = useState("today");
   const [customFromDate, setCustomFromDate] = useState(() => defaultCustomRange().from);
   const [customToDate, setCustomToDate] = useState(() => defaultCustomRange().to);
   const [exportingDispenseReport, setExportingDispenseReport] = useState(false);
+  const [showAllBranches, setShowAllBranches] = useState(false);
   const [paymentFilter, setPaymentFilter] = useState("all");
   const [cashierFilter, setCashierFilter] = useState("all");
   const [viewMode, setViewMode] = useState<"cards" | "list">("list");
@@ -152,7 +154,13 @@ export default function InvoiceHistoryPage() {
     updateDispensingLotsForItems,
   } = useProducts();
 
-  const salesInvoiceQuery = useSalesInvoices(searchTerm, true, cashierFilter, !isHospitalPharmacy);
+  const salesInvoiceQuery = useSalesInvoices(
+    searchTerm,
+    true,
+    cashierFilter,
+    !isHospitalPharmacy,
+    showAllBranches
+  );
   const customFrom = dateFilter === "custom" ? customFromDate : undefined;
   const customTo = dateFilter === "custom" ? customToDate : undefined;
   const dispenseQuery = usePosDispenseHistory(
@@ -180,7 +188,16 @@ export default function InvoiceHistoryPage() {
 
   // Role-based filtering
   const isAdminUser = userInfo?.is_admin_user || false;
+  const canShowAllBranches =
+    isAdminUser ||
+    (userInfo?.roles || []).some((role) => role === "System Manager" || role === "Administrator");
   const currentUserCashier = userInfo?.full_name || "";
+
+  useEffect(() => {
+    if (!canShowAllBranches && showAllBranches) {
+      setShowAllBranches(false);
+    }
+  }, [canShowAllBranches, showAllBranches]);
 
   // Set default cashier filter for non-admin users
   useEffect(() => {
@@ -312,14 +329,7 @@ export default function InvoiceHistoryPage() {
     }
 
     if (dateFilter === "yesterday") {
-      const yesterday = new Date();
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-      const invoiceDate = new Date(invoiceDateStr);
-      return (
-        invoiceDate.getUTCFullYear() === yesterday.getUTCFullYear() &&
-        invoiceDate.getUTCMonth() === yesterday.getUTCMonth() &&
-        invoiceDate.getUTCDate() === yesterday.getUTCDate()
-      );
+      return isYesterday(invoiceDateStr);
     }
 
     if (dateFilter === "week") {
@@ -403,7 +413,10 @@ const getStatusBadge = (status: string) => {
       // Normalize status comparison to handle case and whitespace differences
       const invoiceStatus = (invoice.status || "").trim();
       const tabStatus = (activeTab || "").trim();
-      const matchesStatus = activeTab === "all" || invoiceStatus === tabStatus;
+      const matchesStatus =
+        activeTab === "all"
+          ? invoiceStatus !== "Draft"
+          : invoiceStatus === tabStatus;
       const matchesPayment = isHospitalPharmacy || paymentFilter === "all" || invoice.paymentMethod === paymentFilter;
       const matchesCashier = cashierFilter === "all" || invoice.cashier === cashierFilter;
       const matchesDate = filterInvoiceByDate(invoice.date);
@@ -507,7 +520,10 @@ const getStatusBadge = (status: string) => {
 
     // Then count by status - normalize comparison
     if (status === "all") {
-      return invoicesFilteredByOtherFilters.length;
+      return invoicesFilteredByOtherFilters.filter((invoice) => {
+        const invoiceStatus = (invoice.status || "").trim();
+        return invoiceStatus !== "Draft";
+      }).length;
     }
     const normalizedStatus = (status || "").trim();
     return invoicesFilteredByOtherFilters.filter(invoice => {
@@ -632,6 +648,21 @@ const getStatusBadge = (status: string) => {
           ))}
         </select>
         )}
+        {!isHospitalPharmacy && canShowAllBranches && (
+          <button
+            type="button"
+            onClick={() => setShowAllBranches((prev) => !prev)}
+            className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-semibold transition-colors ${
+              showAllBranches
+                ? "border-beveren-600 bg-beveren-600 text-white"
+                : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600"
+            }`}
+            title={showAllBranches ? "Showing invoices from all branches" : "Showing this POS profile branch only"}
+          >
+            <Building2 className="w-4 h-4" />
+            <span>{showAllBranches ? "All branches" : "This branch"}</span>
+          </button>
+        )}
           </>
         )}
       </div>
@@ -673,8 +704,10 @@ const getStatusBadge = (status: string) => {
     </div>
   );
 
-  const renderSummaryCards = () => (
-    <div className={`w-full max-w-none grid grid-cols-1 ${isHospitalPharmacy ? "md:grid-cols-1" : "md:grid-cols-4"} gap-6 mb-6`}>
+  const renderSummaryCards = () => {
+    const showFinancialCards = !isHospitalPharmacy && canShowAllBranches;
+    return (
+    <div className={`w-full max-w-none grid grid-cols-1 ${showFinancialCards ? "md:grid-cols-4" : "md:grid-cols-1"} gap-6 mb-6`}>
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">
           <div>
@@ -691,7 +724,7 @@ const getStatusBadge = (status: string) => {
           <FileText className="w-8 h-8 text-orange-600" />
         </div>
       </div>
-      {!isHospitalPharmacy && (
+      {showFinancialCards && (
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">
           <div>
@@ -704,7 +737,7 @@ const getStatusBadge = (status: string) => {
         </div>
       </div>
       )}
-      {!isHospitalPharmacy && (
+      {showFinancialCards && (
       <>
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">
@@ -741,7 +774,8 @@ const getStatusBadge = (status: string) => {
       </>
       )}
     </div>
-  );
+    );
+  };
 
   const renderMonthlyMedicationPlans = () => (
     <div className="w-full max-w-none bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -1854,17 +1888,25 @@ const getStatusBadge = (status: string) => {
 
   const handleExportInvoicesPDF = async () => {
     try {
-      if (!filteredInvoices || filteredInvoices.length === 0) {
-        toast.error("No invoices to print");
+      const closingInvoices = filteredInvoices.filter(
+        (invoice) => (invoice.status || "").trim() !== "Draft"
+      );
+      if (!closingInvoices.length) {
+        toast.error("No submitted invoices to print. Drafts are not included in the daily closing report.");
         return;
       }
+      const branchLabel = showAllBranches
+        ? "All branches"
+        : typeof posDetails?.cost_center === "string" && posDetails.cost_center
+          ? posDetails.cost_center
+          : undefined;
       await exportToPDF(
-        filteredInvoices,
+        closingInvoices,
         posDetails?.currency || "USD",
         posDetails && typeof posDetails.cost_center === "string" ? posDetails.cost_center : undefined,
         {
           title: "Daily Closing Report",
-          period: invoiceReportPeriod(),
+          period: [invoiceReportPeriod(), branchLabel].filter(Boolean).join(" · "),
           fromDate: dateFilter === "custom" ? customFromDate : undefined,
           toDate: dateFilter === "custom" ? customToDate : undefined,
         }

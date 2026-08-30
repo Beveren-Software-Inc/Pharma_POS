@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type { SalesInvoice, SalesInvoiceItem } from "../../types";
 
-export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter: boolean = false, cashierName?: string, enabled = true) {
+export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter: boolean = false, cashierName?: string, enabled = true, includeAllBranches = false) {
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -43,8 +43,9 @@ export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter
       const skipOpeningFilter = skipOpeningEntryFilter ? '&skip_opening_entry_filter=true' : '';
       // Filter by cashier name if provided
       const cashierParam = cashierName && cashierName !== 'all' ? `&cashier_name=${encodeURIComponent(cashierName)}` : '';
+      const allBranchesParam = includeAllBranches ? '&include_all_branches=true' : '';
       const response = await fetch(
-        `/api/method/klik_pos.api.sales_invoice.get_sales_invoices?limit=${LIMIT}&start=${start}${searchParam}${skipOpeningFilter}${cashierParam}`,
+        `/api/method/klik_pos.api.sales_invoice.get_sales_invoices?limit=${LIMIT}&start=${start}${searchParam}${skipOpeningFilter}${cashierParam}${allBranchesParam}`,
         {
           method: 'GET',
           headers: {
@@ -162,7 +163,7 @@ export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [debouncedSearchTerm, skipOpeningEntryFilter, cashierName, enabled]);
+  }, [debouncedSearchTerm, skipOpeningEntryFilter, cashierName, enabled, includeAllBranches]);
 
   const loadMore = useCallback(() => {
     if (!enabled) return;
