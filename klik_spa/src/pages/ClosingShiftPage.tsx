@@ -26,7 +26,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { deleteDraftInvoice } from "../services/salesInvoice";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { formatCurrency } from "../utils/currency";
-import { isToday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
+import { isToday, isYesterday, isThisWeek, isThisMonth, isThisYear } from "../utils/time";
 import { clearAllCache } from "../utils/clearCache";
 import { exportToCSV, exportToPDF } from "../utils/exportInvoice";
 
@@ -73,14 +73,7 @@ export default function ClosingShiftPage() {
     }
 
     if (dateFilter === "yesterday") {
-      const yesterday = new Date();
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-      const invoiceDate = new Date(invoiceDateStr);
-      return (
-        invoiceDate.getUTCFullYear() === yesterday.getUTCFullYear() &&
-        invoiceDate.getUTCMonth() === yesterday.getUTCMonth() &&
-        invoiceDate.getUTCDate() === yesterday.getUTCDate()
-      );
+      return isYesterday(invoiceDateStr);
     }
 
     if (dateFilter === "week") {
