@@ -51,22 +51,67 @@ def search_employees(search_query: str = "", limit: int = 20):
 		frappe.throw(f"Failed to search employees: {str(e)}")
 
 
-def _get_or_create_employee_customer(employee_id):
-	try:
-		from healthcare.api.billing import _get_or_create_employee_customer as healthcare_get_customer
+def _link_employee_to_customer(customer, employee_id, employee_name=None):
+	"""Attach/sync the Employee link fields on a Customer (idempotent).
 
-		return healthcare_get_customer(employee_id)
-	except ImportError:
-		pass
+	``Customer.name`` equals the Employee ID by convention, but the explicit link
+	(``custom_employee`` / ``custom_employee_name``) may be empty on customers that
+	were created before those fields existed. Backfilling here makes the relation
+	queryable directly on the Customer, no matter when the customer was created.
+	"""
+	customer = (customer or "").strip()
+	employee_id = (employee_id or "").strip()
+	if not customer or not employee_id:
+		return customer
 
+	has_employee = frappe.db.has_column("Customer", "custom_employee")
+	has_employee_name = frappe.db.has_column("Customer", "custom_employee_name")
+	if not has_employee and not has_employee_name:
+		return customer
+
+	if not frappe.db.exists("Customer", customer):
+		return customer
+
+	display_name = (employee_name or "").strip() or (
+		frappe.db.get_value("Employee", employee_id, "employee_name") or ""
+	).strip()
+
+	updates = {}
+	if has_employee:
+		current_employee = (
+			frappe.db.get_value("Customer", customer, "custom_employee") or ""
+		).strip()
+		if current_employee != employee_id:
+			updates["custom_employee"] = employee_id
+	if has_employee_name and display_name:
+		current_employee_name = (
+			frappe.db.get_value("Customer", customer, "custom_employee_name") or ""
+		).strip()
+		if current_employee_name != display_name:
+			updates["custom_employee_name"] = display_name
+
+	if updates:
+		try:
+			frappe.db.set_value("Customer", customer, updates, update_modified=False)
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"Could not link employee {employee_id} to customer {customer}",
+			)
+
+	return customer
+
+
+def _create_or_get_employee_customer(employee_id, display_name=None):
+	"""Get or create the Customer that represents an employee (name = Employee ID)."""
 	employee_id = (employee_id or "").strip()
 	if not employee_id:
 		frappe.throw(_("Employee is required"))
-	if not frappe.db.exists("Employee", employee_id):
-		frappe.throw(_("Employee {0} not found").format(employee_id))
 
-	employee = frappe.get_cached_doc("Employee", employee_id)
-	display_name = (employee.employee_name or employee_id).strip()
+	display_name = (display_name or "").strip()
+	if not display_name:
+		employee = frappe.get_cached_doc("Employee", employee_id)
+		display_name = (employee.employee_name or employee_id).strip()
 
 	if frappe.db.exists("Customer", employee_id):
 		current_name = frappe.db.get_value("Customer", employee_id, "customer_name")
@@ -106,6 +151,36 @@ def _get_or_create_employee_customer(employee_id):
 			return customer.name
 
 	return employee_id
+
+
+def _get_or_create_employee_customer(employee_id):
+	"""Resolve the Customer for internal dispensing and always attach the Employee.
+
+	Delegates customer creation to healthcare when available (shared behaviour with
+	reception), then backfills ``custom_employee`` / ``custom_employee_name`` so the
+	employee is linked even for customers created by earlier transactions.
+	"""
+	employee_id = (employee_id or "").strip()
+	if not employee_id:
+		frappe.throw(_("Employee is required"))
+	if not frappe.db.exists("Employee", employee_id):
+		frappe.throw(_("Employee {0} not found").format(employee_id))
+
+	employee = frappe.get_cached_doc("Employee", employee_id)
+	display_name = (employee.employee_name or employee_id).strip()
+
+	customer = None
+	try:
+		from healthcare.api.billing import _get_or_create_employee_customer as healthcare_get_customer
+
+		customer = healthcare_get_customer(employee_id)
+	except ImportError:
+		customer = None
+
+	if not customer:
+		customer = _create_or_get_employee_customer(employee_id, display_name)
+
+	return _link_employee_to_customer(customer, employee_id, display_name)
 
 
 def _apply_internal_employee_invoice_flags(invoice, employee_id):

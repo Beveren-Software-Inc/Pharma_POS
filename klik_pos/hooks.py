@@ -92,6 +92,9 @@ fixtures = [
      "Sales Order Item-custom_batch",
      "Sales Invoice-custom_employee",
      "Sales Invoice-custom_internal_employee_dispensing",
+     
+     "Customer-custom_employee_name",
+     "Customer-custom_employee",
 				),
 			]
 		],
