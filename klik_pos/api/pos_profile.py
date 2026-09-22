@@ -196,6 +196,9 @@ def get_pos_details():
 		"custom_delivery_required": int(getattr(pos, "custom_delivery_required", 0) or 0),
 		"custom_is_pharmacy": int(getattr(pos, "custom_is_pharmacy", 0) or 0),
 		"custom_is_hospital_pharmacy": int(getattr(pos, "custom_is_hospital_pharmacy", 0) or 0),
+		"custom_display_prescription_frequency": int(
+			getattr(pos, "custom_display_prescription_frequency", 0) or 0
+		),
 		"custom_allow_item_tax_template": int(getattr(pos, "custom_allow_item_tax_template", 0) or 0),
 		"custom_allow_additional_amounts": int(getattr(pos, "custom_allow_additional_amounts", 0) or 0),
 		"custom_allow_duplicate_items_in_pos": int(

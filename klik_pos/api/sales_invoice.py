@@ -957,7 +957,7 @@ def create_and_submit_invoice(data):
         # Rose (outpatient-only) pharmacy must not dispense inpatient medication orders.
         _guard_rose_pharmacy_inpatient(medication_order)
 
-        # Block dispensing more than the prescribed quantity on any linked medication-order line.
+        # Validate dispensed medication quantities against stock (not the prescribed qty).
         try:
             from klik_pos.api.sales_order import validate_dispense_quantities
 

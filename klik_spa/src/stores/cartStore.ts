@@ -39,9 +39,6 @@ function stockShortageMessage(item: CartItem, maxQty: number): string {
 }
 
 function getMaxQtyInItemUOM(item: CartItem): number | null {
-  if ((item as CartItem & { skip_stock_validation?: boolean }).skip_stock_validation) {
-    return null;
-  }
   const available = item.available;
   if (available === undefined || available === null) return null;
   const cf = getConversionFactor(item);
@@ -55,7 +52,6 @@ type CartMedicationMeta = CartItem & {
   medication_order_entry?: string;
   original_drug?: string;
   alternative_drug?: string;
-  skip_stock_validation?: boolean;
 };
 
 function findMatchingCartLine(item: CartItem, currentCart: CartItem[]): CartItem | undefined {
@@ -93,9 +89,6 @@ function mergeMedicationMeta(
       : {}),
     ...(incoming.alternative_drug || existingMeta.alternative_drug
       ? { alternative_drug: incoming.alternative_drug || existingMeta.alternative_drug }
-      : {}),
-    ...(incoming.skip_stock_validation || existingMeta.skip_stock_validation
-      ? { skip_stock_validation: true }
       : {}),
   };
 }
