@@ -120,6 +120,12 @@ export type POSDetails = {
   custom_delivery_required?: number | boolean | string;
   custom_is_pharmacy?: number | boolean | string;
   custom_is_hospital_pharmacy?: number | boolean | string;
+  /**
+   * When set, the cart shows the Prescription Frequency field (and requires it for
+   * hospital pharmacy dispensing). When unset, the field is hidden in the cart
+   * (it is still shown on medication orders and other clinical screens).
+   */
+  custom_display_prescription_frequency?: number | boolean | string;
   custom_pharmacy_default_uom?: string | null;
   custom_allow_item_tax_template?: number | boolean | string;
   custom_allow_additional_amounts?: number | boolean | string;

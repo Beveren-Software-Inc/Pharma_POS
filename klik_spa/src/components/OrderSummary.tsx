@@ -97,6 +97,16 @@ interface DispensedLabelItem {
   expiryDate: string;
 }
 
+/**
+ * Quantity pushed into the cart when a medication-order line is dispensed.
+ *
+ * Prescribers write clinical quantities (mg / g / ...) that cannot be mapped to
+ * POS units (UNIT / PACK), so the scripted qty is display-only. The cart starts at
+ * this quantity and pharmacists adjust it; the cart validator checks that quantity
+ * against stock instead of comparing it to the prescription.
+ */
+const DEFAULT_MEDICATION_CART_QTY = 1;
+
 type CartMedicationFields = CartItem & {
   cartLineId?: string;
   medicationOrder?: string;
@@ -1296,6 +1306,15 @@ export default function OrderSummary({
   const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
                              posDetails?.custom_is_hospital_pharmacy === true ||
                              posDetails?.custom_is_hospital_pharmacy === "1";
+  /**
+   * POS Profile toggle for the Prescription Frequency field in the cart.
+   * When set, the field is shown (and required for hospital dispensing);
+   * otherwise it is hidden in the cart but still available on medication orders.
+   */
+  const showPrescriptionFrequencyInCart =
+    posDetails?.custom_display_prescription_frequency === 1 ||
+    posDetails?.custom_display_prescription_frequency === true ||
+    posDetails?.custom_display_prescription_frequency === "1";
   const allowUserEditRate =
     !isHospitalPharmacy &&
     (posDetails?.allow_rate_change === 1 ||
@@ -2175,8 +2194,9 @@ export default function OrderSummary({
         uomToUse = unitNameOnItem;
       }
 
-      // Always keep prescribed numeric qty (30 Milligram → 30 UNIT on cart).
-      const cartQuantity = itemToAdd.quantity;
+      // The scripted qty is display-only: the cart always starts at 1 (pharmacists
+      // adjust it afterwards) and the cart validator checks that qty against stock.
+      const cartQuantity = DEFAULT_MEDICATION_CART_QTY;
 
       // Validate stock using the *dispensed* item's conversion for the cart UOM (UNIT/PACK),
       // never the doctor's free-text UOM (Milligram has no Item UOM factor).
@@ -2190,7 +2210,7 @@ export default function OrderSummary({
 
       if (neededStockQty > product.available) {
         toast.error(
-          `Only ${product.available} ${stockUom || "PACK"} of ${product.name} available (need ${cartQuantity} ${uomToUse || "UNIT"} = ${neededStockQty} ${stockUom || "PACK"} for this prescription)`
+          `Only ${product.available} ${stockUom || "PACK"} of ${product.name} available (need ${neededStockQty} ${stockUom || "PACK"} for ${cartQuantity} ${uomToUse || "UNIT"})`
         );
         return "no_stock";
       }
@@ -2270,8 +2290,8 @@ export default function OrderSummary({
           item_code: product.id,
           has_batch_no: product.has_batch_no,
           has_serial_no: product.has_serial_no,
-          // Stock already validated above using dispensed item UNIT/PACK conversion.
-          ...(isAlternative ? { skip_stock_validation: true } : {}),
+          // Cart qty (starting at 1) is validated by the cart store against stock,
+          // so quantity edits by the pharmacist are checked too.
           ...(pink && {
             allowDuplicate: true,
             cartLineId: lineId,
@@ -2469,8 +2489,9 @@ export default function OrderSummary({
           validationFailed = true;
           break;
         }
-        const qty = item.quantity ?? 1;
-        if (avail <= 0 || avail < qty) {
+        // The scripted qty is display-only: only block when there is no stock at all.
+        // The real qty (starting at 1) is validated against stock inside the cart.
+        if (avail <= 0) {
           if (!alternativeCode) {
             toast.error(`Insufficient stock for ${displayName}. Select an alternative drug.`);
             validationFailed = true;
@@ -2479,7 +2500,7 @@ export default function OrderSummary({
         }
         itemsToAdd.push({
           item_code: itemCode,
-          quantity: qty,
+          quantity: DEFAULT_MEDICATION_CART_QTY,
           uom: item.uom,
           dosage: item.dosage || undefined,
           patient_frequency: item.patient_frequency,
@@ -2640,7 +2661,6 @@ export default function OrderSummary({
         const effectiveCode = alternativeCode || itemCode;
         const displayName = resolveMedicationDisplayName(item);
         const avail = availability[effectiveCode];
-        const qty = item.quantity ?? 1;
 
         if (avail === undefined) {
           if (!alternativeCode) {
@@ -2650,7 +2670,8 @@ export default function OrderSummary({
             validationFailed = true;
             break;
           }
-        } else if (avail <= 0 || avail < qty) {
+        } else if (avail <= 0) {
+          // Scripted qty is display-only; stock is validated in the cart.
           if (!alternativeCode) {
             toast.error(`Insufficient stock for ${displayName}. Select an alternative drug.`);
             validationFailed = true;
@@ -2661,7 +2682,7 @@ export default function OrderSummary({
         if (order.name) selectedOrderNames.add(order.name);
         itemsToAdd.push({
           item_code: itemCode,
-          quantity: qty,
+          quantity: DEFAULT_MEDICATION_CART_QTY,
           uom: item.uom,
           dosage: item.dosage || undefined,
           patient_frequency: item.patient_frequency,
@@ -2775,7 +2796,8 @@ export default function OrderSummary({
         return;
       }
 
-      if (avail <= 0 || avail < opts.qty) {
+      // Scripted qty is display-only: only block when there is no stock at all.
+      if (avail <= 0) {
         if (!alternativeCode) {
           toast.error(`Insufficient stock for ${opts.displayName}. Select an alternative drug.`);
           validationFailed = true;
@@ -2784,7 +2806,7 @@ export default function OrderSummary({
 
       itemsToAdd.push({
         item_code: alternativeCode ? opts.itemCode || alternativeCode : effectiveCode,
-        quantity: opts.qty,
+        quantity: DEFAULT_MEDICATION_CART_QTY,
         uom: opts.uom,
         drug_name: opts.displayName || undefined,
         alternative_item_code: alternativeCode || undefined,
@@ -2928,8 +2950,8 @@ export default function OrderSummary({
           break;
         }
 
-        const qty = Number(item.qty_per_cycle ?? 1) || 1;
-        if (avail <= 0 || avail < qty) {
+        // Scripted qty is display-only; stock is validated in the cart.
+        if (avail <= 0) {
           if (!alternativeCode) {
             toast.error(`Insufficient stock for ${displayName}. Select an alternative drug.`);
             validationFailed = true;
@@ -2939,7 +2961,7 @@ export default function OrderSummary({
 
         itemsToAdd.push({
           item_code: alternativeCode ? planCode || alternativeCode : effectiveCode,
-          quantity: qty,
+          quantity: DEFAULT_MEDICATION_CART_QTY,
           dosage: item.dosage != null && item.dosage !== "" ? String(item.dosage) : undefined,
           patient_frequency: item.patient_frequency || undefined,
           drug_name: displayName || undefined,
@@ -3460,15 +3482,19 @@ const pages = labels.map((label) => `
         const frequencyRaw = lineDiscount.prescriptionDosage;
         const hasDosage = dosageRaw !== null && dosageRaw !== undefined && String(dosageRaw).trim() !== "";
         const hasFrequency = typeof frequencyRaw === "string" && frequencyRaw.trim() !== "";
-        if (hasDosage && hasFrequency) return null;
+        // Frequency is only required when the POS Profile shows it in the cart.
+        if (hasDosage && (!showPrescriptionFrequencyInCart || hasFrequency)) return null;
         return item.name || item.item_code || item.id;
       })
       .filter(Boolean) as string[];
 
     if (missingMedicationDetails.length > 0) {
       const uniqueItems = Array.from(new Set(missingMedicationDetails));
+      const requiredFields = showPrescriptionFrequencyInCart
+        ? "dosage or prescription frequency"
+        : "dosage";
       toast.error(
-        `Missing dosage or prescription frequency for: ${uniqueItems.join(", ")}. Kindly update Patient Medication Order items before dispensing.`
+        `Missing ${requiredFields} for: ${uniqueItems.join(", ")}. Kindly update Patient Medication Order items before dispensing.`
       );
       return false;
     }
@@ -5311,7 +5337,11 @@ const handleSetSerial = (event: CustomEvent) => {
 
                         {/* Row 4: Dosage | Prescription Frequency (Pharmacy only) */}
                         {isPharmacy && !isServiceItem && (
-                          <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
+                          <div
+                            className={`grid gap-3 mb-3 items-stretch ${
+                              showPrescriptionFrequencyInCart ? "grid-cols-2" : "grid-cols-1"
+                            }`}
+                          >
                             <div className={cartFieldCellClass}>
                               <label className={cartFieldLabelClass}>
                                 Dosage
@@ -5323,18 +5353,20 @@ const handleSetSerial = (event: CustomEvent) => {
                                 isMobile={isMobile}
                               />
                             </div>
-                            <div className={cartFieldCellClass}>
-                              <label className={cartFieldLabelClass}>
-                                Prescription Frequency
-                              </label>
-                              <DosageSelectField
-                                itemId={lineKey}
-                                options={prescriptionFrequencies}
-                                value={itemDiscount.prescriptionDosage || ""}
-                                onChange={(dosageName) => updateItemDiscount(lineKey, "prescriptionDosage", dosageName)}
-                                isMobile={isMobile}
-                              />
-                            </div>
+                            {showPrescriptionFrequencyInCart && (
+                              <div className={cartFieldCellClass}>
+                                <label className={cartFieldLabelClass}>
+                                  Prescription Frequency
+                                </label>
+                                <DosageSelectField
+                                  itemId={lineKey}
+                                  options={prescriptionFrequencies}
+                                  value={itemDiscount.prescriptionDosage || ""}
+                                  onChange={(dosageName) => updateItemDiscount(lineKey, "prescriptionDosage", dosageName)}
+                                  isMobile={isMobile}
+                                />
+                              </div>
+                            )}
                           </div>
                         )}
 

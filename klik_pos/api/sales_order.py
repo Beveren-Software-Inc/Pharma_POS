@@ -689,49 +689,90 @@ def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
 	return medication_orders
 
 
-def validate_dispense_quantities(items):
-	"""Block dispensing more than the prescribed quantity on a medication-order line.
+def _dispensed_stock_qty(item_code, uom, qty):
+	"""Convert a dispensed quantity into the item's stock UOM."""
+	qty = flt(qty)
+	stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
+	if not qty or not stock_uom or not uom or uom == stock_uom:
+		return qty
+	conversion_factor = flt(
+		frappe.db.get_value(
+			"UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor"
+		)
+	)
+	return qty * conversion_factor if conversion_factor > 0 else qty
 
-	Each cart line linked to a Patient Medication Order entry carries the qty being dispensed;
-	the linked entry carries the prescribed ``quantity``. Dispensing more than was prescribed
-	(e.g. 100 tablets against a script for 10) is rejected. When the prescribed quantity is
-	unknown (0 / unset) we cannot validate, so we do not block.
+
+def validate_dispense_quantities(items, warehouse=None):
+	"""Validate dispensed quantities against available stock (Bin).
+
+	Prescribers write clinical quantities (mg / g / ...) which do not map to the
+	POS units (UNIT / PACK), so the prescribed ``quantity`` on the medication order
+	is display-only and never used to cap dispensing. Instead, every medication-order
+	cart line is validated against the stock of the item actually being dispensed —
+	the alternative drug when one was chosen, otherwise the prescribed medicine.
+
+	Quantities are converted to the dispensed item's stock UOM before comparing
+	against ``Bin.actual_qty`` for the POS warehouse. When the warehouse, item or
+	Bin row cannot be resolved we cannot validate, so we do not block (ERPNext core
+	still enforces stock on submit).
 	"""
 	if not items:
 		return
+
+	warehouse = warehouse or getattr(_get_active_pos_profile(), "warehouse", None)
+	if not warehouse or not frappe.db.exists("Warehouse", warehouse):
+		return
+
+	required_by_item = {}
 	for item in items:
 		if not isinstance(item, dict):
 			continue
-		entry_name = (
-			item.get("medication_order_entry") or item.get("medicationOrderEntry") or ""
+		if not (
+			item.get("medication_order")
+			or item.get("medicationOrder")
+			or item.get("medication_order_entry")
+			or item.get("medicationOrderEntry")
+			or item.get("alternative_drug")
+			or item.get("alternative_medicine")
+			or item.get("is_pink")
+		):
+			# Not a medication-order line — leave stock checks to ERPNext core.
+			continue
+		item_code = (
+			item.get("alternative_drug")
+			or item.get("alternative_medicine")
+			or item.get("id")
+			or item.get("item_code")
+			or ""
 		).strip()
-		if not entry_name:
+		qty = flt(item.get("quantity") or item.get("qty") or 0)
+		if not item_code or qty <= 0:
 			continue
-		if not frappe.db.exists("Inpatient Medication Order Entry", entry_name):
+		required_by_item[item_code] = required_by_item.get(
+			item_code, 0
+		) + _dispensed_stock_qty(item_code, item.get("uom"), qty)
+
+	for item_code, required in required_by_item.items():
+		if not frappe.db.exists("Item", item_code):
 			continue
-		prescribed = flt(
-			frappe.db.get_value("Inpatient Medication Order Entry", entry_name, "quantity") or 0
+		available = frappe.db.get_value(
+			"Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty"
 		)
-		if prescribed <= 0:
+		if available is None:
+			# No Bin row for this warehouse — cannot validate.
 			continue
-		dispense_qty = flt(item.get("quantity") or item.get("qty") or 0)
-		if dispense_qty - prescribed > 0.001:
-			drug = (
-				item.get("drug_name")
-				or item.get("item_name")
-				or item.get("id")
-				or item.get("item_code")
-				or entry_name
-			)
+		available = flt(available)
+		if required - available > 0.001:
 			frappe.throw(
 				frappe._(
-					"Cannot dispense {0} unit(s) of {1}: only {2} were prescribed on this medication order."
-				).format(dispense_qty, drug, prescribed)
+					"Cannot dispense {0} of {1}: only {2} available in warehouse {3}."
+				).format(required, item_code, available, warehouse)
 			)
 
 
 def _append_hospital_sales_order_items(doc, items, pos_profile, cost_center):
-	validate_dispense_quantities(items)
+	validate_dispense_quantities(items, getattr(pos_profile, "warehouse", None))
 	for item in items:
 		item_code = item.get("id") or item.get("item_code")
 		if not item_code:

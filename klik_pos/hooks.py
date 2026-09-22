@@ -95,6 +95,7 @@ fixtures = [
      
      "Customer-custom_employee_name",
      "Customer-custom_employee",
+     "POS Profile-custom_display_prescription_frequency",
 				),
 			]
 		],

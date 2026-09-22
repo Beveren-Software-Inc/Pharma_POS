@@ -571,6 +571,16 @@ function AlternativeDrugSelect({
   );
 }
 
+/**
+ * Quantity pushed to the cart when a medication-order line is dispensed.
+ *
+ * The prescribed quantity on the order (e.g. "500 mg") is clinical and is kept
+ * for visibility only — POS dispenses in UNIT/PACK, so pharmacists confirm the
+ * real quantity inside the cart. Stock is therefore never validated against the
+ * prescription quantity; it is validated against what actually goes to the cart.
+ */
+const DEFAULT_DISPENSE_CART_QTY = 1;
+
 function formatMedicationQty(item: ItemRow) {
   if (item.quantity == null) return "—";
   // Only show UOM when it exists on the medication order line (no POS default fallback).
@@ -633,7 +643,10 @@ function ItemsTable({
             const lineCode = resolveMedicationItemCode(item);
             const checked = selectedKeys?.has(itemKey) ?? false;
             const avail = lineCode ? productAvailability?.[lineCode] : undefined;
-            const lowStock = avail !== undefined && (avail <= 0 || avail < Number(item.quantity || 1));
+            // Prescribed qty (item.quantity) is display-only: stock is validated against
+            // the qty that is actually added to the cart, not the scripted qty.
+            const lowStock =
+              avail !== undefined && avail < DEFAULT_DISPENSE_CART_QTY;
             return (
               <tr
                 key={idx}
@@ -799,11 +812,12 @@ function LegacyItemsTable({
             const checked = selectedKeys?.has(itemKey) ?? false;
             const stockCode = altCode || lineCode;
             const avail = stockCode ? productAvailability?.[stockCode] : undefined;
-            const qty = Number(item.show_qty || 1) || 1;
             // Legacy codes often are not current Items — treat missing/zero stock as needing an alternative.
+            // Validate against the default cart qty, never the prescribed/displayed qty.
             const needsAlternative =
-              !altCode && (avail === undefined || avail <= 0 || avail < qty);
-            const lowStock = !!altCode && avail !== undefined && (avail <= 0 || avail < qty);
+              !altCode && (avail === undefined || avail < DEFAULT_DISPENSE_CART_QTY);
+            const lowStock =
+              !!altCode && avail !== undefined && avail < DEFAULT_DISPENSE_CART_QTY;
             return (
               <tr
                 key={item.name || `${item.item_num || "item"}-${idx}`}
@@ -935,10 +949,11 @@ function SubscriptionItemsTable({
             const checked = selectedKeys?.has(itemKey) ?? false;
             const stockCode = altCode || lineCode;
             const avail = stockCode ? productAvailability?.[stockCode] : undefined;
-            const qty = Number(item.qty_per_cycle || 1) || 1;
+            // Validate against the default cart qty, never the prescribed/displayed qty.
             const needsAlternative =
-              !altCode && (avail === undefined || avail <= 0 || avail < qty);
-            const lowStock = !!altCode && avail !== undefined && (avail <= 0 || avail < qty);
+              !altCode && (avail === undefined || avail < DEFAULT_DISPENSE_CART_QTY);
+            const lowStock =
+              !!altCode && avail !== undefined && avail < DEFAULT_DISPENSE_CART_QTY;
             const inactive = item.is_active === 0;
             return (
               <tr
