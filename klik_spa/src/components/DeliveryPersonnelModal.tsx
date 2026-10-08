@@ -503,6 +503,7 @@ import { useState, useEffect, useMemo } from "react";
 import { X, Loader2, Search, ChevronDown, User, Truck } from "lucide-react";
 import { useDeliveryPersonnel } from "../hooks/useDeliveryPersonnel";
 import { useDeliveryChannels } from "../hooks/useDeliveryChannels";
+import { DELIVERY_VAT_RATE } from "../utils/deliverySelection";
 
 interface DeliveryPersonnelModalProps {
   isOpen: boolean;
@@ -549,7 +550,7 @@ export default function DeliveryPersonnelModal({
   const [isChannelDropdownOpen, setIsChannelDropdownOpen] = useState<boolean>(false);
   const [remarks, setRemarks] = useState<string>("");
 
-  const VAT_RATE = 0.10; // 10%
+  const VAT_RATE = DELIVERY_VAT_RATE;
 
   useEffect(() => {
     if (isOpen) {

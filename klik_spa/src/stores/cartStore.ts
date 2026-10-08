@@ -5,6 +5,7 @@ import type { Customer } from '../types/customer'
 import type { Patient } from '../services/patientService'
 import { toast } from 'react-toastify'
 import { clearDraftInvoiceCache } from '../utils/draftInvoiceCache'
+import { isPosServiceItem } from '../utils/posServiceItem'
 import { updateItemPricesForCustomer, getItemPriceForCustomer, applyPricingRulesToCart } from '../services/dynamicPricing'
 
 // Monotonic token to prevent stale async pricing responses from overwriting newer cart state.
@@ -39,6 +40,7 @@ function stockShortageMessage(item: CartItem, maxQty: number): string {
 }
 
 function getMaxQtyInItemUOM(item: CartItem): number | null {
+  if (isPosServiceItem(item)) return null;
   const available = item.available;
   if (available === undefined || available === null) return null;
   const cf = getConversionFactor(item);
@@ -237,8 +239,8 @@ export const useCartStore = create<CartState>()(
           ? state.cartItems.find((cartItem) => cartItem.id === item.id && !cartItem.allowDuplicate)
           : undefined;
 
-        // Check if item has available quantity
-        if (item.available !== undefined && item.available <= 0) {
+        // Services have no stock quantity. Stock items still cannot be sold at zero.
+        if (!isPosServiceItem(item) && item.available !== undefined && item.available <= 0) {
           toast.error(`${item.name} is out of stock`);
           return;
         }

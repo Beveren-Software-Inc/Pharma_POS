@@ -6,6 +6,7 @@ import PaymentDialog from "./PaymentDialog"
 import { useCartStore } from "../stores/cartStore"
 import { useProducts } from "../hooks/useProducts"
 import { clearDraftInvoiceCache } from "../utils/draftInvoiceCache"
+import { clearPendingDelivery } from "../utils/deliverySelection"
 
 export default function MobilePaymentPage() {
   const navigate = useNavigate()
@@ -54,6 +55,7 @@ export default function MobilePaymentPage() {
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleHoldOrder = (orderData: any) => {
     console.log('Order held:', orderData)
+    clearPendingDelivery()
     clearCart()
     navigate('/pos')
   }

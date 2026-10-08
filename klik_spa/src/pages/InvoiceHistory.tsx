@@ -75,6 +75,17 @@ import {
   getItemReturnStatus,
   getReturnedLineCount,
 } from "../utils/dispenseReturnStatus";
+
+function formatHeldDelivery(invoice: SalesInvoice): string | null {
+  const person = invoice.deliveryPersonnelName || invoice.deliveryPersonnel;
+  const channel = invoice.deliveryViaLabel || invoice.deliveryVia;
+  const parts: string[] = [];
+  if (channel) parts.push(channel);
+  if (person) parts.push(person);
+  if (invoice.deliveryReferenceNo) parts.push(`Ref ${invoice.deliveryReferenceNo}`);
+  if (invoice.deliveryChargeAmount) parts.push(`Fee ${Number(invoice.deliveryChargeAmount).toFixed(3)}`);
+  return parts.length ? parts.join(" · ") : null;
+}
 // import InvoiceViewPage from "./InvoiceViewPage";
 
 function localDateISO(d = new Date()): string {
@@ -986,6 +997,11 @@ const getStatusBadge = (status: string) => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   {party.singular}
                 </th>
+                {!isHospitalPharmacy && (
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  Delivery
+                </th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Cashier
                 </th>
@@ -1021,6 +1037,7 @@ const getStatusBadge = (status: string) => {
               {filteredInvoices.map((invoice) => {
                 const isExpanded = expandedDispenseOrders.has(invoice.id);
                 const hospitalColSpan = 6;
+                const deliveryDetails = formatHeldDelivery(invoice);
 
                 return (
                   <Fragment key={`${activeTab}-${invoice.id}`}>
@@ -1070,6 +1087,13 @@ const getStatusBadge = (status: string) => {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900 dark:text-white">{invoice.customer}</div>
                       </td>
+                      {!isHospitalPharmacy && (
+                      <td className="px-6 py-4">
+                        <div className="text-sm text-gray-900 dark:text-white whitespace-normal max-w-xs">
+                          {deliveryDetails || "—"}
+                        </div>
+                      </td>
+                      )}
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                         {invoice.cashier}
                       </td>
@@ -1275,7 +1299,9 @@ const getStatusBadge = (status: string) => {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-6">
-          {filteredInvoices.map((invoice) => (
+          {filteredInvoices.map((invoice) => {
+            const deliveryDetails = formatHeldDelivery(invoice);
+            return (
             <div
               key={`${activeTab}-${invoice.id}`}
               className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 hover:shadow-md transition-shadow"
@@ -1311,6 +1337,12 @@ const getStatusBadge = (status: string) => {
                   <span className="text-gray-600 dark:text-gray-400">Cashier:</span>
                   <span className="text-gray-900 dark:text-white">{invoice.cashier}</span>
                 </div>
+                {deliveryDetails && (
+                  <div className="flex justify-between text-sm gap-3">
+                    <span className="text-gray-600 dark:text-gray-400 flex-shrink-0">Delivery:</span>
+                    <span className="text-beveren-700 dark:text-beveren-300 text-right">{deliveryDetails}</span>
+                  </div>
+                )}
                 {isHospitalPharmacy && (
                   <div className="flex justify-between text-sm gap-3">
                     <span className="text-gray-600 dark:text-gray-400 flex-shrink-0">Remark:</span>
@@ -1458,7 +1490,8 @@ const getStatusBadge = (status: string) => {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -2349,6 +2382,11 @@ const getStatusBadge = (status: string) => {
                     ? "Resume this held dispense order in the cart."
                     : "What would you like to do with this draft invoice?"}
                 </p>
+                {formatHeldDelivery(selectedDraftInvoice) && (
+                  <div className="mb-4 rounded-lg border border-beveren-200 bg-beveren-50 px-3 py-2 text-sm text-beveren-900 dark:border-beveren-800 dark:bg-beveren-900/20 dark:text-beveren-100">
+                    Delivery: {formatHeldDelivery(selectedDraftInvoice)}
+                  </div>
+                )}
                 <div className="space-y-3">
                   <button
                     onClick={() => handleGoToCart(selectedDraftInvoice)}

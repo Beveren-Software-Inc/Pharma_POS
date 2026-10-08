@@ -516,6 +516,14 @@ def get_item_by_identifier(code: str, item_code=None):
 		balance = fetch_item_balance(item_code, warehouse)
 		price_info = fetch_item_price(item_code, price_list)
 		item_tax_template = _fetch_item_tax_templates([item_code], frappe.defaults.get_user_default("Company")).get(item_code)
+		is_pos_service = 0
+		if (
+			_pos_allows_service_sale(pos_doc)
+			and not int(getattr(item_doc, "is_stock_item", 1) or 0)
+			and int(getattr(item_doc, "custom_allow_pos_sale", 0) or 0)
+		):
+			is_pos_service = 1
+			balance = POS_SERVICE_AVAILABLE_QTY
 		response = {
 			"item_code": item_code,
 			"item_name": item_doc.item_name or item_code,
@@ -532,6 +540,7 @@ def get_item_by_identifier(code: str, item_code=None):
 			"matched_value": matched_value,
 			"item_tax_template": item_tax_template,
 			"stock_uom": item_doc.stock_uom,
+			"is_pos_service": is_pos_service,
 		}
 		if dispensing_lot_name:
 			response["dispensing_lot"] = dispensing_lot_name
@@ -792,42 +801,100 @@ def _get_item_select_fields() -> str:
 	elif frappe.db.has_column("Item", "has_batch"):
 		select_fields += ", i.has_batch"
 
+	if frappe.db.has_column("Item", "is_stock_item"):
+		select_fields += ", i.is_stock_item"
+
 	return select_fields
 
 
-def _build_base_and_count_queries(select_fields: str, hide_unavailable: bool) -> tuple[list[str], list[str]]:
-	"""Build the base SQL and count SQL (as list parts) depending on stock filtering mode."""
+def _pos_allows_service_sale(pos_doc) -> bool:
+	"""POS Profile may sell selected non-stock items (Maintain Stock unticked)."""
+	if not pos_doc or not int(getattr(pos_doc, "custom_allow_service_sale", 0) or 0):
+		return False
+	return bool(frappe.db.has_column("Item", "custom_allow_pos_sale"))
+
+
+def _service_item_sql() -> str:
+	"""Non-stock items explicitly allowed on the POS. Other services stay hidden."""
+	return "(i.is_stock_item = 0 AND COALESCE(i.custom_allow_pos_sale, 0) = 1)"
+
+
+# Services have no bin quantity. A high available value keeps them sellable in the
+# POS grid, which hides and blocks items at zero stock.
+POS_SERVICE_AVAILABLE_QTY = 999999
+
+
+def _build_base_and_count_queries(
+	select_fields: str,
+	hide_unavailable: bool,
+	allow_service_sale: bool = False,
+	warehouse: str | None = None,
+) -> tuple[list[str], list[str], list[object]]:
+	"""Build the base SQL and count SQL (as list parts) depending on stock filtering mode.
+
+	Returns the queries and the leading params (warehouse) already bound into them.
+	"""
 	has_additional_flag = frappe.db.has_column("Item", "custom_is_additional_charges")
+	stock_params: list[object] = []
+	service_sql = _service_item_sql() if allow_service_sale else ""
 
 	if hide_unavailable:
-		base_query = [
-			f"SELECT DISTINCT {select_fields}",
-			"FROM `tabItem` i",
-			"INNER JOIN `tabBin` b ON i.name = b.item_code",
-			"WHERE i.disabled = 0",
-			"AND i.is_stock_item = 1",
-			"AND b.actual_qty > 0",
-		]
-		count_query = [
-			"SELECT COUNT(DISTINCT i.name) as total",
-			"FROM `tabItem` i",
-			"INNER JOIN `tabBin` b ON i.name = b.item_code",
-			"WHERE i.disabled = 0",
-			"AND i.is_stock_item = 1",
-			"AND b.actual_qty > 0",
-		]
+		if allow_service_sale:
+			stock_sql = "i.is_stock_item = 1 AND b.actual_qty > 0"
+			if warehouse:
+				stock_sql = "i.is_stock_item = 1 AND b.warehouse = %s AND b.actual_qty > 0"
+				stock_params.append(warehouse)
+			visibility = f"AND (({stock_sql}) OR {service_sql})"
+			base_query = [
+				f"SELECT DISTINCT {select_fields}",
+				"FROM `tabItem` i",
+				"LEFT JOIN `tabBin` b ON i.name = b.item_code",
+				"WHERE i.disabled = 0",
+				visibility,
+			]
+			count_query = [
+				"SELECT COUNT(DISTINCT i.name) as total",
+				"FROM `tabItem` i",
+				"LEFT JOIN `tabBin` b ON i.name = b.item_code",
+				"WHERE i.disabled = 0",
+				visibility,
+			]
+		else:
+			base_query = [
+				f"SELECT DISTINCT {select_fields}",
+				"FROM `tabItem` i",
+				"INNER JOIN `tabBin` b ON i.name = b.item_code",
+				"WHERE i.disabled = 0",
+				"AND i.is_stock_item = 1",
+				"AND b.actual_qty > 0",
+			]
+			count_query = [
+				"SELECT COUNT(DISTINCT i.name) as total",
+				"FROM `tabItem` i",
+				"INNER JOIN `tabBin` b ON i.name = b.item_code",
+				"WHERE i.disabled = 0",
+				"AND i.is_stock_item = 1",
+				"AND b.actual_qty > 0",
+			]
+			if warehouse:
+				base_query.append("AND b.warehouse = %s")
+				count_query.append("AND b.warehouse = %s")
+				stock_params.append(warehouse)
 	else:
+		visibility = "AND i.is_stock_item = 1"
+		if allow_service_sale:
+			visibility = f"AND (i.is_stock_item = 1 OR {service_sql})"
 		base_query = [
 			f"SELECT DISTINCT {select_fields}",
 			"FROM `tabItem` i",
 			"WHERE i.disabled = 0",
-			"AND i.is_stock_item = 1",
+			visibility,
 		]
 		count_query = [
 			"SELECT COUNT(DISTINCT i.name) as total",
 			"FROM `tabItem` i",
 			"WHERE i.disabled = 0",
-			"AND i.is_stock_item = 1",
+			visibility,
 		]
 
 	# Hide additional-charges service item from POS listing if flag exists
@@ -835,7 +902,7 @@ def _build_base_and_count_queries(select_fields: str, hide_unavailable: bool) ->
 		base_query.append("AND COALESCE(i.custom_is_additional_charges, 0) = 0")
 		count_query.append("AND COALESCE(i.custom_is_additional_charges, 0) = 0")
 
-	return base_query, count_query
+	return base_query, count_query, stock_params
 
 
 def _append_item_group_filters(
@@ -844,14 +911,23 @@ def _append_item_group_filters(
 	params_list: list[object],
 	count_params: list[object],
 	pos_doc,
+	allow_service_sale: bool = False,
 ):
-	"""Append POS Profile item group filters to both base and count queries."""
+	"""Append POS Profile item group filters to both base and count queries.
+
+	Allowed POS services stay visible even when their item group is not on the profile.
+	"""
 	if getattr(pos_doc, "item_groups", None):
 		item_group_names = [d.item_group for d in pos_doc.item_groups if d.item_group]
 		if item_group_names:
 			placeholders = ", ".join(["%s"] * len(item_group_names))
-			base_query.append(f"AND i.item_group IN ({placeholders})")
-			count_query.append(f"AND i.item_group IN ({placeholders})")
+			if allow_service_sale:
+				group_sql = f"AND (i.is_stock_item = 0 OR i.item_group IN ({placeholders}))"
+			else:
+				group_sql = f"AND i.item_group IN ({placeholders})"
+			base_query.append(group_sql)
+			if count_query:
+				count_query.append(group_sql)
 			params_list.extend(item_group_names)
 			count_params.extend(item_group_names)
 
@@ -906,18 +982,23 @@ def _get_total_count(count_query: list[str], count_params: list[object]) -> int:
 	return total_result[0]["total"] if total_result else 0
 
 
-def _get_unfiltered_total_count(pos_doc, category: str | None, search: str | None) -> int:
+def _get_unfiltered_total_count(
+	pos_doc, category: str | None, search: str | None, allow_service_sale: bool = False
+) -> int:
 	"""
 	Count total items matching filters WITHOUT stock/bin filters.
 	This is used when hide_unavailable_items is enabled to show the real total.
 	"""
 	has_additional_flag = frappe.db.has_column("Item", "custom_is_additional_charges")
 
+	visibility = "AND i.is_stock_item = 1"
+	if allow_service_sale:
+		visibility = f"AND (i.is_stock_item = 1 OR {_service_item_sql()})"
 	unfiltered_count_query = [
 		"SELECT COUNT(DISTINCT i.name) as total",
 		"FROM `tabItem` i",
 		"WHERE i.disabled = 0",
-		"AND i.is_stock_item = 1",
+		visibility,
 	]
 	if has_additional_flag:
 		unfiltered_count_query.append("AND COALESCE(i.custom_is_additional_charges, 0) = 0")
@@ -928,7 +1009,12 @@ def _get_unfiltered_total_count(pos_doc, category: str | None, search: str | Non
 		item_group_names = [d.item_group for d in pos_doc.item_groups if d.item_group]
 		if item_group_names:
 			placeholders = ", ".join(["%s"] * len(item_group_names))
-			unfiltered_count_query.append(f"AND i.item_group IN ({placeholders})")
+			if allow_service_sale:
+				unfiltered_count_query.append(
+					f"AND (i.is_stock_item = 0 OR i.item_group IN ({placeholders}))"
+				)
+			else:
+				unfiltered_count_query.append(f"AND i.item_group IN ({placeholders})")
 			unfiltered_count_params.extend(item_group_names)
 
 	# Apply category filter if specified
@@ -1079,8 +1165,11 @@ def _build_enriched_items(
 		item_code = item["name"]
 		balance = stock_map.get(item_code, 0)
 
-		# Skip items with no stock if hide_unavailable is enabled
-		if hide_unavailable and balance <= 0:
+		is_pos_service = "is_stock_item" in item and not int(item.get("is_stock_item") or 0)
+
+		# Skip items with no stock if hide_unavailable is enabled.
+		# POS services are non-stock and stay visible.
+		if hide_unavailable and balance <= 0 and not is_pos_service:
 			continue
 
 		default_uom = item.get("stock_uom", "Nos")
@@ -1134,6 +1223,10 @@ def _build_enriched_items(
 		if item_tax_template_map and item_code in item_tax_template_map:
 			enriched_item["item_tax_template"] = item_tax_template_map[item_code]
 
+		if is_pos_service:
+			enriched_item["is_pos_service"] = 1
+			enriched_item["available"] = POS_SERVICE_AVAILABLE_QTY
+
 		enriched_items.append(enriched_item)
 
 	return enriched_items
@@ -1164,19 +1257,17 @@ def get_items_with_balance_and_price(
 
 	try:
 		select_fields = _get_item_select_fields()
-		base_query, count_query = _build_base_and_count_queries(select_fields, hide_unavailable)
+		allow_service_sale = _pos_allows_service_sale(pos_doc)
+		base_query, count_query, stock_params = _build_base_and_count_queries(
+			select_fields, hide_unavailable, allow_service_sale, warehouse
+		)
 
-		params_list: list[object] = []
-		count_params: list[object] = []
+		params_list: list[object] = list(stock_params)
+		count_params: list[object] = list(stock_params)
 
-		# Warehouse filter for hide_unavailable
-		if hide_unavailable and warehouse:
-			base_query.append("AND b.warehouse = %s")
-			count_query.append("AND b.warehouse = %s")
-			params_list.append(warehouse)
-			count_params.append(warehouse)
-
-		_append_item_group_filters(base_query, count_query, params_list, count_params, pos_doc)
+		_append_item_group_filters(
+			base_query, count_query, params_list, count_params, pos_doc, allow_service_sale
+		)
 		_append_category_filter(base_query, count_query, params_list, count_params, category)
 		_append_search_filter(base_query, params_list, search)
 		_append_search_filter(count_query, count_params, search)
@@ -1186,7 +1277,7 @@ def get_items_with_balance_and_price(
 
 		# For hide_unavailable: show real total without stock filter
 		if hide_unavailable:
-			total_count = _get_unfiltered_total_count(pos_doc, category, search)
+			total_count = _get_unfiltered_total_count(pos_doc, category, search, allow_service_sale)
 
 		# Add ordering and pagination
 		base_query.append("ORDER BY i.item_name ASC")
@@ -1527,7 +1618,28 @@ def get_items_stock_batch(item_codes: str):
 		item_codes_list = [code.strip() for code in item_codes.split(",") if code.strip()]
 
 		stock_updates = {}
+		service_codes = set()
+		if _pos_allows_service_sale(pos_doc) and item_codes_list:
+			placeholders = ", ".join(["%s"] * len(item_codes_list))
+			service_codes = {
+				row.name
+				for row in frappe.db.sql(
+					f"""
+					SELECT name
+					FROM `tabItem`
+					WHERE name IN ({placeholders})
+						AND disabled = 0
+						AND is_stock_item = 0
+						AND COALESCE(custom_allow_pos_sale, 0) = 1
+					""",
+					tuple(item_codes_list),
+					as_dict=True,
+				)
+			}
 		for item_code in item_codes_list:
+			if item_code in service_codes:
+				stock_updates[item_code] = POS_SERVICE_AVAILABLE_QTY
+				continue
 			balance = fetch_item_balance(item_code, warehouse)
 			if not hide_unavailable or balance > 0:
 				stock_updates[item_code] = balance
@@ -1564,6 +1676,36 @@ def get_item_groups_for_pos():
 				order_by="modified desc",
 			)
 
+		allow_service_sale = _pos_allows_service_sale(pos_profile)
+		service_group_counts: dict[str, int] = {}
+		added_service_groups: set[str] = set()
+		if allow_service_sale:
+			service_rows = frappe.db.sql(
+				f"""
+				SELECT i.item_group, COUNT(*) AS cnt
+				FROM `tabItem` i
+				WHERE i.disabled = 0
+					AND {_service_item_sql()}
+				GROUP BY i.item_group
+				""",
+				as_dict=True,
+			)
+			for row in service_rows:
+				if row.get("item_group"):
+					service_group_counts[row["item_group"]] = int(row["cnt"] or 0)
+
+			known_groups = {group["name"] for group in item_groups}
+			missing_groups = [name for name in service_group_counts if name not in known_groups]
+			if missing_groups:
+				added_service_groups = set(missing_groups)
+				item_groups.extend(
+					frappe.get_all(
+						"Item Group",
+						filters={"name": ["in", missing_groups]},
+						fields=["name", "item_group_name", "parent_item_group"],
+					)
+				)
+
 		# Compute total items constrained to POS Profile's allowed groups (if any)
 		if item_group_names:
 			total_item_count = frappe.db.count(
@@ -1576,9 +1718,12 @@ def get_item_groups_for_pos():
 			)
 		else:
 			total_item_count = frappe.db.count("Item", filters={"disabled": 0, "is_stock_item": 1})
+		total_item_count += sum(service_group_counts.values())
 
 		for group in item_groups:
 			item_count = frappe.db.count("Item", filters={"item_group": group["name"]})
+			if group["name"] in added_service_groups:
+				item_count = service_group_counts[group["name"]]
 
 			formatted_groups.append(
 				{

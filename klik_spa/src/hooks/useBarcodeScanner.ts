@@ -5,6 +5,7 @@ import { useProducts } from './useProducts'
 import { parseGS1, looksLikeGS1 } from './gS1parser'
 import type { MenuItem } from '../../types'
 import { useCartStore } from '../stores/cartStore'
+import { isPosServiceItem } from '../utils/posServiceItem'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ export function useBarcodeScanner(
       has_serial_no: msg.has_serial_no as number | undefined,
       item_tax_template: msg.item_tax_template as string | undefined,
       stock_uom: msg.stock_uom as string | undefined,
+      is_pos_service: isPosServiceItem({ is_pos_service: msg.is_pos_service as number | boolean | string }) ? 1 : 0,
     }
   }
 

@@ -13,6 +13,16 @@ export interface DraftLineDiscount {
   medicationOrder?: string;
 }
 
+export interface HeldDeliveryDetails {
+  deliveryPersonnel: string | null;
+  deliveryPersonnelName?: string | null;
+  deliveryVia: string | null;
+  referenceNo: string | null;
+  deliveryDistanceKm: number | null;
+  deliveryChargeAmount: number;
+  deliveryChargeWithVAT?: number | null;
+}
+
 interface DraftInvoiceCache {
   items: CartItem[];
   timestamp: number;
@@ -20,6 +30,7 @@ interface DraftInvoiceCache {
   customer: Customer | null;
   originalDraftInvoiceId: string;
   lineDiscounts?: Record<string, DraftLineDiscount>;
+  delivery?: HeldDeliveryDetails | null;
 }
 
 const CACHE_KEY = 'draft-invoice-cache';
@@ -29,7 +40,8 @@ export function cacheDraftInvoiceItems(
   invoiceId: string,
   items: CartItem[],
   customer: Customer | null,
-  lineDiscounts?: Record<string, DraftLineDiscount>
+  lineDiscounts?: Record<string, DraftLineDiscount>,
+  delivery?: HeldDeliveryDetails | null
 ): void {
   const cache: DraftInvoiceCache = {
     items,
@@ -38,6 +50,7 @@ export function cacheDraftInvoiceItems(
     customer,
     originalDraftInvoiceId: invoiceId,
     lineDiscounts,
+    delivery: delivery || null,
   };
 
   localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
@@ -73,6 +86,18 @@ export function clearDraftInvoiceCache(): void {
   localStorage.removeItem(CACHE_KEY);
 }
 
+export function clearCachedDraftDelivery(): void {
+  const cached = getCachedDraftInvoiceItems();
+  if (!cached?.delivery) return;
+  cacheDraftInvoiceItems(
+    cached.invoiceId,
+    cached.items,
+    cached.customer,
+    cached.lineDiscounts,
+    null
+  );
+}
+
 export async function loadCachedItemsToCart(): Promise<boolean> {
   const cachedData = getCachedDraftInvoiceItems();
   if (!cachedData || cachedData.items.length === 0) {
@@ -100,6 +125,7 @@ export async function loadCachedItemsToCart(): Promise<boolean> {
       batch_no: item.batch_no,
       serial_no: item.serial_no,
       dispensing_lot: item.dispensing_lot,
+      item_tax_template: item.item_tax_template,
     };
 
     await addToCartWithQuantity(cartItem, item.quantity);
@@ -134,4 +160,8 @@ export function getOriginalDraftInvoiceId(): string | null {
   const cachedData = getCachedDraftInvoiceItems();
 
   return cachedData?.originalDraftInvoiceId || null;
+}
+
+export function getCachedDraftDelivery(): HeldDeliveryDetails | null {
+  return getCachedDraftInvoiceItems()?.delivery || null;
 }

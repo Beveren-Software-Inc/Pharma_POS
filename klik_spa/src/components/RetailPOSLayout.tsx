@@ -22,6 +22,7 @@ import {
   resolveHospitalCartUomDetails,
   type CartUomResolution,
 } from "../utils/hospitalCartUom"
+import { isPosServiceItem } from "../utils/posServiceItem"
 
 export default function RetailPOSLayout() {
   const [selectedCategory, setSelectedCategory] = useState("all")
@@ -90,7 +91,7 @@ export default function RetailPOSLayout() {
 
   const handleAddToCart = (item: MenuItem) => {
     // Don't add if item is not available
-    if (item.available <= 0) return
+    if (!isPosServiceItem(item) && item.available <= 0) return
 
     // If scanner-only mode is enabled, prevent adding items by clicking
     if (useScannerOnly) {
@@ -200,6 +201,7 @@ export default function RetailPOSLayout() {
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,
       has_batch_no: item.has_batch_no,
+      is_pos_service: isPosServiceItem(item) ? 1 : 0,
     })
     if (quantity !== 1 && added) {
       const lineId = getCartLineUpdateId(added as CartItem);
@@ -240,6 +242,7 @@ export default function RetailPOSLayout() {
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,
       has_batch_no: item.has_batch_no,
+      is_pos_service: isPosServiceItem(item) ? 1 : 0,
     }
 
     if (shouldFetchPrice) {
@@ -748,7 +751,7 @@ const handleBarcodeDetected = useCallback(async (barcode: string) => {
   // Only apply local filtering for category and scale barcode typing
   const filteredItems = menuItems.filter((item) => {
     // Availability filter - hide items with 0 quantity if hide_unavailable_items is enabled
-    if (hideUnavailableItems && item.available <= 0) {
+    if (hideUnavailableItems && !isPosServiceItem(item) && item.available <= 0) {
       return false
     }
 

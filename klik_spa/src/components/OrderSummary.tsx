@@ -28,6 +28,7 @@ import { useCustomers } from "../hooks/useCustomers";
 import { useProducts } from "../hooks/useProducts";
 import { toast } from "react-toastify";
 import { extractErrorFromException } from "../utils/errorExtraction";
+import { isPosServiceItem } from "../utils/posServiceItem";
 import { getBatches } from "../utils/batch";
 import {
   auditCartBatchExpiry,
@@ -60,7 +61,8 @@ import { searchPatients, getPendingInpatientMedicationOrders, getPatientMedicati
 import { getItemPriceForCustomer } from "../services/dynamicPricing";
 import { getItemUOMsAndPrices } from "../services/uomService";
 import { createHospitalSalesOrder, createDraftHospitalSalesOrder, getBatchLabelDetails } from "../services/salesOrder";
-import { getCachedDraftInvoiceItems } from "../utils/draftInvoiceCache";
+import { getCachedDraftDelivery, getCachedDraftInvoiceItems } from "../utils/draftInvoiceCache";
+import { clearPendingDelivery, getPendingDelivery } from "../utils/deliverySelection";
 import {
   cacheHeldDispenseOrder,
   clearHeldDispenseOrderCache,
@@ -1432,6 +1434,7 @@ export default function OrderSummary({
         has_serial_no,
         has_batch_no,
         allowDuplicate: true,
+        is_pos_service: isPosServiceItem(item) ? 1 : 0,
       });
     },
     [addToCart, products, isHospitalPharmacy]
@@ -2168,7 +2171,7 @@ export default function OrderSummary({
         console.warn(`Product not found for item_code: ${effectiveItemCode}`);
         return "not_found";
       }
-      if (product.available <= 0) {
+      if (!isPosServiceItem(product) && product.available <= 0) {
         return "no_stock";
       }
 
@@ -2208,7 +2211,7 @@ export default function OrderSummary({
       );
       const neededStockQty = cartQuantity * conversionFactor;
 
-      if (neededStockQty > product.available) {
+      if (!isPosServiceItem(product) && neededStockQty > product.available) {
         toast.error(
           `Only ${product.available} ${stockUom || "PACK"} of ${product.name} available (need ${neededStockQty} ${stockUom || "PACK"} for ${cartQuantity} ${uomToUse || "UNIT"})`
         );
@@ -2290,6 +2293,7 @@ export default function OrderSummary({
           item_code: product.id,
           has_batch_no: product.has_batch_no,
           has_serial_no: product.has_serial_no,
+          is_pos_service: isPosServiceItem(product) ? 1 : 0,
           // Cart qty (starting at 1) is validated by the cart store against stock,
           // so quantity edits by the pharmacist are checked too.
           ...(pink && {
@@ -3762,6 +3766,12 @@ const pages = labels.map((label) => `
       totalItemDiscount,
       totalSavings: totalItemDiscount + couponDiscount,
       status: "held",
+      deliveryPersonnel: getPendingDelivery()?.deliveryPersonnel || null,
+      deliveryVia: getPendingDelivery()?.deliveryVia || null,
+      referenceNo: getPendingDelivery()?.referenceNo || null,
+      deliveryDistanceKm: getPendingDelivery()?.deliveryDistanceKm ?? null,
+      deliveryChargeAmount: getPendingDelivery()?.deliveryChargeAmount ?? 0,
+      additionalRemark: getPendingDelivery()?.deliveryRemarks || null,
     };
   };
 
@@ -3793,6 +3803,7 @@ const pages = labels.map((label) => `
   };
 
   const handleClearCart = () => {
+    clearPendingDelivery();
     if (cartItems.length === 0) return;
 
     // Use dedicated clear function if available
@@ -5500,6 +5511,35 @@ const handleSetSerial = (event: CustomEvent) => {
               : "p-4 border-t border-gray-100 dark:border-gray-700"
           } space-y-3`}
         >
+
+          {!isHospitalPharmacy && (() => {
+            const pending = getPendingDelivery();
+            const cached = getCachedDraftDelivery();
+            const person =
+              (pending?.deliveryPersonnel && cached?.deliveryPersonnel === pending.deliveryPersonnel
+                ? cached?.deliveryPersonnelName
+                : null) ||
+              pending?.deliveryPersonnel ||
+              cached?.deliveryPersonnelName ||
+              cached?.deliveryPersonnel;
+            const channel = pending?.deliveryVia || cached?.deliveryVia;
+            const reference = pending?.referenceNo || cached?.referenceNo;
+            const distance = pending?.deliveryDistanceKm ?? cached?.deliveryDistanceKm;
+            const charge = pending?.deliveryChargeAmount || cached?.deliveryChargeAmount || 0;
+            if (!person && !channel && !reference && !charge) return null;
+            const parts = [
+              channel,
+              person,
+              reference ? `Ref ${reference}` : null,
+              distance != null ? `${distance} km` : null,
+              charge ? `Fee ${Number(charge).toFixed(3)}` : null,
+            ].filter(Boolean);
+            return (
+              <div className="rounded-lg border border-beveren-200 bg-beveren-50 px-3 py-2 text-sm text-beveren-900 dark:border-beveren-800 dark:bg-beveren-900/20 dark:text-beveren-100">
+                Delivery: {parts.join(" · ")}
+              </div>
+            );
+          })()}
 
           {/* Action Buttons — hidden after dispense (New Order / Print flow) */}
           {!showPostDispenseActions && (
