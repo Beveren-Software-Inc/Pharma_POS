@@ -124,7 +124,14 @@ def _create_or_get_employee_customer(employee_id, display_name=None):
 	legacy_name = frappe.db.get_value("Customer", {"customer_name": display_name}, "name")
 	if legacy_name and legacy_name != employee_id:
 		try:
-			frappe.rename_doc("Customer", legacy_name, employee_id, force=True, merge=False)
+			frappe.rename_doc(
+				"Customer",
+				legacy_name,
+				employee_id,
+				force=True,
+				merge=False,
+				show_alert=False,
+			)
 		except Exception:
 			frappe.log_error(
 				frappe.get_traceback(),
@@ -138,19 +145,9 @@ def _create_or_get_employee_customer(employee_id, display_name=None):
 	customer.customer_type = "Individual"
 	customer.customer_group = frappe.db.get_single_value("Selling Settings", "customer_group") or "Individual"
 	customer.territory = frappe.db.get_single_value("Selling Settings", "territory") or "All Territories"
-	customer.insert(ignore_permissions=True)
-
-	if customer.name != employee_id:
-		try:
-			frappe.rename_doc("Customer", customer.name, employee_id, force=True, merge=False)
-		except Exception:
-			frappe.log_error(
-				frappe.get_traceback(),
-				f"Could not rename new customer {customer.name} to employee id {employee_id}",
-			)
-			return customer.name
-
-	return employee_id
+	# Name equals the Employee ID. A later rename shows "Document renamed" in POS.
+	customer.insert(ignore_permissions=True, set_name=employee_id)
+	return customer.name
 
 
 def _get_or_create_employee_customer(employee_id):
@@ -392,8 +389,14 @@ def create_employee_dispense_invoice(data=None, employee=None, items=None, compa
 
 	except Exception as exc:
 		frappe.db.rollback(save_point=savepoint)
+		# Drop earlier notices (such as a customer rename alert) so the POS
+		# shows this failure instead of the first server message.
+		frappe.local.message_log = []
 		frappe.log_error(frappe.get_traceback(), "Employee dispense failed")
-		message = strip_html_tags(str(exc)) or str(exc)
+		if isinstance(exc, frappe.PermissionError):
+			message = _("You do not have permission to complete this dispense")
+		else:
+			message = strip_html_tags(str(exc)) or str(exc) or _("Unknown error")
 		frappe.throw(_("Employee dispense failed: {0}").format(message))
 
 	return {

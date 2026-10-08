@@ -559,9 +559,16 @@ def _create_and_submit_delivery_note_from_sales_order(sales_order_name, pos_prof
 	except ImportError:
 		frappe.throw("ERPNext is required to create Delivery Note from Sales Order.")
 
-	dn = make_delivery_note(sales_order_name)
+	# POS users are often limited to their own Employee via User Permissions.
+	# The employee customer is linked to a different Employee, so party lookup
+	# during mapping raises PermissionError unless this document ignores it.
+	# The Sales Order was already created with ignore_permissions.
+	target = frappe.new_doc("Delivery Note")
+	target.flags.ignore_permissions = True
+	dn = make_delivery_note(sales_order_name, target_doc=target)
 	if isinstance(dn, dict):
 		dn = frappe.get_doc(dn)
+	dn.flags.ignore_permissions = True
 
 	warehouse = getattr(pos_profile, "warehouse", None)
 	if warehouse:
