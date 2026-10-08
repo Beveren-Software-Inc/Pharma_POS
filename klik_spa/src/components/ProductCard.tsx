@@ -2,6 +2,7 @@
 
 // import { useI18n } from "../hooks/useI18n"
 import type { MenuItem } from "../../types"
+import { isPosServiceItem } from "../utils/posServiceItem"
 
 interface ProductCardProps {
   item: MenuItem
@@ -23,7 +24,8 @@ export default function ProductCard({
   onHoverEnd,
 }: ProductCardProps) {
   // const { t } = useI18n()
-  const isOutOfStock = item.available <= 0
+  const isService = isPosServiceItem(item)
+  const isOutOfStock = !isService && item.available <= 0
   const isDisabled = isOutOfStock || scannerOnly
 
   // Format price based on currency
@@ -62,7 +64,12 @@ return (
             -{item.discount}%
           </div>
         )}
-        {!isOutOfStock && (
+        {isService && (
+          <div className="absolute top-2 right-2 bg-slate-600 text-white px-1.5 py-0.5 rounded-md text-xs font-medium">
+            Service
+          </div>
+        )}
+        {!isOutOfStock && !isService && (
           <div className="absolute top-2 right-2 bg-slate-600 text-white px-1.5 py-0.5 rounded-md text-xs font-medium">
             {item.available}
           </div>

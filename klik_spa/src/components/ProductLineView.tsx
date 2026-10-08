@@ -6,6 +6,7 @@ import { useItemHoverTooltip } from "../hooks/useItemHoverTooltip"
 import { itemHasBatchNo } from "../utils/batch"
 import PharmacyItemDetailsModal from "./PharmacyItemDetailsModal"
 import type { MenuItem } from "../../types"
+import { isPosServiceItem } from "../utils/posServiceItem"
 
 interface ProductLineViewProps {
   items: MenuItem[]
@@ -81,7 +82,8 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
         {/* Product Rows */}
         <div className="divide-y divide-gray-200 dark:divide-gray-600">
           {items.map((item) => {
-            const isOutOfStock = item.available <= 0
+            const isService = isPosServiceItem(item)
+            const isOutOfStock = !isService && item.available <= 0
             const isDisabled = isOutOfStock || scannerOnly
             const formattedPrice = `${item.currency_symbol}${item.price.toFixed(3)}`
             
@@ -141,7 +143,7 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
                       ? "text-red-600 dark:text-red-400"
                       : "text-gray-900 dark:text-white"
                   }`}>
-                    {isOutOfStock ? "0" : item.available}
+                    {isService ? "Service" : isOutOfStock ? "0" : item.available}
                   </span>
                 </div>
 

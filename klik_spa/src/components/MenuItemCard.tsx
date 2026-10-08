@@ -1,6 +1,7 @@
 "use client"
 
 import type { MenuItem } from "../../types"
+import { isPosServiceItem } from "../utils/posServiceItem"
 
 interface MenuItemCardProps {
   item: MenuItem
@@ -8,7 +9,8 @@ interface MenuItemCardProps {
 }
 
 export default function MenuItemCard({ item, onAddToCart }: MenuItemCardProps) {
-  const isOutOfStock = item.available <= 0
+  const isService = isPosServiceItem(item)
+  const isOutOfStock = !isService && item.available <= 0
 
   return (
     <div
@@ -47,7 +49,7 @@ export default function MenuItemCard({ item, onAddToCart }: MenuItemCardProps) {
         <h3 className="font-semibold text-gray-800 dark:text-white text-sm leading-tight">{item.name}</h3>
 
         <div className="flex items-center space-x-2 text-xs text-gray-500 dark:text-gray-400">
-          <span>{item.available} Available</span>
+          <span>{isService ? "Service" : `${item.available} Available`}</span>
           <span>•</span>
           <span>{item.sold} Sold</span>
         </div>

@@ -142,6 +142,12 @@ export function useSalesInvoices(searchTerm: string = "", skipOpeningEntryFilter
           posProfile: invoice.pos_profile || "",
           custom_pos_opening_entry: invoice.custom_pos_opening_entry || "",
           canReturn: canReturn,
+          deliveryPersonnel: (invoice.custom_delivery_personnel as string) || null,
+          deliveryPersonnelName: (invoice.custom_delivery_personnel_name as string) || null,
+          deliveryVia: (invoice.custom_delivery_via as string) || null,
+          deliveryViaLabel: (invoice.delivery_via_label as string) || null,
+          deliveryReferenceNo: (invoice.custom_reference_no as string) || null,
+          deliveryChargeAmount: Number(invoice.delivery_charge_amount) || null,
         };
       });
 

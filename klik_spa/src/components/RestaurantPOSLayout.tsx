@@ -12,6 +12,7 @@ import LoadingSpinner from "./LoadingSpinner"
 import type { MenuItem, CartItem, GiftCoupon } from "../../types"
 import { useMediaQuery } from "../hooks/useMediaQuery"
 import { toast } from "react-toastify"
+import { isPosServiceItem } from "../utils/posServiceItem"
 
 export default function RetailPOSLayout() {
   // const { t } = useI18n()
@@ -32,7 +33,7 @@ export default function RetailPOSLayout() {
 
   const handleAddToCart = (item: MenuItem) => {
     // Don't add if item is not available
-    if (item.available <= 0) return
+    if (!isPosServiceItem(item) && item.available <= 0) return
 
     // If scanner-only mode is enabled, prevent adding items by clicking
     if (useScannerOnly) {
@@ -48,14 +49,14 @@ export default function RetailPOSLayout() {
     const existingItem = cartItems.find((cartItem) => cartItem.id === item.id)
 
     // Check if item has available quantity
-    if (item.available <= 0) {
+    if (!isPosServiceItem(item) && item.available <= 0) {
       toast.error(`${item.name} is out of stock`)
       return
     }
 
     if (existingItem) {
       // Check if adding one more would exceed available stock
-      if (existingItem.quantity >= item.available) {
+      if (!isPosServiceItem(item) && existingItem.quantity >= item.available) {
           toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`)
         return
       }

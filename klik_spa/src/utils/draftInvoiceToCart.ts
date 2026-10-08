@@ -1,7 +1,8 @@
 import { getDraftInvoiceItems } from '../services/salesInvoice';
 import { toast } from 'react-toastify';
 import { extractErrorFromException } from './errorExtraction';
-import { cacheDraftInvoiceItems, type DraftLineDiscount } from './draftInvoiceCache';
+import { cacheDraftInvoiceItems, type DraftLineDiscount, type HeldDeliveryDetails } from './draftInvoiceCache';
+import { clearPendingDelivery, deliveryAmountWithVat, setPendingDelivery } from './deliverySelection';
 import type { Customer } from '../../types';
 
 export interface InvoiceItem {
@@ -16,6 +17,8 @@ export interface InvoiceItem {
   custom_dispensing_lot?: string;
   dispensing_lot_serials?: string;
   uom?: string;
+  is_delivery_charge?: number | boolean;
+  item_tax_template?: string | null;
 }
 
 export interface CartItem {
@@ -31,6 +34,7 @@ export interface CartItem {
   serial_no?: string;
   dispensing_lot?: string;
   cartLineId?: string;
+  item_tax_template?: string | null;
 }
 
 export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean> {
@@ -43,8 +47,25 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
 
     const cartItems: CartItem[] = [];
     const lineDiscounts: Record<string, DraftLineDiscount> = {};
+    let deliveryChargeAmount = 0;
+    let deliveryDistanceKm: number | null = null;
 
     for (const item of invoiceData.items as InvoiceItem[]) {
+      const description = item.description || "";
+      const isDeliveryCharge =
+        Boolean(item.is_delivery_charge) ||
+        item.item_name === "Delivery Charge" ||
+        item.item_code === "Delivery Charge" ||
+        description.startsWith("Delivery Charge");
+      if (isDeliveryCharge) {
+        deliveryChargeAmount += Number(item.rate) || 0;
+        const distanceMatch = description.match(/Delivery Charge \(([0-9.]+) km\)/i);
+        if (distanceMatch) {
+          const parsed = Number(distanceMatch[1]);
+          if (Number.isFinite(parsed)) deliveryDistanceKm = parsed;
+        }
+        continue;
+      }
       const lineKey = `${item.item_code}::${cartItems.length}`;
       const serialForLot = item.dispensing_lot_serials || item.serial_no || "";
       const cartItem: CartItem = {
@@ -59,6 +80,7 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
         serial_no: serialForLot || undefined,
         dispensing_lot: item.custom_dispensing_lot || undefined,
         cartLineId: lineKey,
+        item_tax_template: item.item_tax_template || undefined,
       };
       cartItems.push(cartItem);
 
@@ -103,7 +125,37 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
       createdAt: new Date().toISOString(),
     } : null;
 
-    cacheDraftInvoiceItems(invoiceId, cartItems, customer, lineDiscounts);
+    const deliveryPersonnel = (invoiceData.custom_delivery_personnel as string) || null;
+    const deliveryVia = (invoiceData.custom_delivery_via as string) || null;
+    const referenceNo = (invoiceData.custom_reference_no as string) || null;
+    const delivery: HeldDeliveryDetails | null =
+      deliveryPersonnel || deliveryVia || referenceNo || deliveryChargeAmount > 0
+        ? {
+            deliveryPersonnel,
+            deliveryPersonnelName: (invoiceData.custom_delivery_personnel_name as string) || null,
+            deliveryVia,
+            referenceNo,
+            deliveryDistanceKm,
+            deliveryChargeAmount,
+            deliveryChargeWithVAT: deliveryAmountWithVat(deliveryChargeAmount),
+          }
+        : null;
+
+    if (delivery) {
+      setPendingDelivery({
+        deliveryPersonnel: delivery.deliveryPersonnel,
+        deliveryVia: delivery.deliveryVia,
+        referenceNo: delivery.referenceNo,
+        deliveryDistanceKm: delivery.deliveryDistanceKm,
+        deliveryChargeAmount: delivery.deliveryChargeAmount,
+        deliveryChargeWithVAT: delivery.deliveryChargeWithVAT,
+        deliveryRemarks: null,
+      });
+    } else {
+      clearPendingDelivery();
+    }
+
+    cacheDraftInvoiceItems(invoiceId, cartItems, customer, lineDiscounts, delivery);
 
     return true;
 

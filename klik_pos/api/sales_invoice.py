@@ -254,6 +254,15 @@ def _build_filters_and_fields(
 	if has_zatca_status:
 		fields.append("custom_zatca_submit_status")
 
+	for delivery_field in (
+		"custom_delivery_personnel",
+		"custom_delivery_personnel_name",
+		"custom_delivery_via",
+		"custom_reference_no",
+	):
+		if frappe.db.has_column("Sales Invoice", delivery_field):
+			fields.append(delivery_field)
+
 	if cashier_user_ids:
 		if len(cashier_user_ids) == 1:
 			filters["owner"] = cashier_user_ids[0]
@@ -386,6 +395,52 @@ def _process_invoices(invoices, cashier_names_map, payment_methods_map, items_ma
 				item["available_qty"] = item["qty"]
 
 		inv["items"] = items
+		for item in items:
+			if (item.get("item_code") or "") == "Delivery Charge":
+				inv["delivery_charge_amount"] = flt(item.get("rate") or 0)
+
+	_attach_delivery_labels(invoices)
+
+
+def _attach_delivery_labels(invoices):
+	"""Resolve delivery person and channel labels for the held-order list."""
+	personnel_ids = {
+		inv.get("custom_delivery_personnel")
+		for inv in invoices
+		if inv.get("custom_delivery_personnel") and not inv.get("custom_delivery_personnel_name")
+	}
+	personnel_names = {}
+	if personnel_ids and frappe.db.exists("DocType", "Delivery Personnel"):
+		personnel_fields = ["name"]
+		if frappe.db.has_column("Delivery Personnel", "delivery_personnel"):
+			personnel_fields.append("delivery_personnel")
+		for row in frappe.get_all(
+			"Delivery Personnel",
+			filters={"name": ["in", list(personnel_ids)]},
+			fields=personnel_fields,
+		):
+			personnel_names[row.name] = row.get("delivery_personnel") or row.name
+
+	channel_ids = {inv.get("custom_delivery_via") for inv in invoices if inv.get("custom_delivery_via")}
+	channel_labels = {}
+	if channel_ids and frappe.db.exists("DocType", "Delivery Channel"):
+		fields = ["name"]
+		if frappe.db.has_column("Delivery Channel", "delivery_via"):
+			fields.append("delivery_via")
+		for row in frappe.get_all(
+			"Delivery Channel",
+			filters={"name": ["in", list(channel_ids)]},
+			fields=fields,
+		):
+			channel_labels[row.name] = row.get("delivery_via") or row.name
+
+	for inv in invoices:
+		personnel_id = inv.get("custom_delivery_personnel")
+		if personnel_id and not inv.get("custom_delivery_personnel_name"):
+			inv["custom_delivery_personnel_name"] = personnel_names.get(personnel_id) or personnel_id
+		channel_id = inv.get("custom_delivery_via")
+		if channel_id:
+			inv["delivery_via_label"] = channel_labels.get(channel_id) or channel_id
 
 
 def _calculate_return_quantities(invoice, items):
@@ -571,6 +626,8 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 	"""
 	if has_dispensing_lot_col:
 		items_query += ", sii.custom_dispensing_lot"
+	if frappe.db.has_column("Sales Invoice Item", "item_tax_template"):
+		items_query += ", sii.item_tax_template"
 	items_query += """
 		FROM `tabSales Invoice Item` sii
 		WHERE sii.parent = %s
@@ -665,6 +722,15 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 		if has_dispensing_lot_col:
 			extra["custom_dispensing_lot"] = lot_text
 			extra["dispensing_lot_serials"] = _resolve_dispensing_lot_serials(lot_text)
+		item_name = (getattr(item_row, "item_name", None) or "").strip()
+		item_code = (getattr(item_row, "item_code", None) or "").strip()
+		description = (getattr(item_row, "description", None) or "").strip()
+		extra["is_delivery_charge"] = int(
+			item_name == "Delivery Charge"
+			or item_code == "Delivery Charge"
+			or description.startswith("Delivery Charge")
+		)
+		extra["item_tax_template"] = getattr(item_row, "item_tax_template", None)
 		return extra
 
 	items = []
@@ -1344,6 +1410,29 @@ def _invoice_preview_payload(doc):
 	}
 
 
+def _apply_delivery_header_fields(doc, delivery_personnel, delivery_via, reference_no):
+	"""Store delivery person, channel, and reference on the invoice, including holds.
+
+	Empty values clear a previous selection so an updated hold does not keep stale delivery.
+	"""
+	if frappe.db.has_column("Sales Invoice", "custom_delivery_personnel"):
+		doc.custom_delivery_personnel = delivery_personnel or None
+		if frappe.db.has_column("Sales Invoice", "custom_delivery_personnel_name"):
+			display_name = None
+			if delivery_personnel and frappe.db.exists("Delivery Personnel", delivery_personnel):
+				display_name = (
+					frappe.db.get_value("Delivery Personnel", delivery_personnel, "delivery_personnel")
+					or delivery_personnel
+				)
+			doc.custom_delivery_personnel_name = display_name
+
+	if frappe.db.has_column("Sales Invoice", "custom_delivery_via"):
+		doc.custom_delivery_via = delivery_via or None
+
+	if frappe.db.has_column("Sales Invoice", "custom_reference_no"):
+		doc.custom_reference_no = reference_no or None
+
+
 def build_sales_invoice_doc(
 	customer,
 	items,
@@ -1385,14 +1474,7 @@ def build_sales_invoice_doc(
 	doc.ignore_pricing_rule = 1
 
 	_set_accounting_dimensions(doc)
-	if delivery_personnel:
-		doc.custom_delivery_personnel = delivery_personnel
-
-	if delivery_via and frappe.db.has_column("Sales Invoice", "custom_delivery_via"):
-		doc.custom_delivery_via = delivery_via
-	# Set reference no if provided and field exists
-	if reference_no and frappe.db.has_column("Sales Invoice", "custom_reference_no"):
-		doc.custom_reference_no = reference_no
+	_apply_delivery_header_fields(doc, delivery_personnel, delivery_via, reference_no)
 	# Insurance: link and amount to be covered (patient may pay their portion now; insurance pays later when is_credit)
 	if health_insurance and frappe.db.has_column("Sales Invoice", "custom_health_insurance"):
 		doc.custom_health_insurance = health_insurance
@@ -2121,6 +2203,36 @@ def _append_additional_charge_items(doc, items, general_additional_amount, pos_p
 		)
 
 
+def _delivery_charge_item_tax_template(doc, pos_profile, item_code):
+	"""Tax template for the delivery fee line.
+
+	The Delivery Charge item has no template of its own. Use the template already
+	on the medicines in this invoice so the posted VAT includes the delivery fee,
+	matching the 10% added on the payment screen. Held invoices go through this
+	same path when they are submitted.
+	"""
+	if not pos_profile or not getattr(pos_profile, "custom_allow_item_tax_template", 0):
+		return None
+
+	for row in doc.get("items") or []:
+		template = getattr(row, "item_tax_template", None)
+		if template:
+			return template
+
+	try:
+		from klik_pos.api import tax as tax_api
+
+		res = tax_api.get_item_tax_template_for_item(item_code, doc.company)
+		if res and res.get("item_tax_template"):
+			return res["item_tax_template"]
+	except Exception:
+		frappe.log_error(
+			frappe.get_traceback(),
+			"Failed to resolve item tax template for Delivery Charge item",
+		)
+	return None
+
+
 def _append_delivery_charge_item(doc, delivery_charge_amount, pos_profile, delivery_distance_km=0.0):
 	"""Append Delivery Charge as a dedicated item row, if any amount was provided."""
 
@@ -2146,18 +2258,7 @@ def _append_delivery_charge_item(doc, delivery_charge_amount, pos_profile, deliv
 	if delivery_distance_km:
 		description = f"Delivery Charge ({flt(delivery_distance_km)} km)"
 
-	item_tax_template = None
-	if getattr(pos_profile, "custom_allow_item_tax_template", 0):
-		try:
-			from klik_pos.api import tax as tax_api
-			res = tax_api.get_item_tax_template_for_item(item_code, doc.company)
-			if res and res.get("item_tax_template"):
-				item_tax_template = res["item_tax_template"]
-		except Exception:
-			frappe.log_error(
-				frappe.get_traceback(),
-				"Failed to resolve item tax template for Delivery Charge item",
-			)
+	item_tax_template = _delivery_charge_item_tax_template(doc, pos_profile, item_code)
 
 	doc.append(
 		"items",

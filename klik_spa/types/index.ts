@@ -41,6 +41,8 @@ export interface CartItem {
   /** Dispensing Lot docname (when POS profile uses dispense-lot mode). */
   dispensing_lot?: string
   stock_uom?: string
+  /** Non-stock item marked Allow POS Sale. No stock check. */
+  is_pos_service?: boolean | number | string
   /** Pharmacy service line (non-stock); added via hospital pharmacy Add Service. */
   is_pharmacy_service?: boolean
   /** Cart line this service was added for (hospital pharmacy). */
@@ -78,6 +80,8 @@ export interface MenuItem {
   has_serial_no?: number | boolean
   has_batch_no?: number | boolean
   stock_uom?: string
+  /** Non-stock item marked Allow POS Sale. Shown and sold without a stock quantity. */
+  is_pos_service?: boolean | number | string
 }
 
 export interface Category {
@@ -191,6 +195,12 @@ export interface SalesInvoice {
   customReferenceType?: string;
   customReferenceName?: string;
   visitType?: "OP" | "IP";
+  deliveryPersonnel?: string | null;
+  deliveryPersonnelName?: string | null;
+  deliveryVia?: string | null;
+  deliveryViaLabel?: string | null;
+  deliveryReferenceNo?: string | null;
+  deliveryChargeAmount?: number | null;
   invoice:[];
   cashier_name:string;
   customer_email:string;

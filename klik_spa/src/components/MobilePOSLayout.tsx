@@ -15,6 +15,7 @@ import type { MenuItem, CartItem } from "../../types"
 import { getItemPriceForCustomer } from "../services/dynamicPricing"
 import { findLastCartLineForItem, getCartLineUpdateId } from "../utils/duplicateCartItems"
 import { resolveHospitalCartUomDetails, resolveCartUomDetails } from "../utils/hospitalCartUom"
+import { isPosServiceItem } from "../utils/posServiceItem"
 
 interface MobilePOSLayoutProps {
   items: MenuItem[]
@@ -126,7 +127,7 @@ export default function MobilePOSLayout({
       : ""
 
   const handleAddToCart = async (item: MenuItem) => {
-    if (!item || item.available <= 0) return
+    if (!item || (!isPosServiceItem(item) && item.available <= 0)) return
 
     const existingItem = findLastCartLineForItem(cartItems, item.id)
     if (existingItem) {
@@ -162,6 +163,7 @@ export default function MobilePOSLayout({
       item_tax_template: (item as { item_tax_template?: string }).item_tax_template,
       has_serial_no: item.has_serial_no,
       has_batch_no: item.has_batch_no,
+      is_pos_service: isPosServiceItem(item) ? 1 : 0,
     })
   }
 

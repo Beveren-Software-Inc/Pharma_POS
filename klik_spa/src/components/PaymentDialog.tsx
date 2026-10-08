@@ -45,7 +45,8 @@ import {
 import DisplayPrintPreview from "../utils/invoicePrint";
 import { handlePrintInvoice } from "../utils/printHandler";
 import { sendEmails, sendWhatsAppMessage, sendSMSMessage } from "../services/useSharing";
-import { clearDraftInvoiceCache, getOriginalDraftInvoiceId } from "../utils/draftInvoiceCache";
+import { clearCachedDraftDelivery, clearDraftInvoiceCache, getCachedDraftDelivery, getOriginalDraftInvoiceId } from "../utils/draftInvoiceCache";
+import { clearPendingDelivery, deliveryAmountWithVat, getPendingDelivery, setPendingDelivery } from "../utils/deliverySelection";
 // import { deleteDraftInvoice } from "../services/salesInvoice";
 import {
   fetchWhatsAppTemplates,
@@ -171,8 +172,15 @@ export default function PaymentDialog({
   const [roundOffInput, setRoundOffInput] = useState(roundOffAmount.toFixed(3));
   const [isAutoPrinting, setIsAutoPrinting] = useState(false);
   const [insuranceCoveragePercent, setInsuranceCoveragePercent] = useState<number>(0);
-  const [deliveryChargeWithVAT, setDeliveryChargeWithVAT] = useState<number | null>(null);
-  const [deliveryRemarks, setDeliveryRemarks] = useState<string | null>(null);
+  const [deliveryChargeWithVAT, setDeliveryChargeWithVAT] = useState<number | null>(() => {
+    const held = getPendingDelivery() ?? getCachedDraftDelivery();
+    if (!held) return null;
+    if (held.deliveryChargeWithVAT) return held.deliveryChargeWithVAT;
+    return deliveryAmountWithVat(held.deliveryChargeAmount);
+  });
+  const [deliveryRemarks, setDeliveryRemarks] = useState<string | null>(
+    () => getPendingDelivery()?.deliveryRemarks ?? null
+  );
 
   const [sharingMode, setSharingMode] = useState<string | null>(
     initialSharingMode
@@ -205,14 +213,86 @@ export default function PaymentDialog({
 
   // Delivery personnel states (optional, user-controlled via footer field)
   const [showDeliveryPersonnelModal, setShowDeliveryPersonnelModal] = useState(false);
-  const [selectedDeliveryPersonnel, setSelectedDeliveryPersonnel] = useState<string | null>(null);
-  const [selectedDeliveryVia, setSelectedDeliveryVia] = useState<string | null>(null);
-  const [selectedReferenceNo, setSelectedReferenceNo] = useState<string | null>(null);
-  const [deliveryDistanceKm, setDeliveryDistanceKm] = useState<number | null>(null);
-  const [deliveryChargeAmount, setDeliveryChargeAmount] = useState<number | null>(null);
+  const [selectedDeliveryPersonnel, setSelectedDeliveryPersonnel] = useState<string | null>(() => {
+    const held = getPendingDelivery() ?? getCachedDraftDelivery();
+    return held?.deliveryPersonnel || null;
+  });
+  const [selectedDeliveryVia, setSelectedDeliveryVia] = useState<string | null>(() => {
+    const held = getPendingDelivery() ?? getCachedDraftDelivery();
+    return held?.deliveryVia || null;
+  });
+  const [selectedReferenceNo, setSelectedReferenceNo] = useState<string | null>(() => {
+    const held = getPendingDelivery() ?? getCachedDraftDelivery();
+    return held?.referenceNo || null;
+  });
+  const [deliveryDistanceKm, setDeliveryDistanceKm] = useState<number | null>(() => {
+    const held = getPendingDelivery() ?? getCachedDraftDelivery();
+    return held?.deliveryDistanceKm ?? null;
+  });
+  const [deliveryChargeAmount, setDeliveryChargeAmount] = useState<number | null>(() => {
+    const held = getPendingDelivery() ?? getCachedDraftDelivery();
+    return held?.deliveryChargeAmount ? held.deliveryChargeAmount : null;
+  });
   const [deliveryChargeTaxAmount, setDeliveryChargeTaxAmount] = useState<number | null>(null);
   // When true, this is a company delivery via channel only (pay later, no POS payment now)
-  const [isCompanyDelivery, setIsCompanyDelivery] = useState(false);
+  const [isCompanyDelivery, setIsCompanyDelivery] = useState(() => {
+    const held = getPendingDelivery() ?? getCachedDraftDelivery();
+    return Boolean(held?.deliveryVia && !held?.deliveryPersonnel);
+  });
+  const [heldPersonnelLabel] = useState<{ id: string | null; name: string | null }>(() => {
+    const cached = getCachedDraftDelivery();
+    return {
+      id: cached?.deliveryPersonnel || null,
+      name: cached?.deliveryPersonnelName || null,
+    };
+  });
+
+  useEffect(() => {
+    setPendingDelivery({
+      deliveryPersonnel: selectedDeliveryPersonnel,
+      deliveryVia: selectedDeliveryVia,
+      referenceNo: selectedReferenceNo,
+      deliveryDistanceKm,
+      deliveryChargeAmount: deliveryChargeAmount || 0,
+      deliveryChargeWithVAT,
+      deliveryRemarks,
+    });
+  }, [
+    selectedDeliveryPersonnel,
+    selectedDeliveryVia,
+    selectedReferenceNo,
+    deliveryDistanceKm,
+    deliveryChargeAmount,
+    deliveryChargeWithVAT,
+    deliveryRemarks,
+  ]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const cached = getCachedDraftDelivery();
+    const pending = getPendingDelivery();
+    const personnel = pending?.deliveryPersonnel || cached?.deliveryPersonnel || null;
+    const via = pending?.deliveryVia || cached?.deliveryVia || null;
+    const reference = pending?.referenceNo || cached?.referenceNo || null;
+    const distance = pending?.deliveryDistanceKm ?? cached?.deliveryDistanceKm ?? null;
+    const charge = pending?.deliveryChargeAmount || cached?.deliveryChargeAmount || 0;
+    const withVat =
+      pending?.deliveryChargeWithVAT ||
+      cached?.deliveryChargeWithVAT ||
+      deliveryAmountWithVat(charge);
+    if (!personnel && !via && !reference && !charge) return;
+    if (personnel) {
+      setSelectedDeliveryPersonnel((current) => current || personnel);
+      setIsCompanyDelivery(false);
+    } else if (via) {
+      setIsCompanyDelivery(true);
+    }
+    if (via) setSelectedDeliveryVia((current) => current || via);
+    if (reference) setSelectedReferenceNo((current) => current || reference);
+    if (distance != null) setDeliveryDistanceKm((current) => (current == null ? distance : current));
+    if (charge) setDeliveryChargeAmount((current) => current || charge);
+    if (withVat) setDeliveryChargeWithVAT((current) => current || withVat);
+  }, [isOpen]);
   const [deliveryDraftInvoiceId, setDeliveryDraftInvoiceId] = useState<string | null>(null);
   const [deliveryDraftInvoice, setDeliveryDraftInvoice] = useState<{ name: string; pos_profile?: string } | null>(null);
   const [isSyncingDeliveryDraft, setIsSyncingDeliveryDraft] = useState(false);
@@ -1816,10 +1896,27 @@ const handleAutoFillPayment = (methodId: string) => {
 };
   // Get display name for selected delivery personnel
   const getSelectedDeliveryPersonnelName = () => {
-    if (!selectedDeliveryPersonnel) return null;
-    const person = deliveryPersonnelList.find((p) => p.name === selectedDeliveryPersonnel);
-    return person?.delivery_personnel || selectedDeliveryPersonnel;
+    const person = selectedDeliveryPersonnel
+      ? deliveryPersonnelList.find((p) => p.name === selectedDeliveryPersonnel)
+      : null;
+    const personLabel = selectedDeliveryPersonnel
+      ? person?.delivery_personnel ||
+        (heldPersonnelLabel.id === selectedDeliveryPersonnel ? heldPersonnelLabel.name : null) ||
+        selectedDeliveryPersonnel
+      : null;
+    const channel = selectedDeliveryVia
+      ? deliveryChannels.find((c) => c.name === selectedDeliveryVia)
+      : null;
+    const channelLabel = selectedDeliveryVia
+      ? channel?.delivery_via || selectedDeliveryVia
+      : null;
+    const parts = [personLabel, channelLabel].filter(Boolean);
+    return parts.length ? parts.join(" · ") : null;
   };
+
+  const hasDeliverySelection = Boolean(
+    selectedDeliveryPersonnel || selectedDeliveryVia || deliveryChargeAmount || deliveryRemarks
+  );
 
   const clearDeliverySelection = async () => {
     if (invoiceSubmitted || isProcessingPayment) return;
@@ -1840,6 +1937,10 @@ const handleAutoFillPayment = (methodId: string) => {
     setDeliveryChargeAmount(null);
     setDeliveryChargeTaxAmount(null);
     setDeliveryChargeWithVAT(null);
+    setDeliveryRemarks(null);
+    setIsCompanyDelivery(false);
+    clearPendingDelivery();
+    clearCachedDraftDelivery();
   };
 
   const handleInsuranceSelect = (insurance: HealthInsuranceOption | null) => {
@@ -2166,7 +2267,7 @@ const handleAutoFillPayment = (methodId: string) => {
                         </span>
                         <ChevronDown size={16} className="text-gray-400 flex-shrink-0 ml-2" />
                       </button>
-                      {(selectedDeliveryPersonnel || deliveryChargeAmount) && (
+                      {hasDeliverySelection && (
                         <button
                           type="button"
                           onClick={clearDeliverySelection}
@@ -3647,7 +3748,7 @@ const handleAutoFillPayment = (methodId: string) => {
                         className="text-gray-400 dark:text-gray-500 flex-shrink-0 ml-2"
                       />
                     </button>
-                    {(selectedDeliveryPersonnel || deliveryChargeAmount) && (
+                    {hasDeliverySelection && (
                       <button
                         type="button"
                         onClick={clearDeliverySelection}
@@ -3713,7 +3814,7 @@ const handleAutoFillPayment = (methodId: string) => {
                         className="text-gray-400 dark:text-gray-500 flex-shrink-0 ml-2"
                       />
                     </button>
-                    {(selectedDeliveryPersonnel || deliveryChargeAmount) && (
+                    {hasDeliverySelection && (
                       <button
                         type="button"
                         onClick={clearDeliverySelection}
