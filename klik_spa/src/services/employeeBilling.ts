@@ -1,4 +1,5 @@
 import { extractErrorMessage } from "../utils/errorExtraction";
+import { getCSRFToken } from "../utils/csrf";
 
 export interface EmployeeOption {
   name: string;
@@ -39,12 +40,12 @@ export async function createEmployeeDispenseInvoice(payload: {
   sales_invoice_name?: string;
   invoice_created?: boolean;
 }> {
-  const csrfToken = window.csrf_token;
+  const csrfToken = getCSRFToken();
   const response = await fetch('/api/method/klik_pos.api.employee_billing.create_employee_dispense_invoice', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Frappe-CSRF-Token': csrfToken,
+      ...(csrfToken ? { 'X-Frappe-CSRF-Token': csrfToken } : {}),
     },
     body: JSON.stringify({ data: payload }),
     credentials: 'include',
