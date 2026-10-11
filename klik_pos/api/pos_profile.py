@@ -219,6 +219,81 @@ def get_pos_details():
 	return details
 
 
+@frappe.whitelist()
+def clear_phantom_stock(pos_profile):
+	"""Set this POS Profile warehouse's Bin quantity back to the stock ledger.
+
+	A deleted opening-stock reconciliation can leave Bin.actual_qty behind after the
+	ledger rows are gone. The POS reads Bin, so those items still look in stock.
+	"""
+	frappe.only_for(("System Manager", "Stock Manager"))
+
+	if not pos_profile or not frappe.db.exists("POS Profile", pos_profile):
+		frappe.throw(_("POS Profile {0} was not found").format(pos_profile))
+
+	warehouse = frappe.db.get_value("POS Profile", pos_profile, "warehouse")
+	if not warehouse:
+		frappe.throw(_("Set a warehouse on POS Profile {0} first").format(pos_profile))
+
+	mismatches = _bins_out_of_sync_with_ledger(warehouse)
+	cleared = []
+	for row in mismatches:
+		bin_doc = frappe.get_doc("Bin", row.name)
+		bin_doc.flags.ignore_permissions = True
+		bin_doc.recalculate_values()
+		cleared.append(row.item_code)
+
+	if not cleared:
+		return {
+			"cleared": 0,
+			"warehouse": warehouse,
+			"message": _("No phantom stock in {0}. Bin quantities already match the stock ledger.").format(
+				warehouse
+			),
+		}
+
+	preview = ", ".join(cleared[:20])
+	if len(cleared) > 20:
+		preview = _("{0} and {1} more").format(preview, len(cleared) - 20)
+
+	return {
+		"cleared": len(cleared),
+		"warehouse": warehouse,
+		"items": cleared,
+		"message": _(
+			"Cleared {0} item(s) in {1}. Their POS quantity now matches the stock ledger: {2}"
+		).format(len(cleared), warehouse, preview),
+	}
+
+
+def _bins_out_of_sync_with_ledger(warehouse):
+	"""Bins whose quantity is not the latest stock ledger balance for this warehouse."""
+	return frappe.db.sql(
+		"""
+		SELECT b.name, b.item_code, b.actual_qty,
+			IFNULL(s.qty_after_transaction, 0) AS ledger_qty
+		FROM `tabBin` b
+		LEFT JOIN (
+			SELECT item_code, qty_after_transaction
+			FROM (
+				SELECT item_code, qty_after_transaction,
+					ROW_NUMBER() OVER (
+						PARTITION BY item_code
+						ORDER BY posting_datetime DESC, creation DESC
+					) AS rn
+				FROM `tabStock Ledger Entry`
+				WHERE warehouse = %s AND is_cancelled = 0
+			) latest
+			WHERE rn = 1
+		) s ON s.item_code = b.item_code
+		WHERE b.warehouse = %s
+			AND ABS(b.actual_qty - IFNULL(s.qty_after_transaction, 0)) > 0.001
+		""",
+		(warehouse, warehouse),
+		as_dict=True,
+	)
+
+
 def is_zatca_enabled():
 	pos_profile = get_current_pos_profile()
 	company = pos_profile.company
