@@ -189,6 +189,7 @@ before_migrate = ["klik_pos.setup.pos_opening_entry_links.ensure_pos_opening_ent
 doctype_js = {"Sales Invoice": "public/js/sales_invoice.js"}
 # Add a button to Company to create random customers (client-side will call the whitelisted method)
 doctype_js.update({"Company": "public/js/company.js"})
+doctype_js.update({"POS Profile": "public/js/pos_profile.js"})
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
