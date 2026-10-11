@@ -2591,6 +2591,78 @@ def validate_return_restrictions(invoice_doc):
 	return True, None
 
 
+def _submitted_return_qty(invoice_name):
+	"""Quantity already returned against an invoice, by item and by original row.
+
+	Older POS returns were saved without Sales Invoice Item.sales_invoice_item, so
+	ERPNext's own over-return check does not see them. The item total still does.
+	"""
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			sii.item_code AS item_code,
+			sii.sales_invoice_item AS sales_invoice_item,
+			COALESCE(SUM(ABS(sii.qty)), 0) AS qty
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+		WHERE si.return_against = %s
+		  AND si.is_return = 1
+		  AND si.docstatus = 1
+		GROUP BY sii.item_code, sii.sales_invoice_item
+		""",
+		invoice_name,
+		as_dict=True,
+	)
+	by_item = {}
+	by_row = {}
+	for row in rows:
+		by_item[row.item_code] = flt(by_item.get(row.item_code)) + flt(row.qty)
+		if row.sales_invoice_item:
+			by_row[row.sales_invoice_item] = flt(by_row.get(row.sales_invoice_item)) + flt(row.qty)
+	return by_item, by_row
+
+
+def _reject_if_return_qty_exceeds_remaining(original_invoice, requested):
+	"""Stop a return once the sold quantity is already returned.
+
+	`requested` is a list of {item_code, qty, sales_invoice_item}. qty is positive.
+	"""
+	by_item, by_row = _submitted_return_qty(original_invoice.name)
+	sold_by_item = {}
+	sold_by_row = {}
+	for row in original_invoice.items:
+		sold_by_item[row.item_code] = flt(sold_by_item.get(row.item_code)) + abs(flt(row.qty))
+		sold_by_row[row.name] = abs(flt(row.qty))
+
+	errors = []
+	for line in requested:
+		item_code = line.get("item_code")
+		qty = abs(flt(line.get("qty")))
+		if not item_code or qty <= 0:
+			continue
+
+		item_remaining = flt(sold_by_item.get(item_code)) - flt(by_item.get(item_code))
+		row_name = line.get("sales_invoice_item")
+		if row_name and row_name in sold_by_row:
+			row_remaining = flt(sold_by_row[row_name]) - flt(by_row.get(row_name))
+			remaining = min(row_remaining, item_remaining)
+		else:
+			remaining = item_remaining
+
+		if qty - remaining > 0.0001:
+			if item_remaining <= 0.0001:
+				errors.append(_("{0} is already fully returned on {1}.").format(item_code, original_invoice.name))
+			else:
+				errors.append(
+					_("Cannot return {0} of {1}. Only {2} is still available on {3}.").format(
+						flt(qty), item_code, flt(remaining), original_invoice.name
+					)
+				)
+
+	if errors:
+		frappe.throw(" ".join(errors))
+
+
 def finalize_paid_amount(doc, method=None):
 	"""
 	Hook called on Sales Invoice on_submit.
@@ -2659,6 +2731,7 @@ def ensure_negative_payments_for_pos_return(doc, method):
 
 @frappe.whitelist()
 def return_sales_invoice(invoice_name):
+	frappe.db.savepoint("pos_return")
 	try:
 		original_invoice = frappe.get_doc("Sales Invoice", invoice_name)
 
@@ -2673,6 +2746,15 @@ def return_sales_invoice(invoice_name):
 		if not can_return:
 			frappe.throw(error_message)
 
+		_reject_if_return_qty_exceeds_remaining(
+			original_invoice,
+			[
+				{"item_code": row.item_code, "qty": abs(flt(row.qty)), "sales_invoice_item": row.name}
+				for row in original_invoice.items
+				if flt(row.qty)
+			],
+		)
+
 		# Exclude payment mapping
 		return_doc = get_mapped_doc(
 			"Sales Invoice",
@@ -2685,7 +2767,7 @@ def return_sales_invoice(invoice_name):
 				},
 				"Sales Invoice Item": {
 					"doctype": "Sales Invoice Item",
-					"field_map": {"name": "prevdoc_detail_docname"},
+					"field_map": {"name": "sales_invoice_item"},
 				},
 			},
 		)
@@ -2765,6 +2847,7 @@ def return_sales_invoice(invoice_name):
 		return {"success": True, "return_invoice": return_doc.name}
 
 	except Exception as e:
+		frappe.db.rollback(save_point="pos_return")
 		frappe.log_error(frappe.get_traceback(), "Return Invoice Error")
 		return {"success": False, "message": str(e)}
 
@@ -3838,6 +3921,7 @@ def create_partial_return(
 ):
 	"""Create a partial return for selected items from an invoice with custom payment method"""
 
+	frappe.db.savepoint("pos_partial_return")
 	try:
 		if isinstance(return_items, str):
 			return_items = json.loads(return_items)
@@ -3949,7 +4033,7 @@ def create_partial_return(
 				},
 				"Sales Invoice Item": {
 					"doctype": "Sales Invoice Item",
-					"field_map": {"name": "prevdoc_detail_docname"},
+					"field_map": {"name": "sales_invoice_item"},
 				},
 			},
 		)
@@ -3973,17 +4057,46 @@ def create_partial_return(
 		return_doc.custom_base_roundoff_amount = 0
 		return_doc.custom_roundoff_account = get_writeoff_account()
 
-		# Filter items to only include selected ones with return quantities
+		# Filter items to only include selected ones with return quantities.
+		# Match the original row when the screen sends it, so two lines of the same
+		# item (paid and free) are not both taken from the first row.
 		filtered_items = []
+		used_rows = set()
 		for return_item in return_items:
-			if return_item.get("return_qty", 0) > 0:
-				for item in return_doc.items:
-					if item.item_code == return_item["item_code"]:
-						item.qty = -abs(return_item["return_qty"])
-						filtered_items.append(item)
-						break
+			if flt(return_item.get("return_qty") or 0) <= 0:
+				continue
+			row_name = return_item.get("prevdoc_detail_docname") or return_item.get("sales_invoice_item")
+			matched = None
+			for item in return_doc.items:
+				if id(item) in used_rows:
+					continue
+				if row_name and item.sales_invoice_item == row_name:
+					matched = item
+					break
+				if not row_name and item.item_code == return_item.get("item_code"):
+					matched = item
+					break
+			if not matched:
+				continue
+			if row_name:
+				matched.sales_invoice_item = row_name
+			matched.qty = -abs(flt(return_item["return_qty"]))
+			used_rows.add(id(matched))
+			filtered_items.append(matched)
 
 		return_doc.items = filtered_items
+
+		_reject_if_return_qty_exceeds_remaining(
+			original_invoice,
+			[
+				{
+					"item_code": item.item_code,
+					"qty": abs(flt(item.qty)),
+					"sales_invoice_item": item.sales_invoice_item,
+				}
+				for item in filtered_items
+			],
+		)
 
 		# No custom roundoff mirroring for now
 
@@ -4077,6 +4190,7 @@ def create_partial_return(
 		}
 
 	except Exception as e:
+		frappe.db.rollback(save_point="pos_partial_return")
 		frappe.log_error(frappe.get_traceback(), "Partial Return Error")
 		return {"success": False, "message": str(e)}
 
