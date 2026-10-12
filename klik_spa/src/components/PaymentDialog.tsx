@@ -157,6 +157,7 @@ export default function PaymentDialog({
   const [selectedSalesTaxCharges, setSelectedSalesTaxCharges] = useState("");
   const [paymentAmounts, setPaymentAmounts] = useState<PaymentAmount>({});
   const [paymentInputValues, setPaymentInputValues] = useState<Record<string, string>>({});
+  const paymentManuallyEditedRef = useRef(false);
   const [editingPaymentMethodId, setEditingPaymentMethodId] = useState<string | null>(null);
   const [activeMethodId, setActiveMethodId] = useState<string | null>(null);
   // Track which payment method was last modified for round-off targeting
@@ -725,22 +726,26 @@ export default function PaymentDialog({
   }, [isOpen, defaultTax, selectedSalesTaxCharges]);
 
   useEffect(() => {
+  if (!isOpen) {
+    paymentManuallyEditedRef.current = false;
+  }
+}, [isOpen]);
+
+  useEffect(() => {
   if (!isOpen || modes.length === 0 || isCompanyDelivery) return;
   if (editingPaymentMethodId) return;
+  if (paymentManuallyEditedRef.current) return;
  
   const defaultMode = modes.find((mode) => mode.default === 1);
   if (!defaultMode) return;
  
-  // Check current payment state
+  // Fill the default method with the calculated total until the cashier types their own amount.
   const hasAnyPayment = Object.keys(paymentAmounts).length > 0;
   const hasOnlyDefaultPayment = 
     hasAnyPayment && 
     Object.keys(paymentAmounts).length === 1 && 
-    paymentAmounts[defaultMode.mode_of_payment];
+    paymentAmounts[defaultMode.mode_of_payment] != null;
  
-  // Auto-fill ONLY if:
-  // 1. No payments yet (first load), OR
-  // 2. Only default method is populated (likely auto-filled, not manually edited)
   if (!hasAnyPayment || hasOnlyDefaultPayment) {
     const newAmount = parseFloat(effectiveGrandTotal.toFixed(3));
     setPaymentAmounts({ [defaultMode.mode_of_payment]: newAmount });
@@ -759,37 +764,6 @@ export default function PaymentDialog({
   //     }
   //   }
   // }, [isOpen, modes, effectiveGrandTotal, isB2B, isB2C, isCompanyDelivery]);
-
-  useEffect(() => {
-    if (editingPaymentMethodId) return;
-
-    if (modes.length > 0 && Object.keys(paymentAmounts).length > 0) {
-      const defaultMode = modes.find((mode) => mode.default === 1);
-      if (defaultMode) {
-        // Calculate total of all payment methods
-        const totalPayments = Object.values(paymentAmounts).reduce((sum, amount) => sum + (amount || 0), 0);
-        const excess = totalPayments - effectiveGrandTotal;
-
-        // Find the payment method with the highest amount
-        const paymentEntries = Object.entries(paymentAmounts);
-        const highestAmountMethod = paymentEntries.reduce((max, current) =>
-          (current[1] || 0) > (max[1] || 0) ? current : max
-        );
-        const [highestMethodId, highestAmount] = highestAmountMethod;
-
-
-
-        if (highestAmount > 0 && excess > 0) {
-          // Subtract excess from the method with highest amount
-          const newAmount = Math.max(0, highestAmount - excess);
-          setPaymentAmounts((prev) => ({
-            ...prev,
-            [highestMethodId]: newAmount,
-          }));
-        }
-      }
-    }
-  }, [effectiveGrandTotal, modes, isB2C, isB2B, isCombined, paymentAmounts, editingPaymentMethodId]);
 
   // Auto-print when invoice is submitted and auto-print is enabled
   useEffect(() => {
@@ -904,6 +878,7 @@ export default function PaymentDialog({
     if (!selectedDeliveryPersonnel) return;
     if (modes.length === 0) return;
     if (editingPaymentMethodId) return;
+    if (paymentManuallyEditedRef.current) return;
 
     const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
     if (!defaultMode) return;
@@ -925,6 +900,7 @@ export default function PaymentDialog({
     if (!selectedDeliveryPersonnel || isCompanyDelivery) return;
     if (!isOpen || modes.length === 0) return;
     if (editingPaymentMethodId) return;
+    if (paymentManuallyEditedRef.current) return;
 
     const hasAnyPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
     if (hasAnyPayment) return;
@@ -991,27 +967,8 @@ export default function PaymentDialog({
       ? deliveryOverrides.deliveryRemarks
       : deliveryRemarks;
 
-    const netAmountToSend = isB2B ? totalPaidAmount : effectiveGrandTotal;
-    const adjustedPaymentMethods = isB2B
-      ? Object.entries(paymentAmounts).filter(([, amount]) => amount > 0)
-      : (() => {
-          const validPayments = Object.entries(paymentAmounts).filter(([, amount]) => amount > 0);
-          if (validPayments.length === 0) return [];
-          const totalPaymentAmount = validPayments.reduce((sum, [, amount]) => sum + amount, 0);
-          if (totalPaymentAmount > effectiveGrandTotal) {
-            const excess = totalPaymentAmount - effectiveGrandTotal;
-            const lastPaymentIndex = validPayments.length - 1;
-            const lastPayment = validPayments[lastPaymentIndex];
-            if (!lastPayment) return [];
-            const adjustedLastAmount = parseFloat(
-              Math.max(0, lastPayment[1] - excess).toFixed(3)
-            );
-            return validPayments.map(([method, amount], index) =>
-              index === lastPaymentIndex ? [method, adjustedLastAmount] : [method, amount]
-            );
-          }
-          return validPayments;
-        })();
+    const netAmountToSend = totalPaidAmount;
+    const adjustedPaymentMethods = Object.entries(paymentAmounts).filter(([, amount]) => amount > 0);
 
     return {
       items: cartItems.map((item) => {
@@ -1358,6 +1315,7 @@ export default function PaymentDialog({
   const handlePaymentAmountChange = (methodId: string, amount: string) => {
     if (invoiceSubmitted || isProcessingPayment) return;
 
+    paymentManuallyEditedRef.current = true;
     setPaymentInputValues((prev) => ({ ...prev, [methodId]: amount }));
     const numericAmount =
       amount.trim() === "" ? 0 : roundCurrency(parseFloat(amount) || 0);
@@ -1392,6 +1350,7 @@ export default function PaymentDialog({
   // Auto-fill payment method with grand total and clear others
 const handleAutoFillPayment = (methodId: string) => {
   if (invoiceSubmitted || isProcessingPayment) return;
+  paymentManuallyEditedRef.current = false;
 
   // If insurance is selected, the amount to fill should be the patient's portion only
   // not the full grand total
