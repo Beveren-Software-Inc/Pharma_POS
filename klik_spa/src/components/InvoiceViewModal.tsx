@@ -17,6 +17,7 @@ import { createSalesReturn } from "../services/salesInvoice";
 import { toast } from "react-toastify";
 import { usePOSDetails } from "../hooks/usePOSProfile";
 import { getPartyLabels } from "../utils/partyLabels";
+import { formatDispensingLots } from "../utils/dispensingLot";
 
 interface InvoiceViewModalProps {
   invoice: SalesInvoice | null;
@@ -205,6 +206,16 @@ export default function InvoiceViewModal({
                                 <div className="font-medium text-gray-900 dark:text-white">
                                   {item.item_name}
                                 </div>
+                                {item.batch_no ? (
+                                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                                    Batch: {item.batch_no}
+                                  </div>
+                                ) : null}
+                                {formatDispensingLots(item.custom_dispensing_lot || item.dispensing_lot_serials) ? (
+                                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                                    Dispensing lot: {formatDispensingLots(item.custom_dispensing_lot || item.dispensing_lot_serials)}
+                                  </div>
+                                ) : null}
                                 <div className="text-xs text-gray-500 dark:text-gray-400 capitalize">
                                   {item.category}
                                 </div>

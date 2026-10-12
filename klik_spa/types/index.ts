@@ -146,6 +146,8 @@ export interface SalesInvoiceItem {
   so_detail?: string
   dn_detail?: string
   batch_no?: string
+  custom_dispensing_lot?: string
+  dispensing_lot_serials?: string
   uom?: string
   return_status?: "none" | "partial" | "full"
   item_group?: string

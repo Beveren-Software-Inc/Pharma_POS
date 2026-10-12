@@ -98,6 +98,20 @@ export function formatDispensingLotLabel(
   return uom ? `${qty} ${uom} | ${serial}` : serial;
 }
 
+/** Lots stored on an invoice line, shown as a single readable list. */
+export function formatDispensingLots(value?: string | null): string {
+  if (!value) return "";
+  const seen = new Set<string>();
+  const lots: string[] = [];
+  for (const part of value.split(/[\n,]+/)) {
+    const lot = part.trim();
+    if (!lot || seen.has(lot)) continue;
+    seen.add(lot);
+    lots.push(lot);
+  }
+  return lots.join(", ");
+}
+
 /** Join lot docnames for Sales Invoice Item.custom_dispensing_lot (newline-separated, like serial_no). */
 export function joinDispensingLotNames(lotNames: string[]): string {
   return lotNames.map((n) => n.trim()).filter(Boolean).join("\n");
