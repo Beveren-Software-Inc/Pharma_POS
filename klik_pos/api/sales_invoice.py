@@ -622,7 +622,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 	# Batch fetch all items for this invoice with item_group
 	items_query = """
 		SELECT sii.item_code, sii.item_name, sii.qty, sii.rate, sii.amount, sii.description, sii.item_group,
-			sii.batch_no, sii.serial_no, sii.uom, sii.name as invoice_item_name
+			sii.batch_no, sii.serial_and_batch_bundle, sii.serial_no, sii.uom, sii.name as invoice_item_name
 	"""
 	if has_dispensing_lot_col:
 		items_query += ", sii.custom_dispensing_lot"
@@ -714,8 +714,23 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 
 	def _line_extra(item_row):
 		lot_text = getattr(item_row, "custom_dispensing_lot", None) if has_dispensing_lot_col else None
+		batch_no = getattr(item_row, "batch_no", None)
+		if not batch_no:
+			bundle = getattr(item_row, "serial_and_batch_bundle", None)
+			if bundle:
+				bundle_batches = frappe.get_all(
+					"Serial and Batch Entry",
+					filters={"parent": bundle, "batch_no": ["is", "set"]},
+					pluck="batch_no",
+					order_by="idx asc",
+				)
+				unique_batches = []
+				for name in bundle_batches:
+					if name and name not in unique_batches:
+						unique_batches.append(name)
+				batch_no = ", ".join(unique_batches) or None
 		extra = {
-			"batch_no": getattr(item_row, "batch_no", None),
+			"batch_no": batch_no,
 			"serial_no": getattr(item_row, "serial_no", None),
 			"uom": getattr(item_row, "uom", None),
 		}
@@ -2203,27 +2218,72 @@ def _append_additional_charge_items(doc, items, general_additional_amount, pos_p
 		)
 
 
+def _item_tax_template_rate(template_name):
+	"""Sum of the rates on an Item Tax Template. Zero Rated is 0."""
+	if not template_name:
+		return 0.0
+	details = frappe.get_all(
+		"Item Tax Template Detail",
+		filters={"parent": template_name},
+		fields=["tax_rate"],
+	)
+	return sum(flt(row.tax_rate or 0) for row in details)
+
+
+def _company_delivery_vat_template(company):
+	"""The 10% item tax template the payment screen adds on the delivery fee.
+
+	Used when every medicine on the invoice is zero rated, so there is no
+	taxable template on the lines to copy.
+	"""
+	if not company:
+		return None
+
+	preferred = frappe.db.get_value(
+		"Item Tax Template",
+		{"name": "VAT 10% - Item", "company": company, "disabled": 0},
+		"name",
+	)
+	if preferred and _item_tax_template_rate(preferred) > 0:
+		return preferred
+
+	ten_percent = None
+	for name in frappe.get_all(
+		"Item Tax Template",
+		filters={"company": company, "disabled": 0},
+		pluck="name",
+	):
+		if abs(_item_tax_template_rate(name) - 10) < 0.001:
+			ten_percent = name
+			break
+	return ten_percent
+
+
 def _delivery_charge_item_tax_template(doc, pos_profile, item_code):
 	"""Tax template for the delivery fee line.
 
-	The Delivery Charge item has no template of its own. Use the template already
-	on the medicines in this invoice so the posted VAT includes the delivery fee,
-	matching the 10% added on the payment screen. Held invoices go through this
-	same path when they are submitted.
+	The payment screen always adds 10% VAT on the delivery fee, including when
+	the medicines are zero rated. Copy a taxable template already on the invoice
+	when one exists. A zero-rated medicine template must not be copied onto the
+	delivery line, or the 10% is dropped and the difference is booked as change.
 	"""
 	if not pos_profile or not getattr(pos_profile, "custom_allow_item_tax_template", 0):
 		return None
 
 	for row in doc.get("items") or []:
 		template = getattr(row, "item_tax_template", None)
-		if template:
+		if template and _item_tax_template_rate(template) > 0:
 			return template
+
+	template = _company_delivery_vat_template(getattr(doc, "company", None))
+	if template:
+		return template
 
 	try:
 		from klik_pos.api import tax as tax_api
 
 		res = tax_api.get_item_tax_template_for_item(item_code, doc.company)
-		if res and res.get("item_tax_template"):
+		if res and res.get("item_tax_template") and _item_tax_template_rate(res["item_tax_template"]) > 0:
 			return res["item_tax_template"]
 	except Exception:
 		frappe.log_error(

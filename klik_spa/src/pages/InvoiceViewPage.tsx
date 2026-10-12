@@ -41,6 +41,7 @@ import { handlePrintInvoice } from "../utils/printHandler";
 import SingleInvoiceReturn from "../components/SingleInvoiceReturn";
 import MultiInvoiceReturn from "../components/MultiInvoiceReturn";
 import { formatCurrency } from "../utils/currency";
+import { formatDispensingLots } from "../utils/dispensingLot";
 import AddCustomerModal from "../components/AddCustomerModal";
 
 export default function InvoiceViewPage() {
@@ -543,6 +544,14 @@ export default function InvoiceViewPage() {
                               <div>
                                 <div className="text-sm font-medium text-gray-900 dark:text-white">{item.item_name}</div>
                                 <div className="text-sm text-gray-500 dark:text-gray-400">Code: {item.item_code}</div>
+                                {item.batch_no ? (
+                                  <div className="text-sm text-gray-500 dark:text-gray-400">Batch: {item.batch_no}</div>
+                                ) : null}
+                                {formatDispensingLots(item.custom_dispensing_lot || item.dispensing_lot_serials) ? (
+                                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                                    Dispensing lot: {formatDispensingLots(item.custom_dispensing_lot || item.dispensing_lot_serials)}
+                                  </div>
+                                ) : null}
                                 <div className="text-sm text-gray-500 dark:text-gray-400 capitalize">{item.category}</div>
                               </div>
                             </td>
