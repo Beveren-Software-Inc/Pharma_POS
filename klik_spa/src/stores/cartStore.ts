@@ -209,6 +209,8 @@ interface CartState {
   removeItem: (id: string) => void
   updateItemMetadata: (id: string, updates: Record<string, unknown>) => void
   clearCart: () => void
+  /** Empty the cart without dropping a draft invoice that is about to be loaded. */
+  clearCartItems: () => void
   applyCoupon: (coupon: GiftCoupon) => void
   removeCoupon: (couponCode: string) => void
   setSelectedCustomer: (customer: Customer | null) => Promise<void>
@@ -476,6 +478,17 @@ export const useCartStore = create<CartState>()(
           )
         };
       }),
+
+      clearCartItems: () => {
+        pricingRunToken += 1
+        set(() => ({
+          cartItems: [],
+          appliedCoupons: [],
+          redeemLoyaltyPoints: null,
+          generalAdditionalAmount: 0,
+          additionalRemark: null,
+        }))
+      },
 
       clearCart: () => {
         // Invalidate any in-flight pricing recalculations started by add/remove/quantity changes.

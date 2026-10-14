@@ -55,6 +55,9 @@ export default function InvoiceViewPage() {
   const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
     posDetails?.custom_is_hospital_pharmacy === true ||
     posDetails?.custom_is_hospital_pharmacy === "1";
+  const showLineVat = posDetails?.custom_allow_item_tax_template === 1 ||
+    posDetails?.custom_allow_item_tax_template === true ||
+    posDetails?.custom_allow_item_tax_template === "1";
   const party = getPartyLabels(isHospitalPharmacy);
   const navigate = useNavigate()
   const orderLabel = isHospitalPharmacy ? "dispense order" : "invoice";
@@ -562,7 +565,10 @@ export default function InvoiceViewPage() {
                               {formatCurrency(item.rate, invoice.currency)}
                             </td>
                             <td className="px-6 py-4 text-right text-sm font-medium text-gray-900 dark:text-white">
-                              {formatCurrency(item.amount, invoice.currency)}
+                              {formatCurrency(
+                                (item.amount || 0) + (showLineVat ? (item.line_vat || 0) : 0),
+                                invoice.currency
+                              )}
                             </td>
                           </tr>
                         ))}

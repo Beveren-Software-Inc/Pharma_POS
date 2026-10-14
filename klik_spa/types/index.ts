@@ -140,6 +140,8 @@ export interface SalesInvoiceItem {
   qty?: number
   rate: number
   amount: number
+  line_vat?: number
+  item_tax_template?: string | null
   description?: string
   returned_qty?: number
   available_qty?: number

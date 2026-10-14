@@ -870,9 +870,8 @@ export default function PaymentDialog({
     };
   }, [deliveryChargeAmount]);
 
-  // When delivery personnel is selected (paid now) and delivery charges change the grand total,
-  // keep the POS payment in sync by auto-filling the default payment method with the latest
-  // effective grand total. This avoids having to click the payment method button again.
+  // When a delivery person changes the total, keep the method the cashier already
+  // chose. Only the untouched default tender is moved onto the default method.
   useEffect(() => {
     if (!isOpen || isCompanyDelivery) return;
     if (!selectedDeliveryPersonnel) return;
@@ -884,7 +883,13 @@ export default function PaymentDialog({
     if (!defaultMode) return;
 
     const amount = parseFloat(effectiveGrandTotal.toFixed(3));
-    setPaymentAmounts({ [defaultMode.mode_of_payment]: amount });
+    const positive = Object.entries(paymentAmounts).filter(([, amt]) => (amt || 0) > 0);
+    if (positive.length > 1) return;
+
+    const targetId = positive.length === 1 ? positive[0][0] : defaultMode.mode_of_payment;
+    if (positive.length === 1 && Math.abs((positive[0][1] || 0) - amount) < 0.0005) return;
+
+    setPaymentAmounts({ [targetId]: amount });
   }, [
     isOpen,
     isCompanyDelivery,
@@ -1630,11 +1635,12 @@ const handleAutoFillPayment = (methodId: string) => {
     // For B2B, no payment validation required - can be partial or zero payment
     setIsProcessingPayment(true);
 
+    const originalDraftInvoiceId = getOriginalDraftInvoiceId();
     const paymentData = buildInvoicePayload({
       deliveryPersonnel,
       deliveryVia,
       referenceNo,
-    });
+    }, originalDraftInvoiceId);
 
     try {
       const response = await createSalesInvoice(paymentData);
@@ -1649,19 +1655,18 @@ const handleAutoFillPayment = (methodId: string) => {
         : "Payment completed successfully!";
       toast.success(successMessage);
 
-      // Delete original draft invoice if it exists (from Edit → Go to Cart workflow)
-      const originalDraftInvoiceId = getOriginalDraftInvoiceId();
-      // console.log("Checking for original draft invoice to delete:", originalDraftInvoiceId);
-
-      if (originalDraftInvoiceId) {
+      // The edited draft is submitted in place. Delete it only when checkout
+      // created a different invoice, and drop any extra delivery draft.
+      const submittedName = response.invoice_name || response.invoice?.name;
+      const leftoverDrafts = [originalDraftInvoiceId, deliveryDraftInvoiceId].filter(
+        (id, index, all): id is string => !!id && id !== submittedName && all.indexOf(id) === index
+      );
+      for (const draftId of leftoverDrafts) {
         try {
-          // const deleteResult = await deleteDraftInvoice(originalDraftInvoiceId);
+          await deleteDraftInvoice(draftId);
         } catch (deleteError) {
           console.error("Failed to delete original draft invoice:", deleteError);
-          // Don't show error to user as the main invoice was created successfully
         }
-      } else {
-        console.log();
       }
 
       // Clear draft invoice cache since payment is completed
@@ -1791,26 +1796,28 @@ const handleAutoFillPayment = (methodId: string) => {
   const hasPersonnel = !!selection.personnelName;
   const hasChannel = !!selection.deliveryVia;
 
-  // Company delivery: channel selected, no personnel -> pay later, clear all payments
+  // Company delivery: channel selected, no personnel -> pay later.
+  // Leave a method the cashier already filled. Only seed an empty payment row
+  // when nothing has been entered yet.
   if (hasChannel && !hasPersonnel) {
     setIsCompanyDelivery(true);
-    // Try to use Delivery Channel's mode_of_payment; fall back to default POS mode if missing.
-    const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
-    let mop = channel?.mode_of_payment || null;
-    if (!mop && modes.length > 0) {
-      const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
-      mop = defaultMode?.mode_of_payment || null;
-    }
+    const hasChosenPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
+    if (!hasChosenPayment && !paymentManuallyEditedRef.current) {
+      const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
+      let mop = channel?.mode_of_payment || null;
+      if (!mop && modes.length > 0) {
+        const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+        mop = defaultMode?.mode_of_payment || null;
+      }
 
-    if (mop) {
-      // Create one payment row with amount 0.0 to satisfy ERPNext POS validation
-      setPaymentAmounts({ [mop]: 0 });
-    } else {
-      // As a safety net, keep payments empty if we truly have no Mode of Payment to use
-      setPaymentAmounts({});
+      if (mop) {
+        setPaymentAmounts({ [mop]: 0 });
+      } else {
+        setPaymentAmounts({});
+      }
+      setRoundOffAmount(0);
+      setRoundOffInput("0.000");
     }
-    setRoundOffAmount(0);
-    setRoundOffInput("0.000");
   } else {
     // Normal (immediate) delivery: allow payments
     setIsCompanyDelivery(false);
@@ -3461,7 +3468,11 @@ const handleAutoFillPayment = (methodId: string) => {
                 <div className="space-y-2 mb-4">
                   {cartItems.length > 0 ? (
                     // Show cart items for payment
-                    cartItems.map((item, index) => (
+                    cartItems.map((item, index) => {
+                      const lineTemplate = (item as { item_tax_template?: string }).item_tax_template;
+                      const lineVatRate = isItemTaxTemplateMode && lineTemplate ? (itemTaxTemplateRates[lineTemplate] ?? 0) : 0;
+                      const lineAmount = item.quantity * item.price;
+                      return (
                       <div key={index} className="flex justify-between text-sm">
                           <div className="flex-1">
                             <p className="font-medium text-gray-900 dark:text-white">
@@ -3472,10 +3483,11 @@ const handleAutoFillPayment = (methodId: string) => {
                             </p>
                           </div>
                           <p className="font-medium text-gray-900 dark:text-white">
-                            {formatCurrency(item.quantity * item.price)}
+                            {formatCurrency(lineAmount + (lineAmount * lineVatRate) / 100)}
                           </p>
                         </div>
-                      ))
+                      );
+                    })
                   ) : (
                     // Show invoice details for sharing
                     <div className="space-y-4">

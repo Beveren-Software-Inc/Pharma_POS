@@ -711,6 +711,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 		today_date = frappe.utils.getdate(today_date)
 
 	days_since_invoice = (today_date - invoice_date).days
+	line_vat_rates = {}
 
 	def _line_extra(item_row):
 		lot_text = getattr(item_row, "custom_dispensing_lot", None) if has_dispensing_lot_col else None
@@ -745,7 +746,14 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 			or item_code == "Delivery Charge"
 			or description.startswith("Delivery Charge")
 		)
-		extra["item_tax_template"] = getattr(item_row, "item_tax_template", None)
+		template = getattr(item_row, "item_tax_template", None)
+		extra["item_tax_template"] = template
+		if template not in line_vat_rates:
+			line_vat_rates[template or ""] = _item_tax_template_rate(template) if template else 0.0
+		extra["line_vat"] = flt(
+			(flt(getattr(item_row, "amount", 0) or 0) * line_vat_rates[template or ""]) / 100.0,
+			3,
+		)
 		return extra
 
 	items = []
@@ -2157,6 +2165,75 @@ def _add_item_tax_template_to_item(item_data, item, pos_profile):
 		item_data["item_tax_template"] = item_tax_template
 
 
+def _additional_charge_item_can_sell_without_batch(row):
+	"""Additional amounts are a fee, so the item must not post batch or serial stock."""
+	return not (
+		cint(row.get("is_stock_item"))
+		or cint(row.get("has_batch_no"))
+		or cint(row.get("has_serial_no"))
+	)
+
+
+def _ensure_additional_charge_item():
+	"""Return a non-stock Item flagged as additional charges.
+
+	The POS hides every item with Is Additional Charges, then adds that item
+	as its own invoice line when the cashier types an extra amount. A stock
+	item with a batch (for example a weight scale) makes stock posting demand
+	a batch for an item the cashier never selected.
+	"""
+	flagged = frappe.get_all(
+		"Item",
+		filters={"custom_is_additional_charges": 1, "disabled": 0},
+		fields=["name", "is_stock_item", "has_batch_no", "has_serial_no"],
+		order_by="modified asc",
+	)
+	for row in flagged:
+		if _additional_charge_item_can_sell_without_batch(row):
+			return row.name
+
+	item_code = frappe.db.get_value(
+		"Item",
+		{"item_code": "Additional Charges", "disabled": 0},
+		"name",
+	)
+	if item_code:
+		current = frappe.db.get_value(
+			"Item",
+			item_code,
+			["is_stock_item", "has_batch_no", "has_serial_no", "custom_is_additional_charges"],
+			as_dict=True,
+		)
+		if current and _additional_charge_item_can_sell_without_batch(current):
+			if not cint(current.custom_is_additional_charges):
+				frappe.db.set_value(
+					"Item", item_code, "custom_is_additional_charges", 1, update_modified=False
+				)
+			return item_code
+
+	item_group = (
+		frappe.db.get_value("Item Group", {"item_group_name": "Services"}, "name")
+		or frappe.db.get_value("Item Group", {"is_group": 0}, "name")
+		or "All Item Groups"
+	)
+	item = frappe.get_doc(
+		{
+			"doctype": "Item",
+			"item_code": "Additional Charges",
+			"item_name": "Additional Charges",
+			"item_group": item_group,
+			"is_stock_item": 0,
+			"include_item_in_manufacturing": 0,
+			"has_batch_no": 0,
+			"has_serial_no": 0,
+			"is_sales_item": 1,
+			"custom_is_additional_charges": 1,
+		}
+	)
+	item.insert(ignore_permissions=True)
+	return item.name
+
+
 def _append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark=None):
 	"""Map additional amounts to a dedicated service Item (custom_is_additional_charges = 1)."""
 	# Sum per-item additional amounts from payload
@@ -2169,22 +2246,7 @@ def _append_additional_charge_items(doc, items, general_additional_amount, pos_p
 	if total_item_additional <= 0 and general_additional_amount <= 0:
 		return
 
-	# Find the special service item
-	try:
-		extra_item_code = frappe.db.get_value(
-			"Item",
-			{"custom_is_additional_charges": 1, "disabled": 0},
-			"name",
-		)
-	except Exception:
-		extra_item_code = None
-
-	if not extra_item_code:
-		frappe.log_error(
-			"Additional charges item not found",
-			"Item with custom_is_additional_charges=1 is required for additional amounts",
-		)
-		return
+	extra_item_code = _ensure_additional_charge_item()
 
 	warehouse = pos_profile.warehouse
 	cost_center = pos_profile.cost_center

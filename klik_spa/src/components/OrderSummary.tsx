@@ -286,6 +286,73 @@ const ServiceRateInput = ({ lineKey, price, onRateChange, isMobile }: ServiceRat
   );
 };
 
+const DecimalNumberInput = ({
+  value,
+  onValueChange,
+  placeholder,
+  max,
+}: {
+  value: number;
+  onValueChange: (value: number) => void;
+  placeholder?: string;
+  max?: number;
+}) => {
+  const [text, setText] = useState(value ? String(value) : "");
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setText(value ? String(value) : "");
+    }
+  }, [value, editing]);
+
+  const commit = (raw: string) => {
+    if (raw === "" || raw === ".") {
+      onValueChange(0);
+      return;
+    }
+    const numeric = parseFloat(raw);
+    if (!Number.isFinite(numeric) || numeric < 0) return;
+    onValueChange(max != null ? Math.min(max, numeric) : numeric);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={editing ? text : value ? String(value) : ""}
+      placeholder={placeholder}
+      onFocus={() => {
+        setEditing(true);
+        setText(value ? String(value) : "");
+      }}
+      onChange={(e) => {
+        const raw = e.target.value.replace(",", ".");
+        if (raw !== "" && !/^\d*\.?\d*$/.test(raw)) return;
+        setText(raw);
+        commit(raw);
+      }}
+      onBlur={() => {
+        setEditing(false);
+        if (text === "" || text === ".") {
+          setText("");
+          onValueChange(0);
+          return;
+        }
+        const numeric = parseFloat(text);
+        if (!Number.isFinite(numeric) || numeric < 0) {
+          setText(value ? String(value) : "");
+          return;
+        }
+        const capped = max != null ? Math.min(max, numeric) : numeric;
+        setText(String(capped));
+        onValueChange(capped);
+      }}
+      className={cartFieldInputClass}
+    />
+  );
+};
+
 // Component to handle dosage input with local state (allows empty + decimals)
 interface DosageInputProps {
   itemId: string;
@@ -1610,7 +1677,8 @@ export default function OrderSummary({
       // Cart update completed
     }, 100);
   }, [updateUOM, cartItems]);
-  // State for item-level discounts and details
+  // State for item-level discounts and details. Kept in localStorage so a refresh
+  // does not drop a discount the cashier already typed.
   const [itemDiscounts, setItemDiscounts] = useState<
     Record<
       string,
@@ -1629,7 +1697,16 @@ export default function OrderSummary({
         alternativeDrug?: string;
       }
     >
-  >({});
+  >(() => {
+    try {
+      const raw = localStorage.getItem("klik-pos-line-discounts");
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
 
   const [itemBatches, setItemBatches] = useState<
     Record<string, { batch_id: string; qty: number; expiry_date?: string | null }[]>
@@ -1688,6 +1765,20 @@ export default function OrderSummary({
 
   // Per-line key for batch/serial/discount (same item can appear in multiple lines when allow duplicate)
   const getLineKey = (i: CartItem) => (i as CartItem & { cartLineId?: string }).cartLineId || i.id;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("klik-pos-line-discounts", JSON.stringify(itemDiscounts));
+    } catch {
+      // Ignore quota or private-mode failures; the in-memory discount still applies.
+    }
+  }, [itemDiscounts]);
+
+  useEffect(() => {
+    if (!useCartStore.persist.hasHydrated()) return;
+    if (cartItems.length > 0) return;
+    setItemDiscounts((current) => (Object.keys(current).length === 0 ? current : {}));
+  }, [cartItems.length]);
 
   const resolveBatchExpiry = useCallback(
     (itemCode: string, batchId?: string) => {
@@ -4934,6 +5025,10 @@ const handleSetSerial = (event: CustomEvent) => {
               const discountedPrice = getDiscountedPrice(item);
               const originalTotal = item.price * item.quantity;
               const discountedTotal = discountedPrice * item.quantity;
+              const lineTaxTemplate = (item as { item_tax_template?: string }).item_tax_template;
+              const lineVatRate = isItemTaxTemplateMode && lineTaxTemplate ? (itemTaxTemplateRates[lineTaxTemplate] ?? 0) : 0;
+              const displayTotal = discountedTotal + (discountedTotal * lineVatRate) / 100;
+              const displayOriginalTotal = originalTotal + (originalTotal * lineVatRate) / 100;
               
                 const cartItemBatch = (item as { batch_no?: string }).batch_no;
                 const cartItemSerial = (item as { serial_no?: string }).serial_no;
@@ -5105,7 +5200,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         <div>
                           <p className="text-gray-400 line-through text-xs">
                             {currency_symbol}
-                            {originalTotal.toFixed(3)}
+                            {displayOriginalTotal.toFixed(3)}
                           </p>
                           <p
                             className={`text-beveren-600 dark:text-beveren-400 font-semibold ${
@@ -5113,7 +5208,7 @@ const handleSetSerial = (event: CustomEvent) => {
                             }`}
                           >
                             {currency_symbol}
-                            {discountedTotal.toFixed(3)}
+                            {displayTotal.toFixed(3)}
                           </p>
                         </div>
                       ) : (
@@ -5123,7 +5218,7 @@ const handleSetSerial = (event: CustomEvent) => {
                           }`}
                         >
                           {currency_symbol}
-                          {discountedTotal.toFixed(3)}
+                          {displayTotal.toFixed(3)}
                         </p>
                       )}
                     </div>
@@ -5238,41 +5333,25 @@ const handleSetSerial = (event: CustomEvent) => {
                             <label className={cartFieldLabelClass}>
                               Discount Amount
                             </label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={itemDiscount.discountAmount || ""}
-                              onChange={(e) =>
-                                updateItemDiscount(
-                                  lineKey,
-                                  "discountAmount",
-                                  parseFloat(e.target.value) || 0
-                                )
+                            <DecimalNumberInput
+                              value={itemDiscount.discountAmount || 0}
+                              onValueChange={(amount) =>
+                                updateItemDiscount(lineKey, "discountAmount", amount)
                               }
                               placeholder="0.00"
-                              className={cartFieldInputClass}
                             />
                           </div>
                           <div className={cartFieldCellClass}>
                             <label className={cartFieldLabelClass}>
                               Discount (%)
                             </label>
-                            <input
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="0.1"
-                              value={itemDiscount.discountPercentage || ""}
-                              onChange={(e) =>
-                                updateItemDiscount(
-                                  lineKey,
-                                  "discountPercentage",
-                                  parseFloat(e.target.value) || 0
-                                )
+                            <DecimalNumberInput
+                              value={itemDiscount.discountPercentage || 0}
+                              max={100}
+                              onValueChange={(percent) =>
+                                updateItemDiscount(lineKey, "discountPercentage", percent)
                               }
                               placeholder="0.0"
-                              className={cartFieldInputClass}
                             />
                           </div>
                         </div>
@@ -5486,7 +5565,7 @@ const handleSetSerial = (event: CustomEvent) => {
                                 `${itemDiscount.discountAmount.toFixed(3)} off`}
                             </span>
                             <span className="text-xs font-semibold text-green-800 dark:text-green-300">
-                              Save $
+                              Save {currency_symbol}
                               {(originalTotal - discountedTotal).toFixed(3)}
                             </span>
                           </div>

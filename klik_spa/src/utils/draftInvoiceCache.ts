@@ -34,6 +34,7 @@ interface DraftInvoiceCache {
 }
 
 const CACHE_KEY = 'draft-invoice-cache';
+const DRAFT_ID_KEY = 'draft-invoice-id';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 export function cacheDraftInvoiceItems(
@@ -54,6 +55,7 @@ export function cacheDraftInvoiceItems(
   };
 
   localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+  localStorage.setItem(DRAFT_ID_KEY, invoiceId);
 }
 
 export function getCachedDraftInvoiceItems(): DraftInvoiceCache | null {
@@ -70,7 +72,7 @@ export function getCachedDraftInvoiceItems(): DraftInvoiceCache | null {
     const age = now - cache.timestamp;
 
     if (age > CACHE_DURATION) {
-      clearDraftInvoiceCache();
+      localStorage.removeItem(CACHE_KEY);
       return null;
     }
 
@@ -84,6 +86,7 @@ export function getCachedDraftInvoiceItems(): DraftInvoiceCache | null {
 
 export function clearDraftInvoiceCache(): void {
   localStorage.removeItem(CACHE_KEY);
+  localStorage.removeItem(DRAFT_ID_KEY);
 }
 
 export function clearCachedDraftDelivery(): void {
@@ -104,7 +107,9 @@ export async function loadCachedItemsToCart(): Promise<boolean> {
     return false;
   }
 
-  const { setSelectedCustomer, addToCartWithQuantity } = useCartStore.getState();
+  const { setSelectedCustomer, addToCartWithQuantity, clearCartItems } = useCartStore.getState();
+
+  clearCartItems();
 
   if (cachedData.customer) {
     setSelectedCustomer(cachedData.customer);
@@ -157,8 +162,9 @@ export function hasCachedDraftInvoiceItems(): boolean {
 }
 
 export function getOriginalDraftInvoiceId(): string | null {
+  const pinned = localStorage.getItem(DRAFT_ID_KEY);
+  if (pinned) return pinned;
   const cachedData = getCachedDraftInvoiceItems();
-
   return cachedData?.originalDraftInvoiceId || null;
 }
 
