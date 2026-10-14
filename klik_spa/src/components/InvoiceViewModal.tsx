@@ -43,6 +43,9 @@ export default function InvoiceViewModal({
   const isHospitalPharmacy = posDetails?.custom_is_hospital_pharmacy === 1 ||
     posDetails?.custom_is_hospital_pharmacy === true ||
     posDetails?.custom_is_hospital_pharmacy === "1";
+  const showLineVat = posDetails?.custom_allow_item_tax_template === 1 ||
+    posDetails?.custom_allow_item_tax_template === true ||
+    posDetails?.custom_allow_item_tax_template === "1";
   const party = getPartyLabels(isHospitalPharmacy);
 
   if (!isOpen || !invoice) return null;
@@ -233,7 +236,7 @@ export default function InvoiceViewModal({
                               ${Number(item.rate ?? 0).toFixed(3)}
                             </td>
                             <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white">
-                              ${Number(item.amount ?? 0).toFixed(3)}
+                              ${(Number(item.amount ?? 0) + (showLineVat ? Number(item.line_vat ?? 0) : 0)).toFixed(3)}
                             </td>
                           </tr>
                         ))}
