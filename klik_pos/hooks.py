@@ -75,40 +75,33 @@ fixtures = [
 					"Item-custom_is_additional_charges",
 					"Item-custom_is_pharmacy_service",
 					"POS Profile-custom_allow_duplicate_items_in_pos",
-     "POS Profile-custom_autofetch_batchserial_",
-     "Sales Invoice-custom_amount_to_be_covered",
-     "Sales Invoice-custom_column_break_tbrxu",
-     "Sales Invoice-custom_health_insurance",
-     "Sales Invoice-custom_insurance",
-     "POS Profile-custom_is_hospital_pharmacy",
-     "Item-custom_is_pharmacy_service",
-     "Sales Order-custom_is_pos",
-     "POS Profile-custom_print_delivery_receipt",
-     "Sales Order-custom_internal_employee_dispensing",
-     "Sales Order-custom_pos_hold_data",
-     "Sales Order Item-custom_dosage",
-     "Sales Order Item-custom_prescription_frequency",
-     "Sales Order Item-custom_dispensing_lot",
-     "Sales Order Item-custom_batch",
-     "Sales Invoice-custom_employee",
-     "Sales Invoice-custom_internal_employee_dispensing",
-     
-     "Customer-custom_employee_name",
-     "Customer-custom_employee",
-     "POS Profile-custom_display_prescription_frequency",
-     "Item-custom_allow_pos_sale",
-     "POS Profile-custom_allow_service_sale"
+					"POS Profile-custom_autofetch_batchserial_",
+					"Sales Invoice-custom_amount_to_be_covered",
+					"Sales Invoice-custom_column_break_tbrxu",
+					"Sales Invoice-custom_health_insurance",
+					"Sales Invoice-custom_insurance",
+					"POS Profile-custom_is_hospital_pharmacy",
+					"Item-custom_is_pharmacy_service",
+					"Sales Order-custom_is_pos",
+					"POS Profile-custom_print_delivery_receipt",
+					"Sales Order-custom_internal_employee_dispensing",
+					"Sales Order-custom_pos_hold_data",
+					"Sales Order Item-custom_dosage",
+					"Sales Order Item-custom_prescription_frequency",
+					"Sales Order Item-custom_dispensing_lot",
+					"Sales Order Item-custom_batch",
+					"Sales Invoice-custom_employee",
+					"Sales Invoice-custom_internal_employee_dispensing",
+					"Customer-custom_employee_name",
+					"Customer-custom_employee",
+					"POS Profile-custom_display_prescription_frequency",
+					"Item-custom_allow_pos_sale",
+					"POS Profile-custom_allow_service_sale",
 				),
 			]
 		],
 	},
- {
-	 "doctype": "Delivery Channel",
-	"filters":[
-
-	]
- }
-
+	{"doctype": "Delivery Channel", "filters": []},
 ]
 
 doc_events = {
@@ -133,7 +126,6 @@ doc_events = {
 			"klik_pos.api.serene_pharmacy_rules.create_pharmacy_patient_visit",  # PHA-058
 			"klik_pos.api.serene_pharmacy_rules.advance_refill_schedule",  # PHA-112
 		],
-
 		# "before_save": [
 		# 	"klik_pos.api.sales_invoice.sync_return_payments_before_save",
 		# ],
@@ -387,6 +379,7 @@ doctype_js.update({"POS Profile": "public/js/pos_profile.js"})
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
+# Test
 
 
 website_route_rules = [
