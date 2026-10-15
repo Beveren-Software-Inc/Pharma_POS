@@ -735,17 +735,17 @@ export default function PaymentDialog({
   if (!isOpen || modes.length === 0 || isCompanyDelivery) return;
   if (editingPaymentMethodId) return;
   if (paymentManuallyEditedRef.current) return;
- 
+
   const defaultMode = modes.find((mode) => mode.default === 1);
   if (!defaultMode) return;
- 
+
   // Fill the default method with the calculated total until the cashier types their own amount.
   const hasAnyPayment = Object.keys(paymentAmounts).length > 0;
-  const hasOnlyDefaultPayment = 
-    hasAnyPayment && 
-    Object.keys(paymentAmounts).length === 1 && 
+  const hasOnlyDefaultPayment =
+    hasAnyPayment &&
+    Object.keys(paymentAmounts).length === 1 &&
     paymentAmounts[defaultMode.mode_of_payment] != null;
- 
+
   if (!hasAnyPayment || hasOnlyDefaultPayment) {
     const newAmount = parseFloat(effectiveGrandTotal.toFixed(3));
     setPaymentAmounts({ [defaultMode.mode_of_payment]: newAmount });
@@ -1792,7 +1792,7 @@ const handleAutoFillPayment = (methodId: string) => {
       : null
   );
   setDeliveryRemarks(selection.remarks ?? null);
-  
+
   const hasPersonnel = !!selection.personnelName;
   const hasChannel = !!selection.deliveryVia;
 

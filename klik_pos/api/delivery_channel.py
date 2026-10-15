@@ -22,4 +22,3 @@ def get_delivery_channel_list():
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching delivery channels")
 		return {"success": False, "error": str(e)}
-

@@ -47,10 +47,7 @@ def _stock_balance(item_code, warehouse):
 	if not item_code or not warehouse:
 		return None
 	return flt(
-		frappe.db.get_value(
-			"Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty"
-		)
-		or 0
+		frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty") or 0
 	)
 
 
@@ -60,13 +57,9 @@ def _resolve_prescriber(item, patient):
 		val = (item.get(key) or "").strip() if isinstance(item.get(key), str) else item.get(key)
 		if val:
 			return val
-	entry_name = (
-		item.get("medication_order_entry") or item.get("medicationOrderEntry") or ""
-	).strip()
+	entry_name = (item.get("medication_order_entry") or item.get("medicationOrderEntry") or "").strip()
 	if entry_name and frappe.db.exists("Inpatient Medication Order Entry", entry_name):
-		order = frappe.db.get_value(
-			"Inpatient Medication Order Entry", entry_name, "parent"
-		)
+		order = frappe.db.get_value("Inpatient Medication Order Entry", entry_name, "parent")
 		if order:
 			return frappe.db.get_value("Patient Medication Order", order, "practitioner")
 	return None
@@ -87,12 +80,8 @@ def record_controlled_dispense(invoice_doc, items):
 		from klik_pos.api.patient import resolve_patient_from_customer
 
 		patient = resolve_patient_from_customer(getattr(invoice_doc, "customer", None))
-		patient_name = (
-			frappe.db.get_value("Patient", patient, "patient_name") if patient else None
-		)
-		warehouse = getattr(invoice_doc, "set_warehouse", None) or getattr(
-			invoice_doc, "warehouse", None
-		)
+		patient_name = frappe.db.get_value("Patient", patient, "patient_name") if patient else None
+		warehouse = getattr(invoice_doc, "set_warehouse", None) or getattr(invoice_doc, "warehouse", None)
 		pos_profile = getattr(invoice_doc, "pos_profile", None)
 
 		# Prefer the actual per-line warehouse/qty from the submitted invoice items.
@@ -134,11 +123,7 @@ def record_controlled_dispense(invoice_doc, items):
 					"patient_name": patient_name,
 					"uhid": patient,
 					"prescriber": _resolve_prescriber(item, patient),
-					"medication_order": (
-						item.get("medication_order")
-						or item.get("medicationOrder")
-						or ""
-					),
+					"medication_order": (item.get("medication_order") or item.get("medicationOrder") or ""),
 					"drug": item_code,
 					"drug_category": category,
 					"batch_no": batch_no,

@@ -1552,7 +1552,7 @@ const getStatusBadge = (status: string) => {
       const invoiceDateObj = new Date(invoiceDate);
       const today = new Date();
       const daysSinceInvoice = Math.floor((today.getTime() - invoiceDateObj.getTime()) / (1000 * 60 * 60 * 24));
-      
+
       if (daysSinceInvoice > 14) {
         return false; // Invoice is too old
       }
@@ -1571,17 +1571,17 @@ const getStatusBadge = (status: string) => {
       const soldQty = item.qty || item.quantity || 0;
       const returnedQty = item.returned_qty || 0;
       const hasAvailableQty = returnedQty < soldQty;
-      
+
       // Check if item is non-returnable (Item Group flag)
       if (item.is_non_returnable) {
         return false;
       }
-      
+
       // Check if item is refrigerated (Item flag)
       if (item.is_refrigerated_overdue) {
         return false;
       }
-      
+
       return hasAvailableQty;
     });
 

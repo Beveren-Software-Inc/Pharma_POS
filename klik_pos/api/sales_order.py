@@ -82,11 +82,7 @@ def _get_sales_order_item_fetch_fields():
 
 def _apply_hospital_so_item_hold_fields(row, item):
 	"""Persist POS dispense line metadata on Sales Order Item for held orders."""
-	batch_val = (
-		item.get("batchNumber")
-		or item.get("batch_no")
-		or item.get("custom_batch")
-	)
+	batch_val = item.get("batchNumber") or item.get("batch_no") or item.get("custom_batch")
 	if batch_val:
 		if _sales_order_item_has_field("custom_batch"):
 			row["custom_batch"] = batch_val
@@ -98,9 +94,7 @@ def _apply_hospital_so_item_hold_fields(row, item):
 		row["serial_no"] = serial_val
 
 	dispensing_lot = (
-		item.get("dispensingLot")
-		or item.get("dispensing_lot")
-		or item.get("custom_dispensing_lot")
+		item.get("dispensingLot") or item.get("dispensing_lot") or item.get("custom_dispensing_lot")
 	)
 	if dispensing_lot and _sales_order_item_has_field("custom_dispensing_lot"):
 		row["custom_dispensing_lot"] = dispensing_lot
@@ -311,9 +305,8 @@ def _build_medication_order_entry_updates(items):
 		alternative_item = _extract_alternative_item_code(item)
 		if alternative_item and alternative_field:
 			payload[alternative_field] = alternative_item
-			if (
-				alternative_field == "alternative_medicine"
-				and child_meta.has_field("alternative_medicine_name")
+			if alternative_field == "alternative_medicine" and child_meta.has_field(
+				"alternative_medicine_name"
 			):
 				payload["alternative_medicine_name"] = (
 					frappe.db.get_value("Item", alternative_item, "item_name") or alternative_item
@@ -443,7 +436,9 @@ def _derive_reference_from_medication_orders(reference_type, reference_name, med
 		if inpatient_admission:
 			return "Inpatient Admission", inpatient_admission
 	except Exception:
-		frappe.log_error(frappe.get_traceback(), f"Failed deriving reference from Medication Order {first_order}")
+		frappe.log_error(
+			frappe.get_traceback(), f"Failed deriving reference from Medication Order {first_order}"
+		)
 
 	return reference_type, reference_name
 
@@ -689,9 +684,7 @@ def _apply_hospital_sales_order_fields(doc, data, pos_profile, cost_center):
 
 	hold_payload = data.get("hold_payload")
 	if hold_payload and frappe.db.has_column("Sales Order", "custom_pos_hold_data"):
-		doc.custom_pos_hold_data = (
-			hold_payload if isinstance(hold_payload, str) else json.dumps(hold_payload)
-		)
+		doc.custom_pos_hold_data = hold_payload if isinstance(hold_payload, str) else json.dumps(hold_payload)
 
 	return medication_orders
 
@@ -703,9 +696,7 @@ def _dispensed_stock_qty(item_code, uom, qty):
 	if not qty or not stock_uom or not uom or uom == stock_uom:
 		return qty
 	conversion_factor = flt(
-		frappe.db.get_value(
-			"UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor"
-		)
+		frappe.db.get_value("UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor")
 	)
 	return qty * conversion_factor if conversion_factor > 0 else qty
 
@@ -756,25 +747,23 @@ def validate_dispense_quantities(items, warehouse=None):
 		qty = flt(item.get("quantity") or item.get("qty") or 0)
 		if not item_code or qty <= 0:
 			continue
-		required_by_item[item_code] = required_by_item.get(
-			item_code, 0
-		) + _dispensed_stock_qty(item_code, item.get("uom"), qty)
+		required_by_item[item_code] = required_by_item.get(item_code, 0) + _dispensed_stock_qty(
+			item_code, item.get("uom"), qty
+		)
 
 	for item_code, required in required_by_item.items():
 		if not frappe.db.exists("Item", item_code):
 			continue
-		available = frappe.db.get_value(
-			"Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty"
-		)
+		available = frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
 		if available is None:
 			# No Bin row for this warehouse — cannot validate.
 			continue
 		available = flt(available)
 		if required - available > 0.001:
 			frappe.throw(
-				frappe._(
-					"Cannot dispense {0} of {1}: only {2} available in warehouse {3}."
-				).format(required, item_code, available, warehouse)
+				frappe._("Cannot dispense {0} of {1}: only {2} available in warehouse {3}.").format(
+					required, item_code, available, warehouse
+				)
 			)
 
 
@@ -842,7 +831,9 @@ def _visit_type_from_reference(reference_type):
 
 def _resolve_dispense_visit_type(order, hold_payload=None):
 	"""Resolve OP/IP from Sales Order reference fields or held cart payload."""
-	ref_type = getattr(order, "custom_reference_type", None) if hasattr(order, "custom_reference_type") else None
+	ref_type = (
+		getattr(order, "custom_reference_type", None) if hasattr(order, "custom_reference_type") else None
+	)
 
 	if not ref_type and hold_payload:
 		visit_ref = hold_payload.get("created_visit_ref")
@@ -852,7 +843,9 @@ def _resolve_dispense_visit_type(order, hold_payload=None):
 	if not ref_type:
 		ref_type, _ = _derive_reference_from_medication_orders(
 			ref_type,
-			getattr(order, "custom_reference_name", None) if hasattr(order, "custom_reference_name") else None,
+			getattr(order, "custom_reference_name", None)
+			if hasattr(order, "custom_reference_name")
+			else None,
 			_normalize_medication_orders(
 				{
 					"base_reference_name": getattr(order, "custom_base_reference_name", None)
@@ -869,6 +862,7 @@ def _resolve_dispense_visit_type(order, hold_payload=None):
 def create_and_submit_hospital_sales_order(data):
 	try:
 		from klik_pos.klik_pos.utils import require_pos_access
+
 		require_pos_access()
 
 		if isinstance(data, str):
@@ -922,9 +916,7 @@ def create_and_submit_hospital_sales_order(data):
 			delivery_note_name = _create_and_submit_delivery_note_from_sales_order(
 				doc.name, pos_profile, cost_center=cost_center
 			)
-			_finalize_medication_orders_after_dispense(
-				items, medication_orders, sales_order_name=doc.name
-			)
+			_finalize_medication_orders_after_dispense(items, medication_orders, sales_order_name=doc.name)
 		except Exception:
 			frappe.db.rollback(save_point=savepoint)
 			raise
@@ -951,6 +943,7 @@ def create_draft_hospital_sales_order(data):
 	"""Save a held hospital dispense cart as a draft Sales Order (not submitted)."""
 	try:
 		from klik_pos.klik_pos.utils import require_pos_access
+
 		require_pos_access()
 
 		if isinstance(data, str):
@@ -1045,7 +1038,9 @@ def get_draft_hospital_sales_order(sales_order_name):
 			"customer": doc.customer,
 			"customer_name": doc.customer_name or doc.customer,
 			"patient": getattr(doc, "patient", None),
-			"custom_remarks": getattr(doc, "custom_remarks", None) if hasattr(doc, "custom_remarks") else None,
+			"custom_remarks": getattr(doc, "custom_remarks", None)
+			if hasattr(doc, "custom_remarks")
+			else None,
 			"items": item_rows,
 			"hold_payload": hold_payload,
 		}
@@ -1216,15 +1211,14 @@ def _build_dispense_order_items(sales_order_name, customer):
 				item["returned_qty"] = _get_returned_qty_for_dn_item(
 					delivery_note_name, customer, item["dn_detail"]
 				)
-				item["available_qty"] = max(
-					0, flt(item.get("qty") or 0) - flt(item["returned_qty"] or 0)
-				)
+				item["available_qty"] = max(0, flt(item.get("qty") or 0) - flt(item["returned_qty"] or 0))
 
 	dispense_status, returned_line_count = _annotate_dispense_return_status(order_items)
-	can_return = 1 if (
-		bool(delivery_note_name)
-		and any(flt(item.get("available_qty") or 0) > 0 for item in order_items)
-	) else 0
+	can_return = (
+		1
+		if (bool(delivery_note_name) and any(flt(item.get("available_qty") or 0) > 0 for item in order_items))
+		else 0
+	)
 
 	return order_items, delivery_note_name, dispense_status, returned_line_count, can_return
 
@@ -1399,9 +1393,7 @@ def get_dispense_order_details(sales_order_name):
 		if not mode_of_payment:
 			mode_of_payment = "Unbilled" if not billing.get("sales_invoice") else "—"
 
-		cashier_name = (
-			frappe.db.get_value("User", order.owner, "full_name") or order.owner
-		)
+		cashier_name = frappe.db.get_value("User", order.owner, "full_name") or order.owner
 		hold_payload = (
 			_parse_hold_payload(getattr(order, "custom_pos_hold_data", None))
 			if hasattr(order, "custom_pos_hold_data")
@@ -1599,12 +1591,18 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None, f
 						item["returned_qty"] = _get_returned_qty_for_dn_item(
 							delivery_note_name, order.customer, item["dn_detail"]
 						)
-						item["available_qty"] = max(0, flt(item.get("qty") or 0) - flt(item["returned_qty"] or 0))
+						item["available_qty"] = max(
+							0, flt(item.get("qty") or 0) - flt(item["returned_qty"] or 0)
+						)
 
-				can_return = 1 if (
-					bool(delivery_note_name)
-					and any(flt(item.get("available_qty") or 0) > 0 for item in order_items)
-				) else 0
+				can_return = (
+					1
+					if (
+						bool(delivery_note_name)
+						and any(flt(item.get("available_qty") or 0) > 0 for item in order_items)
+					)
+					else 0
+				)
 				dispense_status, returned_line_count = _annotate_dispense_return_status(order_items)
 
 			data.append(

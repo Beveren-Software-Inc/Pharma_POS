@@ -71,7 +71,9 @@ def get_item_tax_template_for_item(item_code, company=None):
 		if item.get("taxes"):
 			for tax in item.taxes:
 				if tax.item_tax_template:
-					template_company = frappe.db.get_value("Item Tax Template", tax.item_tax_template, "company")
+					template_company = frappe.db.get_value(
+						"Item Tax Template", tax.item_tax_template, "company"
+					)
 					if template_company == company:
 						item_tax_template = tax.item_tax_template
 						break
@@ -83,7 +85,9 @@ def get_item_tax_template_for_item(item_code, company=None):
 				if ig_doc.get("taxes"):
 					for tax in ig_doc.taxes:
 						if tax.item_tax_template:
-							template_company = frappe.db.get_value("Item Tax Template", tax.item_tax_template, "company")
+							template_company = frappe.db.get_value(
+								"Item Tax Template", tax.item_tax_template, "company"
+							)
 							if template_company == company:
 								item_tax_template = tax.item_tax_template
 								break

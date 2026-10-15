@@ -1,11 +1,12 @@
 import json
+from datetime import date as date_type
+from datetime import datetime, timedelta
 
 import erpnext
 import frappe
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 from frappe import _
-from frappe.utils import flt, cint
-from datetime import datetime, timedelta, date as date_type
+from frappe.utils import cint, flt
 
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
@@ -14,9 +15,12 @@ def _medication_order_is_inpatient(mo_name):
 	"""True when a Patient Medication Order is for an inpatient (Inpatient Admission reference)."""
 	if not mo_name:
 		return False
-	row = frappe.db.get_value(
-		"Patient Medication Order", mo_name, ["reference_doctype", "inpatient_record"], as_dict=True
-	) or {}
+	row = (
+		frappe.db.get_value(
+			"Patient Medication Order", mo_name, ["reference_doctype", "inpatient_record"], as_dict=True
+		)
+		or {}
+	)
 	return bool(row.get("inpatient_record")) or row.get("reference_doctype") == "Inpatient Admission"
 
 
@@ -36,7 +40,7 @@ def _guard_rose_pharmacy_inpatient(medication_order, profile=None):
 		return
 	if cint(getattr(profile, "custom_is_hospital_pharmacy", 0)):
 		return
-	mos = medication_order if isinstance(medication_order, (list, tuple, set)) else [medication_order]
+	mos = medication_order if isinstance(medication_order, list | tuple | set) else [medication_order]
 	for mo in mos:
 		if _medication_order_is_inpatient(mo):
 			frappe.throw(
@@ -79,7 +83,7 @@ def get_current_pos_opening_entry():
 def _as_bool(value):
 	if isinstance(value, bool):
 		return value
-	if isinstance(value, (int, float)):
+	if isinstance(value, int | float):
 		return bool(value)
 	return str(value or "").strip().lower() in ("true", "1", "yes")
 
@@ -511,7 +515,9 @@ def get_invoice_details(invoice_id):
 		elif len(payment_methods) == 1:
 			mode_label = payment_methods[0]["mode_of_payment"]
 		else:
-			mode_label = "/".join([pm["mode_of_payment"] for pm in payment_methods if pm.get("mode_of_payment")])
+			mode_label = "/".join(
+				[pm["mode_of_payment"] for pm in payment_methods if pm.get("mode_of_payment")]
+			)
 		invoice_data["mode_of_payment"] = mode_label
 		invoice_data["paymentMethod"] = mode_label
 		invoice_data["payment_method"] = mode_label
@@ -535,9 +541,7 @@ def _resolve_invoice_payment_methods(invoice_doc):
 	payment_methods = []
 	for payment in invoice_doc.get("payments") or []:
 		if payment.mode_of_payment:
-			payment_methods.append(
-				{"mode_of_payment": payment.mode_of_payment, "amount": payment.amount}
-			)
+			payment_methods.append({"mode_of_payment": payment.mode_of_payment, "amount": payment.amount})
 
 	if payment_methods:
 		return payment_methods
@@ -555,9 +559,7 @@ def _resolve_invoice_payment_methods(invoice_doc):
 			"Payment Entry", pe_ref.parent, ["docstatus", "mode_of_payment"]
 		) or (None, None)
 		if pe_status == 1 and pe_mode:
-			payment_methods.append(
-				{"mode_of_payment": pe_mode, "amount": pe_ref.allocated_amount}
-			)
+			payment_methods.append({"mode_of_payment": pe_mode, "amount": pe_ref.allocated_amount})
 
 	return payment_methods
 
@@ -586,8 +588,10 @@ def check_invoice_return_eligibility(invoice_id):
 		}
 
 	except Exception as e:
-		frappe.log_error(frappe.get_traceback(), f"Error checking return eligibility for invoice {invoice_id}")
-		return {"can_return": False, "reason": f"Error checking eligibility: {str(e)}"}
+		frappe.log_error(
+			frappe.get_traceback(), f"Error checking return eligibility for invoice {invoice_id}"
+		)
+		return {"can_return": False, "reason": f"Error checking eligibility: {e!s}"}
 
 
 def _resolve_dispensing_lot_serials(lot_text):
@@ -697,6 +701,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 		invoice_date = frappe.utils.today()
 		if not isinstance(invoice_date, date_type):
 			from datetime import datetime
+
 			try:
 				if isinstance(invoice_date, str):
 					invoice_date = datetime.strptime(invoice_date, "%Y-%m-%d").date()
@@ -763,7 +768,6 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 
 		# NEW RULE: If invoice is older than 14 days, mark all items as non-returnable
 		if days_since_invoice > 14:
-
 			items.append(
 				{
 					"item_code": item.item_code,
@@ -781,7 +785,6 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 				}
 			)
 			continue
-
 
 		is_non_returnable = False
 		if item.item_group and item.item_group in item_group_map:
@@ -882,7 +885,7 @@ def _get_address_and_customer_info(invoice):
 # 		# Validate input data
 # 		if not data:
 # 			frappe.throw("No data provided for invoice creation")
-		
+
 # 		(
 # 			customer,
 # 			items,
@@ -997,186 +1000,192 @@ def _get_address_and_customer_info(invoice):
 # 		frappe.log_error(frappe.get_traceback(), "Submit Invoice Error")
 # 		return {"success": False, "message": str(e)}
 
+
 @frappe.whitelist()
 def create_and_submit_invoice(data):
-    try:
-        import time
-        start_time = time.time()
+	try:
+		import time
 
-        # Coarse access gate: only POS/pharmacy/sales users (or POS Profile members) may bill.
-        from klik_pos.klik_pos.utils import require_pos_access
-        require_pos_access()
+		start_time = time.time()
 
-        if not data:
-            frappe.throw("No data provided for invoice creation")
+		# Coarse access gate: only POS/pharmacy/sales users (or POS Profile members) may bill.
+		from klik_pos.klik_pos.utils import require_pos_access
 
-        if isinstance(data, str):
-            data = json.loads(data)
+		require_pos_access()
 
-        draft_invoice_id = data.get("draftInvoiceId") or data.get("draft_invoice_id")
+		if not data:
+			frappe.throw("No data provided for invoice creation")
 
-        (
-            customer,
-            items,
-            amount_paid,
-            sales_and_tax_charges,
-            mode_of_payment,
-            business_type,
-            roundoff_amount,
-            delivery_personnel,
-            delivery_via,
-            reference_no,
-            medication_order,
-            redeem_loyalty_points,
-            loyalty_points,
-            general_additional_amount,
-            additional_remark,
-            delivery_distance_km,
-            delivery_charge_amount,
-            health_insurance,
-            insurance_amount,
-            insurance_is_credit,
-        ) = parse_invoice_data(data)
+		if isinstance(data, str):
+			data = json.loads(data)
 
-        if not customer:
-            frappe.throw("Customer is required")
-        if not items or len(items) == 0:
-            frappe.throw("At least one item is required")
+		draft_invoice_id = data.get("draftInvoiceId") or data.get("draft_invoice_id")
 
-        # Rose (outpatient-only) pharmacy must not dispense inpatient medication orders.
-        _guard_rose_pharmacy_inpatient(medication_order)
+		(
+			customer,
+			items,
+			amount_paid,
+			sales_and_tax_charges,
+			mode_of_payment,
+			business_type,
+			roundoff_amount,
+			delivery_personnel,
+			delivery_via,
+			reference_no,
+			medication_order,
+			redeem_loyalty_points,
+			loyalty_points,
+			general_additional_amount,
+			additional_remark,
+			delivery_distance_km,
+			delivery_charge_amount,
+			health_insurance,
+			insurance_amount,
+			insurance_is_credit,
+		) = parse_invoice_data(data)
 
-        # Validate dispensed medication quantities against stock (not the prescribed qty).
-        try:
-            from klik_pos.api.sales_order import validate_dispense_quantities
+		if not customer:
+			frappe.throw("Customer is required")
+		if not items or len(items) == 0:
+			frappe.throw("At least one item is required")
 
-            validate_dispense_quantities(items)
-        except frappe.ValidationError:
-            raise
-        except Exception:
-            frappe.log_error(frappe.get_traceback(), "Dispense-quantity validation skipped")
+		# Rose (outpatient-only) pharmacy must not dispense inpatient medication orders.
+		_guard_rose_pharmacy_inpatient(medication_order)
 
-        existing_doc = None
-        if draft_invoice_id:
-            existing_doc = frappe.get_doc("Sales Invoice", draft_invoice_id)
-            if existing_doc.docstatus != 0:
-                frappe.throw(
-                    _("Draft invoice {0} is no longer editable").format(draft_invoice_id)
-                )
+		# Validate dispensed medication quantities against stock (not the prescribed qty).
+		try:
+			from klik_pos.api.sales_order import validate_dispense_quantities
 
-        # ── Wrap everything in a savepoint so ANY failure rolls back fully ──
-        # frappe.db.savepoint() creates a SQL SAVEPOINT; rolling back to it
-        # undoes the save AND the submit atomically — no orphaned drafts.
-        savepoint = "create_and_submit_invoice"
-        frappe.db.savepoint(savepoint)
+			validate_dispense_quantities(items)
+		except frappe.ValidationError:
+			raise
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "Dispense-quantity validation skipped")
 
-        try:
-            doc = build_sales_invoice_doc(
-                customer,
-                items,
-                amount_paid,
-                sales_and_tax_charges,
-                mode_of_payment,
-                business_type,
-                roundoff_amount,
-                include_payments=True,
-                delivery_personnel=delivery_personnel,
-                delivery_via=delivery_via,
-                reference_no=reference_no,
-                medication_order=medication_order,
-                redeem_loyalty_points=redeem_loyalty_points,
-                loyalty_points=loyalty_points,
-                general_additional_amount=general_additional_amount,
-                additional_remark=additional_remark,
-                delivery_distance_km=delivery_distance_km,
-                delivery_charge_amount=delivery_charge_amount,
-                health_insurance=health_insurance,
-                insurance_amount=insurance_amount,
-                insurance_is_credit=insurance_is_credit,
-                existing_doc=existing_doc,
-            )
+		existing_doc = None
+		if draft_invoice_id:
+			existing_doc = frappe.get_doc("Sales Invoice", draft_invoice_id)
+			if existing_doc.docstatus != 0:
+				frappe.throw(_("Draft invoice {0} is no longer editable").format(draft_invoice_id))
 
-            doc.base_paid_amount = amount_paid
-            doc.paid_amount = amount_paid
-            if not (health_insurance and insurance_is_credit):
-                doc.outstanding_amount = 0
+		# ── Wrap everything in a savepoint so ANY failure rolls back fully ──
+		# frappe.db.savepoint() creates a SQL SAVEPOINT; rolling back to it
+		# undoes the save AND the submit atomically — no orphaned drafts.
+		savepoint = "create_and_submit_invoice"
+		frappe.db.savepoint(savepoint)
 
-            doc.save(ignore_permissions=True)
-            doc.submit()  # ← stock validation happens here; if it throws, we rollback
+		try:
+			doc = build_sales_invoice_doc(
+				customer,
+				items,
+				amount_paid,
+				sales_and_tax_charges,
+				mode_of_payment,
+				business_type,
+				roundoff_amount,
+				include_payments=True,
+				delivery_personnel=delivery_personnel,
+				delivery_via=delivery_via,
+				reference_no=reference_no,
+				medication_order=medication_order,
+				redeem_loyalty_points=redeem_loyalty_points,
+				loyalty_points=loyalty_points,
+				general_additional_amount=general_additional_amount,
+				additional_remark=additional_remark,
+				delivery_distance_km=delivery_distance_km,
+				delivery_charge_amount=delivery_charge_amount,
+				health_insurance=health_insurance,
+				insurance_amount=insurance_amount,
+				insurance_is_credit=insurance_is_credit,
+				existing_doc=existing_doc,
+			)
 
-            # Clinical safety (BRD PHA-02): record drug-allergy / duplicate-therapy alerts on the
-            # invoice as an audit trail. Advisory only — never blocks a completed sale.
-            try:
-                from klik_pos.api.clinical_alerts import record_dispense_alerts
-                record_dispense_alerts(doc, items)
-            except Exception:
-                frappe.log_error(frappe.get_traceback(), f"Dispense safety check failed for {doc.name}")
+			doc.base_paid_amount = amount_paid
+			doc.paid_amount = amount_paid
+			if not (health_insurance and insurance_is_credit):
+				doc.outstanding_amount = 0
 
-            # Controlled-drug register (BRD PHA-07): log any narcotic/psychotropic dispensed.
-            try:
-                from klik_pos.api.controlled_drugs import record_controlled_dispense
-                record_controlled_dispense(doc, items)
-            except Exception:
-                frappe.log_error(frappe.get_traceback(), f"Controlled-drug register failed for {doc.name}")
+			doc.save(ignore_permissions=True)
+			doc.submit()  # ← stock validation happens here; if it throws, we rollback
 
-            # Create the Insurance Claim for the insurance split so the payer is actually billed.
-            # Non-blocking: a claim failure is logged but does not roll back the completed sale.
-            if health_insurance and flt(insurance_amount) > 0:
-                try:
-                    from klik_pos.api.insurance_claim import create_insurance_claim_for_pos
-                    create_insurance_claim_for_pos(doc, health_insurance, flt(insurance_amount))
-                except Exception:
-                    frappe.log_error(frappe.get_traceback(), f"POS Insurance Claim creation failed for {doc.name}")
+			# Clinical safety (BRD PHA-02): record drug-allergy / duplicate-therapy alerts on the
+			# invoice as an audit trail. Advisory only — never blocks a completed sale.
+			try:
+				from klik_pos.api.clinical_alerts import record_dispense_alerts
 
-            payment_entry = None
-            should_create_payment_entry = False
+				record_dispense_alerts(doc, items)
+			except Exception:
+				frappe.log_error(frappe.get_traceback(), f"Dispense safety check failed for {doc.name}")
 
-            if business_type == "B2B":
-                should_create_payment_entry = True
-            elif business_type == "B2B & B2C":
-                global _cached_customer_data
-                if customer not in _cached_customer_data:
-                    _cached_customer_data[customer] = frappe.get_doc("Customer", customer)
-                customer_doc = _cached_customer_data[customer]
-                if customer_doc.customer_type == "Company":
-                    should_create_payment_entry = True
+			# Controlled-drug register (BRD PHA-07): log any narcotic/psychotropic dispensed.
+			try:
+				from klik_pos.api.controlled_drugs import record_controlled_dispense
 
-            if should_create_payment_entry and mode_of_payment and amount_paid > 0:
-                try:
-                    payment_entry = create_payment_entry(doc, mode_of_payment, amount_paid)
-                except Exception:
-                    frappe.log_error(frappe.get_traceback(), f"Payment Entry Error for {doc.name}")
-                    payment_entry = None
+				record_controlled_dispense(doc, items)
+			except Exception:
+				frappe.log_error(frappe.get_traceback(), f"Controlled-drug register failed for {doc.name}")
 
-            processing_time = time.time() - start_time
-            frappe.logger().info(f"Invoice {doc.name} processed in {processing_time:.2f} seconds")
+			# Create the Insurance Claim for the insurance split so the payer is actually billed.
+			# Non-blocking: a claim failure is logged but does not roll back the completed sale.
+			if health_insurance and flt(insurance_amount) > 0:
+				try:
+					from klik_pos.api.insurance_claim import create_insurance_claim_for_pos
 
-            return {
-                "success": True,
-                "invoice_name": doc.name,
-                "invoice_id": doc.name,
-                "invoice": _invoice_preview_payload(doc),
-                "payment_entry": payment_entry.name if payment_entry else None,
-                "processing_time": round(processing_time, 2),
-            }
+					create_insurance_claim_for_pos(doc, health_insurance, flt(insurance_amount))
+				except Exception:
+					frappe.log_error(
+						frappe.get_traceback(), f"POS Insurance Claim creation failed for {doc.name}"
+					)
 
-        except Exception as inner_e:
-            # Roll back the savepoint — undoes save + submit, no draft left behind
-            frappe.db.rollback(save_point=savepoint)
-            frappe.log_error(frappe.get_traceback(), "Submit Invoice Error - Rolled Back")
-            
-            # Extract a clean error message for the frontend
-            error_msg = str(inner_e)
-            # frappe.throw() wraps messages in ValidationError; unwrap it
-            if hasattr(inner_e, "message"):
-                error_msg = inner_e.message
-            
-            return {"success": False, "message": error_msg}
+			payment_entry = None
+			should_create_payment_entry = False
 
-    except Exception as outer_e:
-        # Catches parse/validation errors before the savepoint
-        frappe.log_error(frappe.get_traceback(), "Submit Invoice Parse Error")
-        return {"success": False, "message": str(outer_e)}
+			if business_type == "B2B":
+				should_create_payment_entry = True
+			elif business_type == "B2B & B2C":
+				global _cached_customer_data
+				if customer not in _cached_customer_data:
+					_cached_customer_data[customer] = frappe.get_doc("Customer", customer)
+				customer_doc = _cached_customer_data[customer]
+				if customer_doc.customer_type == "Company":
+					should_create_payment_entry = True
+
+			if should_create_payment_entry and mode_of_payment and amount_paid > 0:
+				try:
+					payment_entry = create_payment_entry(doc, mode_of_payment, amount_paid)
+				except Exception:
+					frappe.log_error(frappe.get_traceback(), f"Payment Entry Error for {doc.name}")
+					payment_entry = None
+
+			processing_time = time.time() - start_time
+			frappe.logger().info(f"Invoice {doc.name} processed in {processing_time:.2f} seconds")
+
+			return {
+				"success": True,
+				"invoice_name": doc.name,
+				"invoice_id": doc.name,
+				"invoice": _invoice_preview_payload(doc),
+				"payment_entry": payment_entry.name if payment_entry else None,
+				"processing_time": round(processing_time, 2),
+			}
+
+		except Exception as inner_e:
+			# Roll back the savepoint — undoes save + submit, no draft left behind
+			frappe.db.rollback(save_point=savepoint)
+			frappe.log_error(frappe.get_traceback(), "Submit Invoice Error - Rolled Back")
+
+			# Extract a clean error message for the frontend
+			error_msg = str(inner_e)
+			# frappe.throw() wraps messages in ValidationError; unwrap it
+			if hasattr(inner_e, "message"):
+				error_msg = inner_e.message
+
+			return {"success": False, "message": error_msg}
+
+	except Exception as outer_e:
+		# Catches parse/validation errors before the savepoint
+		frappe.log_error(frappe.get_traceback(), "Submit Invoice Parse Error")
+		return {"success": False, "message": str(outer_e)}
 
 
 @frappe.whitelist()
@@ -1353,7 +1362,7 @@ def parse_invoice_data(data):
 	reference_no = data.get("referenceNo") or data.get("reference_no")
 	# Extract Patient Medication Order (when items came from medication order)
 	medication_order = data.get("medicationOrder")
-	
+
 	# Fallback: extract from items if top-level medicationOrder is empty (e.g. mobile payment flow)
 	if not medication_order and items:
 		orders_from_items = set()
@@ -1378,12 +1387,8 @@ def parse_invoice_data(data):
 	additional_remark = data.get("additionalRemark") or data.get("additional_remark")
 
 	# Delivery distance (km) and delivery charge amount (from Select Delivery Personnel modal)
-	delivery_distance_km = flt(
-		data.get("deliveryDistanceKm") or data.get("delivery_distance_km") or 0
-	)
-	delivery_charge_amount = flt(
-		data.get("deliveryChargeAmount") or data.get("delivery_charge_amount") or 0
-	)
+	delivery_distance_km = flt(data.get("deliveryDistanceKm") or data.get("delivery_distance_km") or 0)
+	delivery_charge_amount = flt(data.get("deliveryChargeAmount") or data.get("delivery_charge_amount") or 0)
 
 	# Insurance (Health Insurance): link and amount to be covered; is_credit = patient pays now, insurance pays later
 	health_insurance = data.get("healthInsurance") or data.get("health_insurance")
@@ -1503,32 +1508,29 @@ def build_sales_invoice_doc(
 		doc.custom_health_insurance = health_insurance
 	if flt(insurance_amount) and frappe.db.has_column("Sales Invoice", "custom_amount_to_be_covered"):
 		doc.custom_amount_to_be_covered = flt(insurance_amount)
-	
+
 	# Set Patient Medication Orders (Table MultiSelect) if items came from orders and field exists
 	if medication_order and doc.meta.has_field("custom_medication_order"):
 		orders = medication_order
 
 		if isinstance(orders, str):
 			orders = [orders]
-		elif isinstance(orders, (set, tuple)):
+		elif isinstance(orders, set | tuple):
 			orders = list(orders)
 		elif not isinstance(orders, list):
 			orders = [orders]
-		
+
 		for order_name in orders:
 			if not order_name:
 				continue
-			
+
 			doc.append("custom_medication_order", {"medication_order": order_name})
-			
-		
+
 		if frappe.db.has_column("Sales Invoice", "patient"):
 			first_order = orders[0]
 			if first_order:
 				try:
-					patient_name = frappe.db.get_value(
-						"Patient Medication Order", first_order, "patient"
-					)
+					patient_name = frappe.db.get_value("Patient Medication Order", first_order, "patient")
 					if patient_name:
 						doc.patient = patient_name
 				except Exception:
@@ -1588,9 +1590,12 @@ def _pos_item_row_for_lot_validation(item, item_code, lot, qty):
 	conversion_factor = 1.0
 	stock_uom = lot.stock_uom or frappe.db.get_value("Item", item_code, "stock_uom")
 	if uom and stock_uom and uom != stock_uom:
-		conversion_factor = frappe.db.get_value(
-			"UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor"
-		) or 1.0
+		conversion_factor = (
+			frappe.db.get_value(
+				"UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor"
+			)
+			or 1.0
+		)
 
 	return frappe._dict(
 		item_code=item_code,
@@ -1605,7 +1610,9 @@ def _validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot_name=None)
 	Validate dispensing lot sale from POS cart line.
 	Multiple lots are stored on custom_dispensing_lot (Long Text), one pack per lot.
 	"""
-	from beveren_health.beveren_health.customize.dispensing_lot import validate_dispensing_lot_for_sale
+	from beveren_health.beveren_health.customize.dispensing_lot import (
+		validate_dispensing_lot_for_sale,
+	)
 
 	stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
 	sell_uom = item.get("uom") or stock_uom
@@ -1615,15 +1622,13 @@ def _validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot_name=None)
 		line_qty = flt(item.get("quantity"))
 		if line_qty and line_qty != len(lot_names):
 			frappe.throw(
-				_(
-					"Quantity {0} must match the number of dispensing lots selected ({1}) on item {2}."
-				).format(line_qty, len(lot_names), item_code)
+				_("Quantity {0} must match the number of dispensing lots selected ({1}) on item {2}.").format(
+					line_qty, len(lot_names), item_code
+				)
 			)
 		for lot_name in lot_names:
 			lot = frappe.get_doc("Dispensing Lot", lot_name)
-			validate_dispensing_lot_for_sale(
-				_pos_item_row_for_lot_validation(item, item_code, lot, 1), lot
-			)
+			validate_dispensing_lot_for_sale(_pos_item_row_for_lot_validation(item, item_code, lot, 1), lot)
 		return
 
 	if not lot_names:
@@ -1632,9 +1637,7 @@ def _validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot_name=None)
 	lot_name = lot_names[0]
 	lot = frappe.get_doc("Dispensing Lot", lot_name)
 	qty = flt(item.get("quantity"))
-	validate_dispensing_lot_for_sale(
-		_pos_item_row_for_lot_validation(item, item_code, lot, qty), lot
-	)
+	validate_dispensing_lot_for_sale(_pos_item_row_for_lot_validation(item, item_code, lot, qty), lot)
 
 
 def _validate_and_autofetch_batch_and_serial(items, pos_profile):
@@ -1672,7 +1675,9 @@ def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 		serial_number = item.get("serialNumber")
 		lot_names = _collect_dispensing_lot_names_for_pos_item(item)
 
-		from beveren_health.beveren_health.customize.dispensing_lot import item_requires_dispensing_lot
+		from beveren_health.beveren_health.customize.dispensing_lot import (
+			item_requires_dispensing_lot,
+		)
 
 		if item_requires_dispensing_lot(item_code):
 			if has_batch_no and not batch_number:
@@ -1704,9 +1709,9 @@ def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 		# Serial-number items: always require explicit selection from UI
 		if has_serial_no and not serial_number:
 			frappe.throw(
-				_("Serial number is mandatory for Item {0}. Please select serial numbers before submitting.").format(
-					item_code
-				)
+				_(
+					"Serial number is mandatory for Item {0}. Please select serial numbers before submitting."
+				).format(item_code)
 			)
 
 		# Batch-number items: optionally auto-fetch, otherwise require explicit batch
@@ -1771,6 +1776,7 @@ def _autofetch_batch_fifo(item_code, warehouse, qty):
 		)
 
 	return batches[0].name if batches else None
+
 
 def _get_active_pos_profile():
 	"""Get the active POS profile from current session or fallback to default."""
@@ -1941,7 +1947,6 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 		item_data["allow_zero_valuation_rate"] = 1
 	item_data["allow_zero_valuation_rate"] = 1
 
-
 	# Add optional fields
 	_add_uom_to_item(item_data, item)
 	_add_batch_to_item(item_data, item, item_data_map.get(item_code, {}))
@@ -1955,9 +1960,7 @@ def _prepare_item_data(item, item_data_map, pos_profile):
 
 
 # Roles allowed to exceed a POS profile's max-discount cap.
-_DISCOUNT_OVERRIDE_ROLES = frozenset(
-	{"System Manager", "Administrator", "Healthcare Administrator"}
-)
+_DISCOUNT_OVERRIDE_ROLES = frozenset({"System Manager", "Administrator", "Healthcare Administrator"})
 
 
 def _enforce_and_record_discount(item_data, item, pos_profile):
@@ -2168,9 +2171,7 @@ def _add_item_tax_template_to_item(item_data, item, pos_profile):
 def _additional_charge_item_can_sell_without_batch(row):
 	"""Additional amounts are a fee, so the item must not post batch or serial stock."""
 	return not (
-		cint(row.get("is_stock_item"))
-		or cint(row.get("has_batch_no"))
-		or cint(row.get("has_serial_no"))
+		cint(row.get("is_stock_item")) or cint(row.get("has_batch_no")) or cint(row.get("has_serial_no"))
 	)
 
 
@@ -2234,7 +2235,9 @@ def _ensure_additional_charge_item():
 	return item.name
 
 
-def _append_additional_charge_items(doc, items, general_additional_amount, pos_profile, additional_remark=None):
+def _append_additional_charge_items(
+	doc, items, general_additional_amount, pos_profile, additional_remark=None
+):
 	"""Map additional amounts to a dedicated service Item (custom_is_additional_charges = 1)."""
 	# Sum per-item additional amounts from payload
 	total_item_additional = sum(
@@ -2432,70 +2435,66 @@ def _add_additional_amounts_to_taxes(doc, items, general_additional_amount, pos_
 	return
 
 
-
 def _add_payment_entries(doc, mode_of_payment):
-    """Add payment entries to the invoice. If none provided, use POS default with amount 0."""
-    if isinstance(mode_of_payment, list) and len(mode_of_payment) > 0:
-        # Frontend provided payment methods — use them as-is
-        for payment in mode_of_payment:
-            doc.append(
-                "payments",
-                {"mode_of_payment": payment["method"], "amount": payment["amount"]},
-            )
-        return
+	"""Add payment entries to the invoice. If none provided, use POS default with amount 0."""
+	if isinstance(mode_of_payment, list) and len(mode_of_payment) > 0:
+		# Frontend provided payment methods — use them as-is
+		for payment in mode_of_payment:
+			doc.append(
+				"payments",
+				{"mode_of_payment": payment["method"], "amount": payment["amount"]},
+			)
+		return
 
-    # No payment methods from frontend — fall back to POS profile default
-    try:
-        pos_profile = _get_active_pos_profile()
+	# No payment methods from frontend — fall back to POS profile default
+	try:
+		pos_profile = _get_active_pos_profile()
 
-        default_mop = None
+		default_mop = None
 
-        # Try POS profile payments child table — prefer the one marked default
-        if getattr(pos_profile, "payments", None):
-            for payment in pos_profile.payments:
-                if getattr(payment, "default", 0):
-                    default_mop = payment.mode_of_payment
-                    break
-            # If none is marked default, take the first one
-            if not default_mop and pos_profile.payments:
-                default_mop = pos_profile.payments[0].mode_of_payment
+		# Try POS profile payments child table — prefer the one marked default
+		if getattr(pos_profile, "payments", None):
+			for payment in pos_profile.payments:
+				if getattr(payment, "default", 0):
+					default_mop = payment.mode_of_payment
+					break
+			# If none is marked default, take the first one
+			if not default_mop and pos_profile.payments:
+				default_mop = pos_profile.payments[0].mode_of_payment
 
-        if not default_mop:
-            frappe.log_error(
-                f"No default mode of payment found in POS Profile {pos_profile.name}",
-                "add_payment_entries_fallback"
-            )
-            return
+		if not default_mop:
+			frappe.log_error(
+				f"No default mode of payment found in POS Profile {pos_profile.name}",
+				"add_payment_entries_fallback",
+			)
+			return
 
-        # Get the account linked to this MOP for the company
-        mop_account = frappe.db.get_value(
-            "Mode of Payment Account",
-            {
-                "parent": default_mop,
-                "company": pos_profile.company,
-            },
-            "default_account",
-        )
+		# Get the account linked to this MOP for the company
+		mop_account = frappe.db.get_value(
+			"Mode of Payment Account",
+			{
+				"parent": default_mop,
+				"company": pos_profile.company,
+			},
+			"default_account",
+		)
 
-        mop_type = frappe.db.get_value("Mode of Payment", default_mop, "type") or "Cash"
+		mop_type = frappe.db.get_value("Mode of Payment", default_mop, "type") or "Cash"
 
-        doc.append(
-            "payments",
-            {
-                "mode_of_payment": default_mop,
-                "account": mop_account or "",
-                "amount": 0,
-                "base_amount": 0,
-                "default": 1,
-                "type": mop_type,
-            },
-        )
+		doc.append(
+			"payments",
+			{
+				"mode_of_payment": default_mop,
+				"account": mop_account or "",
+				"amount": 0,
+				"base_amount": 0,
+				"default": 1,
+				"type": mop_type,
+			},
+		)
 
-    except Exception:
-        frappe.log_error(
-            frappe.get_traceback(),
-            "Error attaching default MOP from POS profile"
-        )
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Error attaching default MOP from POS profile")
 
 
 def get_tax_template(template_name):
@@ -2522,6 +2521,7 @@ def get_tax_template(template_name):
 
 	return _cached_item_accounts[cache_key]
 
+
 def get_item_tax_template(template_name):
 	"""
 	Optimized tax template getter with caching.
@@ -2546,6 +2546,7 @@ def get_item_tax_template(template_name):
 			_cached_item_accounts[cache_key] = None
 
 	return _cached_item_accounts[cache_key]
+
 
 def get_customer_billing_currency(customer):
 	try:
@@ -2652,6 +2653,7 @@ def validate_return_restrictions(invoice_doc):
 		invoice_date = frappe.utils.today()
 		if not isinstance(invoice_date, date_type):
 			from datetime import datetime
+
 			try:
 				if isinstance(invoice_date, str):
 					invoice_date = datetime.strptime(invoice_date, "%Y-%m-%d").date()
@@ -2669,7 +2671,10 @@ def validate_return_restrictions(invoice_doc):
 
 	# NEW RULE: All invoices older than 14 days cannot be returned
 	if days_since_invoice > 14:
-		return False, f"Cannot return this invoice. Invoice is {days_since_invoice} days old. Returns are only allowed within 14 days of the invoice date."
+		return (
+			False,
+			f"Cannot return this invoice. Invoice is {days_since_invoice} days old. Returns are only allowed within 14 days of the invoice date.",
+		)
 
 	# For invoices <= 14 days, check item/group restrictions
 	non_returnable_items = []
@@ -2773,7 +2778,9 @@ def _reject_if_return_qty_exceeds_remaining(original_invoice, requested):
 
 		if qty - remaining > 0.0001:
 			if item_remaining <= 0.0001:
-				errors.append(_("{0} is already fully returned on {1}.").format(item_code, original_invoice.name))
+				errors.append(
+					_("{0} is already fully returned on {1}.").format(item_code, original_invoice.name)
+				)
 			else:
 				errors.append(
 					_("Cannot return {0} of {1}. Only {2} is still available on {3}.").format(
@@ -2997,7 +3004,6 @@ def set_grand_total_with_roundoff(doc, method):
 	calculate_taxes_and_totals.calculate_totals = custom_calculate_totals
 
 
-
 def enforce_zero_rate_for_free_items(doc, method):
 	"""
 	Final safety net before save/submit:
@@ -3127,7 +3133,9 @@ def set_total_taxes_for_item_template(doc, method):
 		# Base amount for this item (the amount tax is calculated on).
 		# For returns, item amount/net_amount can still be positive when built from mapped doc
 		# (only qty is flipped). Force tax base to match net_total sign so tax is negative on returns.
-		item_base = getattr(item, "net_amount", None) or getattr(item, "base_net_amount", None) or item.amount or 0
+		item_base = (
+			getattr(item, "net_amount", None) or getattr(item, "base_net_amount", None) or item.amount or 0
+		)
 		item_base = flt(item_base or 0)
 		if is_return and item_base > 0:
 			item_base = -abs(item_base)
@@ -3136,19 +3144,15 @@ def set_total_taxes_for_item_template(doc, method):
 
 		# Initialize template tracking
 		if item_template not in template_totals:
-			template_totals[item_template] = {
-				'base_amount': 0,
-				'tax_rows': {}
-			}
+			template_totals[item_template] = {"base_amount": 0, "tax_rows": {}}
 
-		template_totals[item_template]['base_amount'] += item_base
+		template_totals[item_template]["base_amount"] += item_base
 
 		# Item Tax Template has child table "taxes" with fields:
 		# - tax_type (Link to Account)
 		# - tax_rate (percentage)
 
 		for tax_row in tax_doc.taxes:
-
 			# Get the tax account and rate from Item Tax Template structure
 			tax_account = tax_row.tax_type  # This is the account head
 			tax_rate = tax_row.tax_rate or 0
@@ -3159,16 +3163,16 @@ def set_total_taxes_for_item_template(doc, method):
 			# Create unique key for this tax row within this template
 			row_key = tax_account  # Item Tax Template doesn't have cost center per row
 
-			if row_key not in template_totals[item_template]['tax_rows']:
-				template_totals[item_template]['tax_rows'][row_key] = {
-					'account_head': tax_account,
-					'rate': tax_rate,
-					'tax_amount': 0
+			if row_key not in template_totals[item_template]["tax_rows"]:
+				template_totals[item_template]["tax_rows"][row_key] = {
+					"account_head": tax_account,
+					"rate": tax_rate,
+					"tax_amount": 0,
 				}
 
 			# Calculate tax for this item
 			row_tax = (item_base * tax_rate) / 100.0
-			template_totals[item_template]['tax_rows'][row_key]['tax_amount'] += row_tax
+			template_totals[item_template]["tax_rows"][row_key]["tax_amount"] += row_tax
 
 	# Default cost center fallback
 	default_cc = frappe.db.get_value("Company", doc.company, "cost_center")
@@ -3176,21 +3180,23 @@ def set_total_taxes_for_item_template(doc, method):
 	# Create tax rows - one set per template, and accumulate the total tax
 	total_tax = 0.0
 	for template_name, template_data in template_totals.items():
-		for row_key, row_data in template_data['tax_rows'].items():
+		for row_data in template_data["tax_rows"].values():
 			# Add to numeric total (per-template tax based on actual billed amounts)
-			total_tax += row_data['tax_amount']
+			total_tax += row_data["tax_amount"]
 
 			# Create description that shows which template this is from
 			# Include the tax rate to make it clearer
 			description = f"{template_name} ({row_data['rate']}%)"
 
-			tax_amt = flt(row_data['tax_amount'], doc.precision("total_taxes_and_charges") or 2)
-			base_tax_amt = flt(tax_amt * (doc.conversion_rate or 1), doc.precision("base_total_taxes_and_charges") or 2)
+			tax_amt = flt(row_data["tax_amount"], doc.precision("total_taxes_and_charges") or 2)
+			base_tax_amt = flt(
+				tax_amt * (doc.conversion_rate or 1), doc.precision("base_total_taxes_and_charges") or 2
+			)
 			doc.append(
 				"taxes",
 				{
 					"charge_type": "On Net Total",
-					"account_head": row_data['account_head'],
+					"account_head": row_data["account_head"],
 					"description": description,
 					"cost_center": doc.cost_center or default_cc,
 					"tax_amount": tax_amt,
@@ -3227,6 +3233,7 @@ def set_total_taxes_for_item_template(doc, method):
 			item_template = getattr(item, "item_tax_template", None)
 			if not item_template:
 				from klik_pos.api import tax as tax_api
+
 				res = tax_api.get_item_tax_template_for_item(item.item_code, doc.company)
 				if res and res.get("item_tax_template"):
 					item_template = res["item_tax_template"]
@@ -3246,9 +3253,7 @@ def set_total_taxes_for_item_template(doc, method):
 			item_uom = getattr(item, "uom", None)
 			price_list = getattr(doc, "selling_price_list", None)
 			if not price_list and getattr(doc, "pos_profile", None):
-				price_list = frappe.db.get_value(
-					"POS Profile", doc.pos_profile, "selling_price_list"
-				)
+				price_list = frappe.db.get_value("POS Profile", doc.pos_profile, "selling_price_list")
 
 			try:
 				stock_uom, standard_rate = frappe.db.get_value(
@@ -3376,7 +3381,9 @@ def set_total_taxes_for_item_template(doc, method):
 
 			free_items_total_tax += amount
 			tax_amt = flt(amount, doc.precision("total_taxes_and_charges") or 2)
-			base_tax_amt = flt(amount * (doc.conversion_rate or 1), doc.precision("base_total_taxes_and_charges") or 2)
+			base_tax_amt = flt(
+				amount * (doc.conversion_rate or 1), doc.precision("base_total_taxes_and_charges") or 2
+			)
 			doc.append(
 				"taxes",
 				{
@@ -3399,9 +3406,7 @@ def set_total_taxes_for_item_template(doc, method):
 	# For returns, total_tax_with_free can be negative; still update doc totals.
 	total_tax_with_free = base_tax_amount + total_tax + free_items_total_tax
 	if total_tax_with_free != 0:
-		doc.total_taxes_and_charges = flt(
-			total_tax_with_free, doc.precision("total_taxes_and_charges") or 2
-		)
+		doc.total_taxes_and_charges = flt(total_tax_with_free, doc.precision("total_taxes_and_charges") or 2)
 		doc.base_total_taxes_and_charges = flt(
 			total_tax_with_free * (doc.conversion_rate or 1),
 			doc.precision("base_total_taxes_and_charges") or 2,
@@ -3424,6 +3429,7 @@ def set_total_taxes_for_item_template(doc, method):
 	if getattr(doc, "is_pos", 0) and not getattr(doc, "is_return", 0):
 		_recalculate_pos_outstanding_after_totals_change(doc)
 		doc.set_status()
+
 
 def custom_calculate_totals(self):
 	"""Main function to calculate invoice totals with custom round-off logic"""
@@ -3596,8 +3602,6 @@ class CustomSalesInvoice(SalesInvoice):
 			self.taxes = []
 		# frappe.throw(str(self.taxes))
 		return pos
-
-	
 
 	def get_gl_entries(self, warehouse_account=None):
 		from erpnext.accounts.general_ledger import merge_similar_entries
@@ -4071,6 +4075,7 @@ def create_partial_return(
 			invoice_date = frappe.utils.today()
 			if not isinstance(invoice_date, date_type):
 				from datetime import datetime
+
 				try:
 					if isinstance(invoice_date, str):
 						invoice_date = datetime.strptime(invoice_date, "%Y-%m-%d").date()
@@ -4087,13 +4092,17 @@ def create_partial_return(
 
 		# Block all returns if invoice is older than 14 days
 		if days_since_invoice > 14:
-			frappe.throw(f"Cannot return this invoice. Invoice is {days_since_invoice} days old. Returns are only allowed within 14 days of the invoice date.")
+			frappe.throw(
+				f"Cannot return this invoice. Invoice is {days_since_invoice} days old. Returns are only allowed within 14 days of the invoice date."
+			)
 
 		# Validate return restrictions for items being returned (only for invoices <= 14 days)
 		# Check if any of the return_items belong to non-returnable groups or are refrigerated
 		if return_items:
 			# Get item codes being returned
-			return_item_codes = [item.get("item_code") for item in return_items if item.get("return_qty", 0) > 0]
+			return_item_codes = [
+				item.get("item_code") for item in return_items if item.get("return_qty", 0) > 0
+			]
 
 			# Check each item being returned
 			non_returnable_items = []
@@ -4115,7 +4124,9 @@ def create_partial_return(
 					try:
 						item_group_doc = frappe.get_doc("Item Group", original_item.item_group)
 						if getattr(item_group_doc, "custom_non_returnable", 0):
-							non_returnable_items.append(f"{item_code} ({original_item.item_name or item_code})")
+							non_returnable_items.append(
+								f"{item_code} ({original_item.item_name or item_code})"
+							)
 					except Exception:
 						pass
 
@@ -4415,23 +4426,25 @@ def submit_draft_invoice(invoice_id):
 		frappe.log_error(frappe.get_traceback(), f"Error submitting draft invoice {invoice_id}")
 		return {"success": False, "error": str(e)}
 
+
 from klik_pos.api.pos_profile import get_pos_details
+
+
 def _set_accounting_dimensions(doc):
-    """
-    Set accounting dimensions (Department, Cost Center, Project) from POS Profile.
-    """
-    # Get POS details which includes cost_center, department, project
-    pos_details = get_pos_details()
-    
-    # Set Cost Center
-    if pos_details.get("cost_center") and frappe.db.has_column("Sales Invoice", "cost_center"):
-        doc.cost_center = pos_details.get("cost_center")
-    
-    # Set Department
-    if pos_details.get("department") and frappe.db.has_column("Sales Invoice", "department"):
-        doc.department = pos_details.get("department")
-    
-    # Set Project
-    if pos_details.get("project") and frappe.db.has_column("Sales Invoice", "project"):
-        doc.project = pos_details.get("project")
-        
+	"""
+	Set accounting dimensions (Department, Cost Center, Project) from POS Profile.
+	"""
+	# Get POS details which includes cost_center, department, project
+	pos_details = get_pos_details()
+
+	# Set Cost Center
+	if pos_details.get("cost_center") and frappe.db.has_column("Sales Invoice", "cost_center"):
+		doc.cost_center = pos_details.get("cost_center")
+
+	# Set Department
+	if pos_details.get("department") and frappe.db.has_column("Sales Invoice", "department"):
+		doc.department = pos_details.get("department")
+
+	# Set Project
+	if pos_details.get("project") and frappe.db.has_column("Sales Invoice", "project"):
+		doc.project = pos_details.get("project")

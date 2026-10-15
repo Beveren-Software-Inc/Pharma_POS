@@ -66,9 +66,7 @@ class TestEmployeeCustomerLink(FrappeTestCase):
 		_link_employee_to_customer("EMP-001", "EMP-001")
 
 		mock_frappe.db.get_value.assert_any_call("Employee", "EMP-001", "employee_name")
-		self.assertEqual(
-			mock_frappe.db.set_value.call_args[0][2]["custom_employee_name"], "Jane Doe"
-		)
+		self.assertEqual(mock_frappe.db.set_value.call_args[0][2]["custom_employee_name"], "Jane Doe")
 
 	@patch("klik_pos.api.employee_billing.frappe")
 	def test_noop_when_customer_fields_not_installed(self, mock_frappe):
@@ -93,9 +91,7 @@ class TestEmployeeCustomerLink(FrappeTestCase):
 
 	@patch("klik_pos.api.employee_billing._link_employee_to_customer")
 	@patch("klik_pos.api.employee_billing.frappe")
-	def test_resolver_links_employee_after_healthcare_creates_customer(
-		self, mock_frappe, mock_link
-	):
+	def test_resolver_links_employee_after_healthcare_creates_customer(self, mock_frappe, mock_link):
 		"""First-time dispense: created customer is linked before being returned."""
 		employee = MagicMock()
 		employee.employee_name = "Jane Doe"

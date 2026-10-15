@@ -24,9 +24,7 @@ def _setting(field: str) -> int:
 def _pink_item_groups() -> set[str]:
 	groups = frappe.cache().get_value(PINK_CACHE_KEY)
 	if groups is None:
-		groups = frappe.get_all(
-			"Item Group", filters={"custom_is_pink": 1}, pluck="name"
-		)
+		groups = frappe.get_all("Item Group", filters={"custom_is_pink": 1}, pluck="name")
 		frappe.cache().set_value(PINK_CACHE_KEY, groups, expires_in_sec=600)
 	return set(groups or [])
 
@@ -34,9 +32,7 @@ def _pink_item_groups() -> set[str]:
 def _is_pharmacy_pos(doc) -> bool:
 	if not doc.get("is_pos") or not doc.get("pos_profile"):
 		return False
-	return bool(
-		frappe.db.get_value("POS Profile", doc.pos_profile, "custom_is_pharmacy")
-	)
+	return bool(frappe.db.get_value("POS Profile", doc.pos_profile, "custom_is_pharmacy"))
 
 
 def validate_pharmacy_issue(doc, method=None) -> None:
@@ -46,9 +42,7 @@ def validate_pharmacy_issue(doc, method=None) -> None:
 
 	# ---------------------------------------------------- PHA-039 / PHA-055
 	if _setting("require_patient_on_pharmacy_sale") and not doc.get("patient"):
-		is_hospital = frappe.db.get_value(
-			"POS Profile", doc.pos_profile, "custom_is_hospital_pharmacy"
-		)
+		is_hospital = frappe.db.get_value("POS Profile", doc.pos_profile, "custom_is_hospital_pharmacy")
 		if is_hospital:
 			frappe.throw(
 				_(
@@ -94,9 +88,7 @@ def stamp_discount_authoriser(doc, method=None) -> None:
 	if not _is_pharmacy_pos(doc):
 		return
 
-	discounted = flt(doc.get("discount_amount")) or flt(
-		doc.get("additional_discount_percentage")
-	)
+	discounted = flt(doc.get("discount_amount")) or flt(doc.get("additional_discount_percentage"))
 	if not discounted:
 		return
 

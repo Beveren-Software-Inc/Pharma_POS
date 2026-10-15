@@ -20,7 +20,10 @@ def get_health_insurance_list():
 	"""
 	try:
 		if not frappe.db.exists("DocType", "Health Insurance"):
-			return {"success": False, "message": "Health Insurance DocType not found. Install Healthcare app."}
+			return {
+				"success": False,
+				"message": "Health Insurance DocType not found. Install Healthcare app.",
+			}
 		has_coverage = frappe.db.has_column("Health Insurance", "insurance_coverage_")
 		has_mop = frappe.db.has_column("Health Insurance", "mode_of_payment")
 		fields = ["name", "insurance_company"]

@@ -48,7 +48,7 @@ def search_employees(search_query: str = "", limit: int = 20):
 		)
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error searching employees")
-		frappe.throw(f"Failed to search employees: {str(e)}")
+		frappe.throw(f"Failed to search employees: {e!s}")
 
 
 def _link_employee_to_customer(customer, employee_id, employee_name=None):
@@ -78,9 +78,7 @@ def _link_employee_to_customer(customer, employee_id, employee_name=None):
 
 	updates = {}
 	if has_employee:
-		current_employee = (
-			frappe.db.get_value("Customer", customer, "custom_employee") or ""
-		).strip()
+		current_employee = (frappe.db.get_value("Customer", customer, "custom_employee") or "").strip()
 		if current_employee != employee_id:
 			updates["custom_employee"] = employee_id
 	if has_employee_name and display_name:
@@ -116,9 +114,7 @@ def _create_or_get_employee_customer(employee_id, display_name=None):
 	if frappe.db.exists("Customer", employee_id):
 		current_name = frappe.db.get_value("Customer", employee_id, "customer_name")
 		if current_name != display_name:
-			frappe.db.set_value(
-				"Customer", employee_id, "customer_name", display_name, update_modified=False
-			)
+			frappe.db.set_value("Customer", employee_id, "customer_name", display_name, update_modified=False)
 		return employee_id
 
 	legacy_name = frappe.db.get_value("Customer", {"customer_name": display_name}, "name")
@@ -168,7 +164,9 @@ def _get_or_create_employee_customer(employee_id):
 
 	customer = None
 	try:
-		from healthcare.api.billing import _get_or_create_employee_customer as healthcare_get_customer
+		from healthcare.api.billing import (
+			_get_or_create_employee_customer as healthcare_get_customer,
+		)
 
 		customer = healthcare_get_customer(employee_id)
 	except ImportError:
@@ -257,7 +255,9 @@ def _create_unpaid_internal_employee_invoice_from_so(sales_order, employee_id, c
 
 
 @frappe.whitelist()
-def create_employee_dispense_invoice(data=None, employee=None, items=None, company=None, cost_center=None, patient=None):
+def create_employee_dispense_invoice(
+	data=None, employee=None, items=None, company=None, cost_center=None, patient=None
+):
 	"""
 	Dispense medicine to an employee from POS:
 	- Get/create Customer (ID = Employee ID, name = employee display name)
@@ -301,7 +301,9 @@ def create_employee_dispense_invoice(data=None, employee=None, items=None, compa
 	)
 
 	pos_profile = _get_active_pos_profile()
-	company = company or getattr(pos_profile, "company", None) or frappe.defaults.get_defaults().get("company")
+	company = (
+		company or getattr(pos_profile, "company", None) or frappe.defaults.get_defaults().get("company")
+	)
 	if not company:
 		frappe.throw(_("Company is required"))
 
@@ -311,9 +313,7 @@ def create_employee_dispense_invoice(data=None, employee=None, items=None, compa
 	if not cost_center:
 		frappe.throw(_("Cost center is required"))
 
-	create_invoice_now = _to_bool(
-		getattr(pos_profile, "custom_create_invoice_on_internal_dispensing", 0)
-	)
+	create_invoice_now = _to_bool(getattr(pos_profile, "custom_create_invoice_on_internal_dispensing", 0))
 
 	savepoint = "employee_dispense_so_dn"
 	frappe.db.savepoint(savepoint)
@@ -331,7 +331,11 @@ def create_employee_dispense_invoice(data=None, employee=None, items=None, compa
 		if hasattr(doc, "reserve_stock"):
 			doc.reserve_stock = 0
 
-		if patient and frappe.db.exists("Patient", patient) and frappe.get_meta("Sales Order").has_field("patient"):
+		if (
+			patient
+			and frappe.db.exists("Patient", patient)
+			and frappe.get_meta("Sales Order").has_field("patient")
+		):
 			doc.patient = patient
 
 		if frappe.db.has_column("Sales Order", "custom_is_pos"):

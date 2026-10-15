@@ -3,7 +3,7 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, today, getdate
+from frappe.utils import flt, getdate, today
 
 
 def create_insurance_claim_for_pos(doc, health_insurance_name, insurance_amount):
@@ -25,6 +25,7 @@ def create_insurance_claim_for_pos(doc, health_insurance_name, insurance_amount)
 	patient = getattr(doc, "patient", None)
 	if not patient and doc.customer:
 		from klik_pos.api.patient import resolve_patient_from_customer
+
 		patient = resolve_patient_from_customer(doc.customer)
 	if not patient:
 		frappe.log_error(
@@ -85,7 +86,11 @@ def create_insurance_claim_for_pos(doc, health_insurance_name, insurance_amount)
 		# Allocate the insurance-covered amount across lines in proportion to gross; the last line
 		# absorbs the rounding remainder so covered amounts sum exactly to insurance_amount.
 		if total_gross:
-			covered = flt(insurance_amt - allocated) if idx == len(item_rows) - 1 else flt(gross * insurance_amt / total_gross)
+			covered = (
+				flt(insurance_amt - allocated)
+				if idx == len(item_rows) - 1
+				else flt(gross * insurance_amt / total_gross)
+			)
 		else:
 			covered = 0.0
 		covered = max(0.0, min(covered, gross))
@@ -114,7 +119,7 @@ def create_insurance_claim_for_pos(doc, health_insurance_name, insurance_amount)
 	try:
 		claim.reload()
 		claim.submit()
-	except Exception as e:
+	except Exception:
 		frappe.log_error(
 			frappe.get_traceback(),
 			f"POS Insurance Claim submit failed: {claim.name}",

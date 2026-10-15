@@ -196,9 +196,7 @@ def send_refill_reminders() -> int:
 					"document_type": "Medicine Refill Schedule",
 					"document_name": row.name,
 					"subject": _("Refill due: {0}").format(row.item_name or row.item),
-					"email_content": _(
-						"Refill for {0} ({1} x {2}) is due on {3}. Contact: {4}"
-					).format(
+					"email_content": _("Refill for {0} ({1} x {2}) is due on {3}. Contact: {4}").format(
 						row.patient or row.customer,
 						row.item_name or row.item,
 						row.qty,
@@ -275,9 +273,7 @@ def get_shelf_label_data(item_code: str, price_list: str | None = None) -> dict 
 		)
 	if not rate:
 		rate = flt(
-			frappe.db.get_value(
-				"Item Price", {"item_code": item_code, "selling": 1}, "price_list_rate"
-			)
+			frappe.db.get_value("Item Price", {"item_code": item_code, "selling": 1}, "price_list_rate")
 		)
 	if not rate:
 		rate = flt(item.get("standard_rate") or 0)
@@ -304,9 +300,7 @@ def get_shelf_label_data(item_code: str, price_list: str | None = None) -> dict 
 		"description": (item.description or "").strip() or item.item_name,
 		"uom": item.stock_uom,
 		"item_group": item.item_group,
-		"retail_price": frappe.format_value(
-			retail, {"fieldtype": "Currency", "options": currency}
-		),
+		"retail_price": frappe.format_value(retail, {"fieldtype": "Currency", "options": currency}),
 		"retail_price_value": round(retail, 3),
 		"currency": currency,
 		"barcode": _first_barcode(item_code),
@@ -326,7 +320,4 @@ def get_shelf_labels_for_group(item_group: str, limit: int = 200) -> list[dict]:
 
 
 def _first_barcode(item_code: str) -> str:
-	return (
-		frappe.db.get_value("Item Barcode", {"parent": item_code}, "barcode")
-		or ""
-	)
+	return frappe.db.get_value("Item Barcode", {"parent": item_code}, "barcode") or ""

@@ -840,7 +840,10 @@ def get_customer_statistics(customer_id):
 		# Loyalty points from ERPNext standard Loyalty Point Entry (sum of non-expired points)
 		loyalty_points = 0
 		try:
-			company = frappe.db.get_default("company") or (frappe.get_all("Company", limit=1, pluck="name") or [None])[0]
+			company = (
+				frappe.db.get_default("company")
+				or (frappe.get_all("Company", limit=1, pluck="name") or [None])[0]
+			)
 			if company:
 				lpe_result = frappe.db.sql(
 					"""
@@ -894,13 +897,28 @@ def get_loyalty_redemption_preview(customer_id, points_to_redeem, grand_total):
 			get_loyalty_program_details_with_points,
 		)
 
-		company = frappe.db.get_default("company") or (frappe.get_all("Company", limit=1, pluck="name") or [None])[0]
+		company = (
+			frappe.db.get_default("company")
+			or (frappe.get_all("Company", limit=1, pluck="name") or [None])[0]
+		)
 		if not company:
-			return {"success": True, "loyalty_amount": 0, "conversion_factor": 0, "max_points": 0, "amount_to_pay": grand_total}
+			return {
+				"success": True,
+				"loyalty_amount": 0,
+				"conversion_factor": 0,
+				"max_points": 0,
+				"amount_to_pay": grand_total,
+			}
 
 		loyalty_program = frappe.db.get_value("Customer", customer_id, "loyalty_program")
 		if not loyalty_program:
-			return {"success": True, "loyalty_amount": 0, "conversion_factor": 0, "max_points": 0, "amount_to_pay": grand_total}
+			return {
+				"success": True,
+				"loyalty_amount": 0,
+				"conversion_factor": 0,
+				"max_points": 0,
+				"amount_to_pay": grand_total,
+			}
 
 		lp_details = get_loyalty_program_details_with_points(
 			customer_id,
@@ -909,7 +927,13 @@ def get_loyalty_redemption_preview(customer_id, points_to_redeem, grand_total):
 			silent=True,
 		)
 		if not lp_details or not lp_details.get("loyalty_points"):
-			return {"success": True, "loyalty_amount": 0, "conversion_factor": lp_details.get("conversion_factor") or 0, "max_points": 0, "amount_to_pay": grand_total}
+			return {
+				"success": True,
+				"loyalty_amount": 0,
+				"conversion_factor": lp_details.get("conversion_factor") or 0,
+				"max_points": 0,
+				"amount_to_pay": grand_total,
+			}
 
 		max_points = int(lp_details.loyalty_points or 0)
 		conversion_factor = flt(lp_details.conversion_factor or 0, 2)

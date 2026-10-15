@@ -50,16 +50,18 @@ def get_data(filters):
 				"barcode",
 			)
 
-		data.append({
-			"item_code": row.item_code,
-			"barcode": barcode,
-			# "reason": "Transport",
-			# "start_date": row.posting_date,
-			# "end_date": row.posting_date,
-			# "campaign_status": "Completed",
-			# "discounted_price": discounted_price,
-			"original_price": original_price,
-			"active": 1,
-		})
+		data.append(
+			{
+				"item_code": row.item_code,
+				"barcode": barcode,
+				# "reason": "Transport",
+				# "start_date": row.posting_date,
+				# "end_date": row.posting_date,
+				# "campaign_status": "Completed",
+				# "discounted_price": discounted_price,
+				"original_price": original_price,
+				"active": 1,
+			}
+		)
 
 	return data

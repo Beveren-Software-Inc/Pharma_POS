@@ -43,11 +43,7 @@ def _line_item_code(item: dict) -> str:
 
 def _line_batch_no(item: dict) -> str:
 	return (
-		item.get("batchNumber")
-		or item.get("batch_no")
-		or item.get("batch_id")
-		or item.get("batchId")
-		or ""
+		item.get("batchNumber") or item.get("batch_no") or item.get("batch_id") or item.get("batchId") or ""
 	).strip()
 
 
@@ -72,7 +68,9 @@ def validate_pos_items_batch_expiry(items, *, allow_near_expiry: bool = True):
 		eol = get_item_end_of_life(item_code)
 		if eol and eol < today_date:
 			expired_msgs.append(
-				_("Item {0} reached end of life on {1}").format(item_name, frappe.format(eol, {"fieldtype": "Date"}))
+				_("Item {0} reached end of life on {1}").format(
+					item_name, frappe.format(eol, {"fieldtype": "Date"})
+				)
 			)
 
 		batch_no = _line_batch_no(item)
@@ -95,8 +93,9 @@ def validate_pos_items_batch_expiry(items, *, allow_near_expiry: bool = True):
 			title=_("Expired medicine"),
 		)
 
-	# allow_near_expiry kept for API clarity / future hard-block setting
-	_ = allow_near_expiry
+	# allow_near_expiry is kept for API clarity / a future hard-block setting.
+	# Do NOT rebind it to `_` here: `_` is the translation function used above, so
+	# assigning it would make `_` local and break the `_()` calls (UnboundLocalError).
 
 
 def get_near_expiry_batch_warnings(items, days: int = NEAR_EXPIRY_DAYS):

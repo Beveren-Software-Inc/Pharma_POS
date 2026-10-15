@@ -1,11 +1,12 @@
 # Copyright (c) 2026, Beveren Sooftware Inc and contributors
 # For license information, please see license.txt
 
+import frappe
+
 # import frappe
 from frappe import _
-
-import frappe
 from frappe.utils import flt
+
 
 def execute(filters=None):
 	columns = get_columns()
@@ -42,7 +43,8 @@ def get_data(filters):
 	if filters.get("health_insurance"):
 		conditions += " AND si.health_insurance = %(health_insurance)s"
 
-	invoices = frappe.db.sql(f"""
+	invoices = frappe.db.sql(
+		f"""
 		SELECT
 			si.name,
 			si.posting_date,
@@ -57,7 +59,10 @@ def get_data(filters):
 		JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
 		WHERE si.docstatus = 1
 		{conditions}
-	""", filters, as_dict=True)
+	""",
+		filters,
+		as_dict=True,
+	)
 
 	data = []
 
@@ -66,7 +71,11 @@ def get_data(filters):
 		original_price = 0
 
 		if row.grand_total:
-			percentage = ((flt(row.custom_amount_to_be_covered) / flt(row.grand_total)) * 100) if row.custom_amount_to_be_covered else 100
+			percentage = (
+				((flt(row.custom_amount_to_be_covered) / flt(row.grand_total)) * 100)
+				if row.custom_amount_to_be_covered
+				else 100
+			)
 
 		if row.rate:
 			original_price = row.rate * (percentage / 100)
@@ -75,12 +84,7 @@ def get_data(filters):
 		barcode = ""
 		if row.batch_no:
 			barcode = frappe.db.get_value(
-				"Item Barcode",
-				{
-					"parent": row.item_code,
-					"custom_batch": row.batch_no
-				},
-				"barcode"
+				"Item Barcode", {"parent": row.item_code, "custom_batch": row.batch_no}, "barcode"
 			)
 		discounted_price = None
 
@@ -88,17 +92,19 @@ def get_data(filters):
 			discounted_price = row.rate - row.discount_amount
 		else:
 			discounted_price = row.rate
-   
-		data.append({
-			"item_code": row.item_code,
-			"barcode": barcode,
-			"reason": "Insurance Coverage",  # static unless you have field
-			"start_date": row.posting_date,
-			"end_date": row.posting_date,
-			"campaign_status": "Completed",
-			"discounted_price": discounted_price,
-			"original_price": original_price,
-			"active": 1
-		})
+
+		data.append(
+			{
+				"item_code": row.item_code,
+				"barcode": barcode,
+				"reason": "Insurance Coverage",  # static unless you have field
+				"start_date": row.posting_date,
+				"end_date": row.posting_date,
+				"campaign_status": "Completed",
+				"discounted_price": discounted_price,
+				"original_price": original_price,
+				"active": 1,
+			}
+		)
 
 	return data

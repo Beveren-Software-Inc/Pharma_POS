@@ -3,7 +3,6 @@ from erpnext.accounts.doctype.pricing_rule.pricing_rule import apply_pricing_rul
 from erpnext.stock.doctype.batch.batch import get_batch_qty
 from erpnext.stock.utils import get_stock_balance
 from frappe import _
-
 from frappe.utils import flt
 
 from klik_pos.api.sales_invoice import get_current_pos_opening_entry
@@ -46,7 +45,6 @@ def get_price_list_with_customer_priority(customer=None):
 def fetch_item_balance(item_code: str, warehouse: str) -> float:
 	"""Get stock balance of an item from a warehouse."""
 	try:
-		
 		return get_stock_balance(item_code, warehouse) or 0
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), f"Error fetching balance for {item_code}")
@@ -515,7 +513,9 @@ def get_item_by_identifier(code: str, item_code=None):
 		item_doc = frappe.get_doc("Item", item_code)
 		balance = fetch_item_balance(item_code, warehouse)
 		price_info = fetch_item_price(item_code, price_list)
-		item_tax_template = _fetch_item_tax_templates([item_code], frappe.defaults.get_user_default("Company")).get(item_code)
+		item_tax_template = _fetch_item_tax_templates(
+			[item_code], frappe.defaults.get_user_default("Company")
+		).get(item_code)
 		is_pos_service = 0
 		if (
 			_pos_allows_service_sale(pos_doc)
@@ -595,9 +595,13 @@ def get_dispensing_lots_for_item(item_code: str, batch_no=None):
 		_batch_nos = list({l.get("batch_no") for l in lots if l.get("batch_no")})
 		_expiry = {}
 		if _batch_nos:
-			for _b in frappe.get_all("Batch", filters={"name": ["in", _batch_nos]}, fields=["name", "expiry_date"]):
+			for _b in frappe.get_all(
+				"Batch", filters={"name": ["in", _batch_nos]}, fields=["name", "expiry_date"]
+			):
 				_expiry[_b.name] = _b.expiry_date
-		lots.sort(key=lambda l: (str(_expiry.get(l.get("batch_no")) or "9999-12-31"), l.get("creation") or ""))
+		lots.sort(
+			key=lambda l: (str(_expiry.get(l.get("batch_no")) or "9999-12-31"), l.get("creation") or "")
+		)
 
 		result = []
 		for lot in lots:
@@ -653,6 +657,7 @@ def _get_pos_context():
 	hide_unavailable = getattr(pos_doc, "hide_unavailable_items", False)
 
 	return pos_doc, warehouse, price_list, hide_unavailable
+
 
 def _fetch_batch_stock(item_codes: list, warehouse: str) -> dict:
 	"""Fetch current stock balances for multiple items from Bin.
@@ -1082,7 +1087,9 @@ def _fetch_item_tax_templates(item_codes: list[str], company: str) -> dict[str, 
 		# Items without direct template: check Item Group hierarchy
 		missing = [c for c in item_codes if c not in result]
 		if missing:
-			item_groups = frappe.db.get_values("Item", {"name": ["in", missing]}, ["name", "item_group"], as_dict=True)
+			item_groups = frappe.db.get_values(
+				"Item", {"name": ["in", missing]}, ["name", "item_group"], as_dict=True
+			)
 			ig_map = {r["name"]: r.get("item_group") for r in item_groups if r.get("item_group")}
 			seen_igs = set()
 			for item_code, ig in ig_map.items():
@@ -1252,7 +1259,7 @@ def get_items_with_balance_and_price(
 		dict with items, total_count, and has_more flag
 	"""
 	limit, offset = _coerce_limit_offset(limit, offset)
-	
+
 	pos_doc, warehouse, price_list, hide_unavailable = _get_pos_context()
 
 	try:
@@ -1307,7 +1314,7 @@ def get_items_with_balance_and_price(
 
 		# Fetch stock and prices in batch (optimized)
 		stock_map = _fetch_batch_stock(item_codes, warehouse)
-		
+
 		price_map = _fetch_batch_prices(item_codes, price_list, uom_map)
 
 		item_tax_template_map = {}
@@ -1896,7 +1903,7 @@ def get_serial_nos_for_item(item_code: str):
 		pos_doc = get_current_pos_profile()
 		warehouse = getattr(pos_doc, "warehouse", None)
 
-		filters = {"item_code": item_code,     "status": "Active"}
+		filters = {"item_code": item_code, "status": "Active"}
 		if warehouse:
 			filters["warehouse"] = warehouse
 
@@ -1933,7 +1940,7 @@ def apply_pricing_rules_to_cart(cart_items, customer=None):
 	Returns:
 		List of items with updated prices, discounts, and pricing rule info
 	"""
-	
+
 	try:
 		cart_items = _parse_cart_items(cart_items)
 		if not cart_items:
@@ -1941,11 +1948,11 @@ def apply_pricing_rules_to_cart(cart_items, customer=None):
 
 		context = _build_pricing_context(customer)
 		erpnext_items = _prepare_erpnext_items(cart_items, context)
-		
+
 		if not erpnext_items:
 			return []
 		pricing_results = _apply_pricing_rules(erpnext_items, context)
-		
+
 		result_items = _process_pricing_results(pricing_results, erpnext_items, cart_items, context)
 		return result_items
 
@@ -2116,7 +2123,7 @@ def _apply_pricing_rules(erpnext_items, context):
 	if context.get("customer"):
 		args_dict["customer"] = context["customer"]
 
-	#Always include customer_group and territory if available (needed for pricing rule filtering)
+	# Always include customer_group and territory if available (needed for pricing rule filtering)
 	if context.get("customer_group"):
 		args_dict["customer_group"] = context["customer_group"]
 	if context.get("territory"):
@@ -2462,9 +2469,7 @@ def _recalculate_price_for_wrong_uom(original_price, pricing_result, item_uom):
 
 	# If the pricing_result_rate is significantly different from our calculated original_price
 	# (more than 50% difference), it's likely calculated for wrong UOM
-	price_diff_ratio = abs(pricing_result_rate - original_price) / max(
-		pricing_result_rate, original_price
-	)
+	price_diff_ratio = abs(pricing_result_rate - original_price) / max(pricing_result_rate, original_price)
 	if price_diff_ratio <= 0.5:
 		return None
 
@@ -2472,9 +2477,7 @@ def _recalculate_price_for_wrong_uom(original_price, pricing_result, item_uom):
 	if pricing_result_rate < original_price:
 		calculated_discount_pct = ((original_price - pricing_result_rate) / original_price) * 100
 		# Use the calculated discount or the one from pricing_result
-		effective_discount = (
-			discount_percentage if discount_percentage > 0 else calculated_discount_pct
-		)
+		effective_discount = discount_percentage if discount_percentage > 0 else calculated_discount_pct
 		if effective_discount > 0:
 			final_price = original_price * (1 - effective_discount / 100)
 		elif discount_amount > 0:
