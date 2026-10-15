@@ -78,7 +78,6 @@ fixtures = [
 					"POS Profile-custom_autofetch_batchserial_",
 					"Sales Invoice-custom_amount_to_be_covered",
 					"Sales Invoice-custom_column_break_tbrxu",
-					"Sales Invoice-custom_health_insurance",
 					"Sales Invoice-custom_insurance",
 					"POS Profile-custom_is_hospital_pharmacy",
 					"Item-custom_is_pharmacy_service",
@@ -87,7 +86,6 @@ fixtures = [
 					"Sales Order-custom_internal_employee_dispensing",
 					"Sales Order-custom_pos_hold_data",
 					"Sales Order Item-custom_dosage",
-					"Sales Order Item-custom_prescription_frequency",
 					"Sales Order Item-custom_dispensing_lot",
 					"Sales Order Item-custom_batch",
 					"Sales Invoice-custom_employee",
@@ -156,6 +154,17 @@ override_doctype_class = {
 
 # Migration hooks
 before_migrate = ["klik_pos.setup.pos_opening_entry_links.ensure_pos_opening_entry_links"]
+
+# Custom fields that link to the optional Healthcare app are created from code,
+# and dropped when that app is absent, instead of being fixtures: a fixture may
+# reference a DocType that is not installed, and Frappe then refuses every later
+# Custom Field created on the same DocType (which breaks ERPNext's own setup).
+# See klik_pos/setup/healthcare_link_fields.py. `after_install` covers
+# `bench install-app`, `after_migrate` covers `bench migrate` and doubles as the
+# repair path for sites that already carry such a field.
+after_install = ["klik_pos.setup.healthcare_link_fields.ensure_healthcare_link_fields"]
+after_migrate = ["klik_pos.setup.healthcare_link_fields.ensure_healthcare_link_fields"]
+
 # Includes in <head>
 # ------------------
 
