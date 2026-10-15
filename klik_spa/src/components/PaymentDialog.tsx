@@ -3105,49 +3105,45 @@ const handleAutoFillPayment = (methodId: string) => {
                       <span className="text-sm text-gray-700 dark:text-gray-300">Insurance</span>
                     </label>
                   </div>
-                  <div className="flex space-x-4 overflow-x-auto pb-2">
+                  <div className="grid grid-cols-5 gap-2">
                     {paymentMethods.map((method) => (
                       <div
                         key={method.id}
-                        className={`${
-                          paymentMethods.length <= 3
-                            ? "flex-1 min-w-0"
-                            : "min-w-[300px] flex-shrink-0"
-                        } border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:border-beveren-300 transition-colors ${
+                        className={`min-w-0 border border-gray-200 dark:border-gray-700 rounded-md p-2 hover:border-beveren-300 transition-colors ${
                           invoiceSubmitted || isProcessingPayment
                             ? "bg-gray-50 dark:bg-gray-800"
                             : ""
                         }`}
                       >
-                        <div className="flex items-center space-x-3 mb-3">
+                        <div className="flex items-center gap-1.5 mb-1.5">
                           <div
-                            className={`w-8 h-6 rounded-md ${method.color} text-white flex items-center justify-center`}
+                            className={`w-5 h-5 rounded ${method.color} text-white flex items-center justify-center flex-shrink-0`}
                           >
-                            <div className="scale-75">{method.icon}</div>
+                            <div className="scale-50">{method.icon}</div>
                           </div>
-                          <div className="flex-1">
-                            <p className="font-medium text-gray-900 dark:text-white text-sm">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-900 dark:text-white text-xs truncate">
                               {method.name}
                             </p>
                           </div>
                         </div>
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">
+                            <label className="block text-[10px] font-medium text-gray-700 dark:text-gray-300">
                               Amount
                             </label>
                             <div className="flex space-x-1">
                               <button
                                 onClick={() => handleAutoFillPayment(method.id)}
                                 disabled={invoiceSubmitted || isProcessingPayment}
-                                className={`p-1 rounded text-xs ${
+                                className={`p-0.5 rounded text-xs ${
                                   invoiceSubmitted || isProcessingPayment
                                     ? "cursor-not-allowed opacity-50"
                                     : "hover:bg-beveren-100 text-beveren-600"
                                 }`}
                                 title="Auto-fill with grand total"
                               >
-                                <CheckCircle size={16} />
+                                <CheckCircle size={14} />
                               </button>
 
                             </div>
@@ -3174,7 +3170,7 @@ const handleAutoFillPayment = (methodId: string) => {
                             onFocus={() => setEditingPaymentMethodId(method.id)}
                             placeholder="0.00"
                             disabled={invoiceSubmitted || isProcessingPayment}
-                            className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm ${
+                            className={`w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-xs ${
                               invoiceSubmitted || isProcessingPayment
                                 ? "cursor-not-allowed opacity-50"
                                 : ""
