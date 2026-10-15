@@ -44,4 +44,3 @@ export function useDeliveryChannels() {
 
   return { channels, loading, error };
 }
-

@@ -37,9 +37,7 @@ def require_pos_access():
 		return
 	if frappe.db.exists("POS Profile User", {"user": user}):
 		return
-	frappe.throw(
-		_("You are not permitted to use the Point of Sale."), frappe.PermissionError
-	)
+	frappe.throw(_("You are not permitted to use the Point of Sale."), frappe.PermissionError)
 
 
 def get_current_pos_profile():

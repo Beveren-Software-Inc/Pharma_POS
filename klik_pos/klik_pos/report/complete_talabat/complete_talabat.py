@@ -40,9 +40,7 @@ def get_data(filters):
 	for row in lines:
 		original_price = get_unit_price_including_vat(row, template_tax_rates)
 		discounted_net = get_discounted_unit_net_rate(row)
-		discounted_price = get_unit_price_including_vat(
-			row, template_tax_rates, unit_net_rate=discounted_net
-		)
+		discounted_price = get_unit_price_including_vat(row, template_tax_rates, unit_net_rate=discounted_net)
 
 		barcode = ""
 		if row.batch_no:
@@ -55,16 +53,18 @@ def get_data(filters):
 				"barcode",
 			)
 
-		data.append({
-			"item_code": row.item_code,
-			"barcode": barcode,
-			"reason": "Transport",
-			"start_date": row.posting_date,
-			"end_date": row.posting_date,
-			"campaign_status": "Completed",
-			"discounted_price": discounted_price,
-			"original_price": original_price,
-			"active": 1,
-		})
+		data.append(
+			{
+				"item_code": row.item_code,
+				"barcode": barcode,
+				"reason": "Transport",
+				"start_date": row.posting_date,
+				"end_date": row.posting_date,
+				"campaign_status": "Completed",
+				"discounted_price": discounted_price,
+				"original_price": original_price,
+				"active": 1,
+			}
+		)
 
 	return data

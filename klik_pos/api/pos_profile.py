@@ -205,9 +205,7 @@ def get_pos_details():
 			getattr(pos, "custom_allow_duplicate_items_in_pos", 0) or 0
 		),
 		"allow_rate_change": int(getattr(pos, "allow_rate_change", 0) or 0),
-		"custom_print_delivery_receipt": int(
-			getattr(pos, "custom_print_delivery_receipt", 0) or 0
-		),
+		"custom_print_delivery_receipt": int(getattr(pos, "custom_print_delivery_receipt", 0) or 0),
 		"custom_dispense_lot": int(getattr(pos, "custom_dispense_lot", 0) or 0),
 		"custom_create_invoice_on_internal_dispensing": int(
 			getattr(pos, "custom_create_invoice_on_internal_dispensing", 0) or 0

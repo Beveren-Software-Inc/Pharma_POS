@@ -2,12 +2,12 @@
 
 Two advisory checks are provided:
 
-* **Drug-allergy** – the drug being dispensed is matched against the patient's recorded
+* **Drug-allergy** - the drug being dispensed is matched against the patient's recorded
   allergy note (``Patient.allergies``, a free-text field). "No known allergy" style notes
   are recognised and ignored.
-* **Duplicate therapy** – the same drug appearing more than once in a single dispense.
+* **Duplicate therapy** - the same drug appearing more than once in a single dispense.
 
-Alerts are *advisory* – they warn the pharmacist and are recorded on the invoice for audit,
+Alerts are *advisory* - they warn the pharmacist and are recorded on the invoice for audit,
 but they do not hard-block dispensing (the prescriber/pharmacist makes the final call).
 """
 
@@ -16,7 +16,7 @@ import json
 import frappe
 from frappe import _
 
-# Notes that mean "no allergy" – do not mine these for drug tokens.
+# Notes that mean "no allergy" - do not mine these for drug tokens.
 _NO_ALLERGY_PREFIXES = (
 	"nkda",
 	"nka",
@@ -112,9 +112,7 @@ def check_dispense_safety(patient=None, items=None):
 	allergy_note = _patient_allergy_note(patient)
 	if allergy_note:
 		tokens = [w.strip(",.;:()/-") for w in allergy_note.replace("/", " ").split()]
-		allergy_terms = [
-			w for w in tokens if len(w) >= 4 and w not in _ALLERGY_STOPWORDS
-		]
+		allergy_terms = [w for w in tokens if len(w) >= 4 and w not in _ALLERGY_STOPWORDS]
 		for it in items:
 			hay = _drug_haystack(it)
 			if not hay:

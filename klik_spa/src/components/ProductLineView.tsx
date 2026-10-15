@@ -86,7 +86,7 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
             const isOutOfStock = !isService && item.available <= 0
             const isDisabled = isOutOfStock || scannerOnly
             const formattedPrice = `${item.currency_symbol}${item.price.toFixed(3)}`
-            
+
             const itemData = item as MenuItem & {
               custom_strength?: string | null
               custom_pharmaceutical_form?: string | null
@@ -202,7 +202,7 @@ export default function ProductLineView({ items, onAddToCart, isMobile = false, 
           })}
         </div>
       </div>
-      
+
       {hoverItem && (
         <PharmacyItemDetailsModal
           isOpen={showTooltip}

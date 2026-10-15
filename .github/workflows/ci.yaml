@@ -29,16 +29,16 @@ jobs:
         ports:
           - 11000:6379
       mariadb:
-        image: mariadb:10.6
+        image: mariadb:11.8
         env:
-          MYSQL_ROOT_PASSWORD: root
+          MARIADB_ROOT_PASSWORD: root
         ports:
           - 3306:3306
-        options: --health-cmd="mariadb-admin ping" --health-interval=5s --health-timeout=2s --health-retries=3
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-timeout=2s --health-retries=3
 
     steps:
       - name: Clone
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Find tests
         run: |
@@ -46,14 +46,16 @@ jobs:
           grep -rn "def test" > /dev/null
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          # Frappe/ERPNext v16 requires Python >=3.14,<3.15
+          # (frappe/pyproject.toml, erpnext/pyproject.toml)
+          python-version: '3.14'
 
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 24
           check-latest: true
 
       - name: Cache pip
@@ -79,8 +81,11 @@ jobs:
 
       - name: Install MariaDB Client
         run: |
-          sudo apt update
-          sudo apt-get install mariadb-client
+          sudo apt-get update
+          # libmariadb-dev + pkg-config are required: mysqlclient (a frappe
+          # dependency) has no cp314 manylinux wheel, so it is compiled from
+          # source on Python 3.14 and needs mariadb_config / headers.
+          sudo apt-get install -y mariadb-client libmariadb-dev pkg-config
 
       - name: Setup
         run: |
@@ -116,9 +121,11 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        # Must match the interpreter used for the app's hooks locally
+        # (bench env is 3.14) so `check-ast` can parse modern syntax.
+        python-version: '3.14'
 
     - name: Install dependencies
       run: |

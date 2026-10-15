@@ -3,6 +3,7 @@
 
 import frappe
 from frappe.utils import strip_html
+
 from klik_pos.util.api_utility import get_next_transaction_number
 
 
@@ -225,10 +226,9 @@ def _enrich_medication_order_summary(order, order_doc):
 		or getattr(order_doc, "practitioner", None)
 		or getattr(order_doc, "prescribing_practitioner", None)
 	)
-	order["healthcare_practitioner_name"] = (
-		getattr(order_doc, "healthcare_practitioner_name", None)
-		or getattr(order_doc, "practitioner_name", None)
-	)
+	order["healthcare_practitioner_name"] = getattr(
+		order_doc, "healthcare_practitioner_name", None
+	) or getattr(order_doc, "practitioner_name", None)
 	order["after_discharge"] = int(getattr(order_doc, "after_discharge", 0) or 0)
 
 	ref_type = getattr(order_doc, "custom_reference_type", None)
@@ -443,7 +443,7 @@ def search_patients(search_query: str):
 		return patients
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error searching Patients")
-		frappe.throw(f"Failed to search Patients: {str(e)}")
+		frappe.throw(f"Failed to search Patients: {e!s}")
 
 
 @frappe.whitelist()
@@ -456,7 +456,9 @@ def get_pending_inpatient_medication_orders(patient: str, include_unsigned: int 
 	try:
 		# Check if Patient Medication Order doctype exists
 		if not frappe.db.exists("DocType", "Patient Medication Order"):
-			frappe.throw("Patient Medication Order doctype not found. Please ensure the healthcare app is installed.")
+			frappe.throw(
+				"Patient Medication Order doctype not found. Please ensure the healthcare app is installed."
+			)
 
 		include_unsigned = bool(frappe.utils.cint(include_unsigned))
 
@@ -492,21 +494,26 @@ def get_pending_inpatient_medication_orders(patient: str, include_unsigned: int 
 				"patient": patient,
 				"status": ["not in", excluded_statuses],
 			},
-			order_by=order_by_field if order_by_field else "name desc"
+			order_by=order_by_field if order_by_field else "name desc",
 		)
 
 		# Rose (outpatient-only) pharmacy: exclude inpatient orders so they can't be dispensed here.
 		# A Rose pharmacy is a pharmacy POS Profile with custom_is_hospital_pharmacy = 0.
 		try:
 			from klik_pos.klik_pos.utils import get_current_pos_profile
+
 			profile = get_current_pos_profile()
-			is_rose = profile and frappe.utils.cint(getattr(profile, "custom_is_pharmacy", 0)) \
+			is_rose = (
+				profile
+				and frappe.utils.cint(getattr(profile, "custom_is_pharmacy", 0))
 				and not frappe.utils.cint(getattr(profile, "custom_is_hospital_pharmacy", 0))
+			)
 		except Exception:
 			is_rose = False
 		if is_rose:
 			orders = [
-				o for o in orders
+				o
+				for o in orders
 				if not (o.get("inpatient_record") or o.get("reference_doctype") == "Inpatient Admission")
 			]
 
@@ -517,7 +524,7 @@ def get_pending_inpatient_medication_orders(patient: str, include_unsigned: int 
 		return orders
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching Patient Medication Orders")
-		frappe.throw(f"Failed to fetch Patient Medication Orders: {str(e)}")
+		frappe.throw(f"Failed to fetch Patient Medication Orders: {e!s}")
 
 
 @frappe.whitelist()
@@ -528,7 +535,9 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 	"""
 	try:
 		if not frappe.db.exists("DocType", "Patient Medication Order"):
-			frappe.throw("Patient Medication Order doctype not found. Please ensure the healthcare app is installed.")
+			frappe.throw(
+				"Patient Medication Order doctype not found. Please ensure the healthcare app is installed."
+			)
 
 		try:
 			limit = max(1, min(int(limit), 50))
@@ -567,7 +576,7 @@ def get_patient_medication_order_history(patient: str, limit: int = 50):
 		return orders
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching Medication Order history")
-		frappe.throw(f"Failed to fetch Medication Order history: {str(e)}")
+		frappe.throw(f"Failed to fetch Medication Order history: {e!s}")
 
 
 def _legacy_sales_item_to_dict(row) -> dict:
@@ -680,7 +689,7 @@ def get_patient_legacy_dispensed_medications(patient: str, limit: int = 50, from
 		return results
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching legacy dispensed medications")
-		frappe.throw(f"Failed to fetch legacy dispensed medications: {str(e)}")
+		frappe.throw(f"Failed to fetch legacy dispensed medications: {e!s}")
 
 
 def _pos_dispense_dn_items_by_sales_order(order_names):
@@ -865,7 +874,9 @@ def get_patient_pos_dispensed_medications(patient: str, limit: int = 50, from_da
 				):
 					dn_match = dn_item
 					break
-			batch_candidate = (dn_match.batch_no if dn_match else None) or row.get("batch_no") or row.get("custom_batch")
+			batch_candidate = (
+				(dn_match.batch_no if dn_match else None) or row.get("batch_no") or row.get("custom_batch")
+			)
 			if batch_candidate:
 				batch_nos.append(batch_candidate)
 			items_by_order.setdefault(row.parent, []).append((row, dn_match))
@@ -876,8 +887,7 @@ def get_patient_pos_dispensed_medications(patient: str, limit: int = 50, from_da
 		for order in orders:
 			raw_pairs = items_by_order.get(order.name, [])
 			items = [
-				_pos_dispense_item_to_dict(row, dn_match, expiry_by_batch)
-				for row, dn_match in raw_pairs
+				_pos_dispense_item_to_dict(row, dn_match, expiry_by_batch) for row, dn_match in raw_pairs
 			]
 			entry = dict(order)
 			entry["items"] = items
@@ -893,7 +903,7 @@ def get_patient_pos_dispensed_medications(patient: str, limit: int = 50, from_da
 		return results
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching POS dispensed medications")
-		frappe.throw(f"Failed to fetch POS dispensed medications: {str(e)}")
+		frappe.throw(f"Failed to fetch POS dispensed medications: {e!s}")
 
 
 def _subscription_plan_item_to_dict(row) -> dict:
@@ -916,7 +926,9 @@ def _subscription_plan_item_to_dict(row) -> dict:
 
 
 @frappe.whitelist()
-def get_subscription_medication_plans(patient: str = None, search: str = "", limit: int = 50, start: int = 0):
+def get_subscription_medication_plans(
+	patient: str | None = None, search: str = "", limit: int = 50, start: int = 0
+):
 	"""
 	Subscription Medication Plans (monthly medication) for hospital pharmacy UI.
 
@@ -1014,7 +1026,9 @@ def get_subscription_medication_plans(patient: str = None, search: str = "", lim
 			entry["start_date"] = str(plan.get("start_date")) if plan.get("start_date") else None
 			entry["end_date"] = str(plan.get("end_date")) if plan.get("end_date") else None
 			entry["next_run_date"] = str(plan.get("next_run_date")) if plan.get("next_run_date") else None
-			entry["practitioner_name"] = practitioner_names.get(plan.get("practitioner")) or plan.get("practitioner")
+			entry["practitioner_name"] = practitioner_names.get(plan.get("practitioner")) or plan.get(
+				"practitioner"
+			)
 			entry["medications"] = [_subscription_plan_item_to_dict(row) for row in raw_items]
 			entry["item_count"] = len(entry["medications"])
 			results.append(entry)
@@ -1022,7 +1036,7 @@ def get_subscription_medication_plans(patient: str = None, search: str = "", lim
 		return results
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching subscription medication plans")
-		frappe.throw(f"Failed to fetch subscription medication plans: {str(e)}")
+		frappe.throw(f"Failed to fetch subscription medication plans: {e!s}")
 
 
 def _get_patient_diagnosis_entries(patient: str, limit: int = 25):
@@ -1113,7 +1127,9 @@ def _serialize_patient_upload_row(row):
 	if isinstance(row, dict):
 		get = row.get
 	else:
-		get = lambda key, default=None: getattr(row, key, default)
+
+		def get(key, default=None):
+			return getattr(row, key, default)
 
 	file_url = get("document")
 	return {
@@ -1216,7 +1232,7 @@ def _get_patient_upload_documents(patient: str):
 
 
 @frappe.whitelist()
-def get_patient_documents(patient: str = None, customer: str = None):
+def get_patient_documents(patient: str | None = None, customer: str | None = None):
 	"""Return Healthcare patient upload documents for POS (by patient or customer)."""
 	try:
 		patient_key = (patient or "").strip()
@@ -1314,7 +1330,7 @@ def get_patient_history_summary(patient: str, limit: int = 10):
 		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching patient history summary")
-		frappe.throw(f"Failed to fetch patient history: {str(e)}")
+		frappe.throw(f"Failed to fetch patient history: {e!s}")
 
 
 @frappe.whitelist()
@@ -1350,7 +1366,14 @@ def get_open_pharmacy_patient_visits(
 		meta = frappe.get_meta("Patient Visit")
 		fields = {f.fieldname for f in meta.fields}
 		fetch = ["name", "patient", "patient_name", "docstatus"]
-		for candidate in ("encounter_date", "visit_date", "posting_date", "status", "visit_type", "practitioner_name"):
+		for candidate in (
+			"encounter_date",
+			"visit_date",
+			"posting_date",
+			"status",
+			"visit_type",
+			"practitioner_name",
+		):
 			if candidate in fields:
 				fetch.append(candidate)
 
@@ -1461,7 +1484,7 @@ def get_open_pharmacy_patient_visits(
 		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error fetching open pharmacy patient visits")
-		frappe.throw(f"Failed to fetch open pharmacy visits: {str(e)}")
+		frappe.throw(f"Failed to fetch open pharmacy visits: {e!s}")
 
 
 _VISIT_DATE_FIELDS = (
@@ -1524,7 +1547,7 @@ def create_patient_visit(patient: str):
 	Does not create Sales Order or invoice — dispensing stock is handled
 	separately on Dispense.
 	"""
-	case_no = get_next_transaction_number('Patient Visit', fieldname='case_no')
+	case_no = get_next_transaction_number("Patient Visit", fieldname="case_no")
 	try:
 		if not patient:
 			frappe.throw("Patient is required")
@@ -1557,7 +1580,10 @@ def create_patient_visit(patient: str):
 		pos_profile = None
 		cost_center = None
 		try:
-			from klik_pos.api.sales_order import _get_active_pos_profile, _resolve_pos_cost_center
+			from klik_pos.api.sales_order import (
+				_get_active_pos_profile,
+				_resolve_pos_cost_center,
+			)
 
 			pos_profile = _get_active_pos_profile()
 			if pos_profile:
@@ -1568,9 +1594,7 @@ def create_patient_visit(patient: str):
 
 		if "company" in fields:
 			company = (
-				getattr(pos_profile, "company", None)
-				if pos_profile
-				else None
+				getattr(pos_profile, "company", None) if pos_profile else None
 			) or frappe.defaults.get_defaults().get("company")
 			if company:
 				doc.company = company
@@ -1600,4 +1624,4 @@ def create_patient_visit(patient: str):
 		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Error creating Patient Visit")
-		frappe.throw(f"Failed to create patient visit: {str(e)}")
+		frappe.throw(f"Failed to create patient visit: {e!s}")

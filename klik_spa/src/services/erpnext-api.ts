@@ -54,11 +54,11 @@ class ERPNextAPI {
     // 1. If served from Frappe (production), use empty baseUrl for same-origin requests
     // 2. If running in Vite dev server (port 8080), use relative URLs to leverage proxy
     // 3. Otherwise, use the configured base URL or default to localhost:8000
-    
+
     const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
     const isServedFromFrappe = !isDevelopment && window.location.pathname.startsWith('/klik_pos');
     const isViteDevServer = isDevelopment && (window.location.port === '8080' || window.location.hostname === 'localhost');
-    
+
     // In Vite dev server, use relative URLs to leverage the proxy configured in vite.config.ts
     // The proxy will forward /api requests to http://127.0.0.1:8000
     const baseUrl = isServedFromFrappe

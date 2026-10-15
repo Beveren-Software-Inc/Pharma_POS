@@ -225,7 +225,7 @@
 //     }, 200);
 //   };
 
-  
+
 
 //   return (
 //     <div
@@ -531,7 +531,7 @@ export default function DeliveryPersonnelModal({
 }: DeliveryPersonnelModalProps) {
   const { channels, loading: channelsLoading, error: channelsError } = useDeliveryChannels();
   const [activeTab, setActiveTab] = useState<TabType>("personnel");
-  
+
   // Personnel state (Tab 1)
   const { personnel, loading, error } = useDeliveryPersonnel(null); // Remove channel filter
   const [selectedPersonnel, setSelectedPersonnel] = useState<string>("");
@@ -542,7 +542,7 @@ export default function DeliveryPersonnelModal({
   const [deliveryFeeLoading, setDeliveryFeeLoading] = useState<boolean>(false);
   const [deliveryFeeError, setDeliveryFeeError] = useState<string | null>(null);
   const [requiresManualFee, setRequiresManualFee] = useState<boolean>(false);
-  
+
   // Channel state (Tab 2)
   const [selectedDeliveryChannel, setSelectedDeliveryChannel] = useState<string>("");
   const [channelReferenceNo, setChannelReferenceNo] = useState<string>("");
@@ -562,13 +562,13 @@ export default function DeliveryPersonnelModal({
       setDeliveryFeeLoading(false);
       setDeliveryFeeError(null);
       setRequiresManualFee(false);
-      
+
       // Reset channel state
       setSelectedDeliveryChannel("");
       setChannelReferenceNo("");
       setChannelSearchQuery("");
       setRemarks("");
-      
+
       // Reset UI state
       setIsPersonnelDropdownOpen(false);
       setIsChannelDropdownOpen(false);

@@ -17,13 +17,14 @@ from frappe.utils import flt
 
 def get_standard_delivery_charges():
 	val = frappe.db.get_single_value("Delivery Charges", "standard_delivery_charges")
-	
+
 	return flt(val or 0)
 
 
 def get_delivery_charge_item_code():
 	"""Return the Item code used for delivery charge line items."""
 	from klik_pos.api.delivery_charges import _ensure_delivery_charge_item
+
 	return _ensure_delivery_charge_item()
 
 
@@ -69,7 +70,6 @@ def create_compensation_for_sales_invoice(doc, method=None):
 		amount = delivery_charge_on_invoice
 
 	else:
-
 		amount = get_standard_delivery_charges()
 	if flt(amount, 2) <= 0:
 		return
@@ -87,5 +87,5 @@ def create_compensation_for_sales_invoice(doc, method=None):
 	)
 	comp.insert(ignore_permissions=True)
 	comp.submit()
-	
+
 	return comp.name

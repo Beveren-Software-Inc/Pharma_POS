@@ -1611,7 +1611,7 @@ export default function OrderSummary({
       document.removeEventListener("touchstart", handlePointerDownOutside);
     };
   }, [showCustomerDropdown]);
-  
+
   // State for prescription frequencies (from Prescription Frequency doctype)
   const [prescriptionFrequencies, setPrescriptionFrequencies] = useState<PrescriptionFrequency[]>([]);
 
@@ -2493,7 +2493,7 @@ export default function OrderSummary({
       });
     }
   };
-  
+
   const handlePatientSelect = async (patient: Patient) => {
     if (!patient || !patient.name) {
       return;
@@ -2512,7 +2512,7 @@ export default function OrderSummary({
         input.blur();
       }
     }, 50);
-    
+
     // Resolve linked Customer from Patient record (not just local name match)
     const resolvedCustomer = await resolveCustomerForPatient(patient.name);
     if (resolvedCustomer) {
@@ -2527,7 +2527,7 @@ export default function OrderSummary({
         setSelectedCustomer(matchingCustomer);
       }
     }
-    
+
     // Load medication orders and open modal — user adds items from there
     try {
       const [orders, history, historySummary, legacyDispensed, posDispensed, subscriptionPlans] = await Promise.all([
@@ -2555,16 +2555,16 @@ export default function OrderSummary({
       toast.error("Failed to fetch medication orders.");
     }
   };
-  
+
   const handleAddOrdersToCart = async (alternatives?: Record<string, string>) => {
     if (selectedOrders.size === 0) {
       toast.warning("Please select at least one medication order.");
       return;
     }
-    
+
     const ordersToAdd = medicationOrders.filter(order => selectedOrders.has(order.name));
     const selectedOrderNames = Array.from(new Set(ordersToAdd.map((o) => o.name).filter(Boolean)));
-    
+
     const itemsToAdd: MedicationOrderLineInput[] = [];
     const availability = productAvailability();
     let validationFailed = false;
@@ -2614,9 +2614,9 @@ export default function OrderSummary({
     if (validationFailed || itemsToAdd.length === 0) {
       return;
     }
-    
+
     const loadingToast = toast.loading(`Adding ${itemsToAdd.length} item(s) to cart...`);
-    
+
     try {
       let addedCount = 0;
       let notFoundCount = 0;
@@ -2630,7 +2630,7 @@ export default function OrderSummary({
           medsByItem.set(ci.id, new Set(existing));
         }
       });
-      
+
       for (const itemToAdd of itemsToAdd) {
         const result = await addMedicationOrderLineToCart(
           itemToAdd,
@@ -2642,14 +2642,14 @@ export default function OrderSummary({
         else if (result === "no_stock") noStockCount++;
         else notFoundCount++;
       }
-      
+
       toast.dismiss(loadingToast);
-      
+
       if (noStockCount > 0) {
         toast.error(`${noStockCount} item(s) have no stock. Select alternative drugs where needed.`);
         return;
       }
-      
+
       if (addedCount > 0 && notFoundCount === 0) {
         toast.success(`Successfully added ${addedCount} item(s) to cart.`);
       } else if (addedCount > 0 && notFoundCount > 0) {
@@ -2657,11 +2657,11 @@ export default function OrderSummary({
       } else {
         toast.error(`Failed to add items. None of the items were found in the product list.`);
       }
-      
+
       // Close modal and reset selection
       setShowMedicationOrdersModal(false);
       setSelectedOrders(new Set());
-      
+
     } catch (error) {
       console.error('Error adding items to cart:', error);
       toast.dismiss(loadingToast);
@@ -4642,7 +4642,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         p => (p.patient_name || p.name).toLowerCase() === customer.name.toLowerCase()
                       ) : null;
                       const isAlsoPatient = !!matchingPatient;
-                      
+
                       return (
                         <button
                           key={customer.id}
@@ -4682,7 +4682,7 @@ const handleSetSerial = (event: CustomEvent) => {
                         </button>
                       );
                     })}
-                    
+
                     {/* Patients (pharmacy / hospital mode) */}
                     {(isPharmacy || isHospitalPharmacy) && visiblePatients.length > 0 && (
                       <>
@@ -5029,7 +5029,7 @@ const handleSetSerial = (event: CustomEvent) => {
               const lineVatRate = isItemTaxTemplateMode && lineTaxTemplate ? (itemTaxTemplateRates[lineTaxTemplate] ?? 0) : 0;
               const displayTotal = discountedTotal + (discountedTotal * lineVatRate) / 100;
               const displayOriginalTotal = originalTotal + (originalTotal * lineVatRate) / 100;
-              
+
                 const cartItemBatch = (item as { batch_no?: string }).batch_no;
                 const cartItemSerial = (item as { serial_no?: string }).serial_no;
 

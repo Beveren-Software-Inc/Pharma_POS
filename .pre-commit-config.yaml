@@ -100,6 +100,10 @@ repos:
 ci:
   autofix_prs: true
   autoupdate_schedule: weekly
-exclude: 'node_modules|.git'
+# Anchored so that only the real .git / node_modules directories are excluded.
+# The previous unanchored 'node_modules|.git' also matched '.github', which
+# silently skipped every hook (including check-yaml) for .github/** - so the
+# workflow files themselves were never validated.
+exclude: '(^|/)node_modules/|(^|/)\.git/'
 default_stages: [pre-commit]
 fail_fast: false

@@ -59,3 +59,15 @@ typing-modules = ["frappe.types.DF"]
 quote-style = "double"
 indent-style = "tab"
 docstring-code-format = true
+
+# isort must be kept aligned with the ruff settings above. Otherwise the two
+# pre-commit hooks (isort + ruff-format) rewrite each other's output forever:
+# ruff-format indents wrapped code with tabs (`indent-style = "tab"`), while
+# isort's black profile defaults to a 4-space continuation indent.
+# Do NOT raise isort's `line_length`: isort counts a tab as one column while
+# ruff measures it as four, so a larger limit makes isort join imports that
+# ruff-format then splits again. isort's trailing commas keep its own
+# wrapping stable under ruff.
+[tool.isort]
+profile = "black"
+indent = "\t"

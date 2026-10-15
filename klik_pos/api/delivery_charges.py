@@ -73,7 +73,7 @@ def get_delivery_fee(distance, company=None, grand_total=None):
 		return {"success": True, "fee": fee, "requires_manual": False}
 
 	prev_threshold = first_threshold
-	
+
 	for row in rows[1:]:
 		current_threshold = flt(getattr(row, "distance_threshold", 0) or 0)
 		if prev_threshold < distance <= current_threshold:
@@ -124,7 +124,6 @@ def _ensure_delivery_charge_item():
 
 @frappe.whitelist()
 def get_delivery_charge_tax_amount(amount, company=None):
-
 	amount = flt(amount or 0)
 	print(f"Calculating tax for delivery charge amount: {amount}")
 
@@ -133,11 +132,7 @@ def get_delivery_charge_tax_amount(amount, company=None):
 
 	item_code = _ensure_delivery_charge_item()
 
-	item_tax_rows = frappe.get_all(
-		"Item Tax",
-		filters={"parent": item_code},
-		fields=["item_tax_template"]
-	)
+	item_tax_rows = frappe.get_all("Item Tax", filters={"parent": item_code}, fields=["item_tax_template"])
 
 	print(f"Found {len(item_tax_rows)} tax template rows for item {item_code}")
 
@@ -151,9 +146,7 @@ def get_delivery_charge_tax_amount(amount, company=None):
 			continue
 
 		template_taxes = frappe.get_all(
-			"Item Tax Template Detail",
-			filters={"parent": row.item_tax_template},
-			fields=["tax_rate"]
+			"Item Tax Template Detail", filters={"parent": row.item_tax_template}, fields=["tax_rate"]
 		)
 
 		for tax in template_taxes:
@@ -164,7 +157,4 @@ def get_delivery_charge_tax_amount(amount, company=None):
 
 	tax_amount = amount * total_rate / 100.0
 
-	return {
-		"success": True,
-		"tax": round(float(tax_amount), 3)
-	}
+	return {"success": True, "tax": round(float(tax_amount), 3)}

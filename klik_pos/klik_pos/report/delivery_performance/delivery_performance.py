@@ -126,7 +126,8 @@ def get_columns(filters: dict) -> list[dict]:
 def get_message() -> str:
 	default_pct = flt(frappe.db.get_single_value("Delivery Charges", "payment_percentage") or 0)
 	return _(
-		"Amount Payable = Delivery Charges × Payment %. "
+		# Multiplication sign is intentional UI copy (keeps the translation msgid stable).
+		"Amount Payable = Delivery Charges × Payment %. "  # noqa: RUF001
 		"Uses the delivery person's Payment % when set; otherwise falls back to Delivery Charges ({0}%)."
 	).format(default_pct)
 
@@ -137,9 +138,7 @@ def get_data(filters: dict) -> list[dict]:
 		return []
 
 	default_pct = flt(frappe.db.get_single_value("Delivery Charges", "payment_percentage") or 0)
-	standard_charges = flt(
-		frappe.db.get_single_value("Delivery Charges", "standard_delivery_charges") or 0
-	)
+	standard_charges = flt(frappe.db.get_single_value("Delivery Charges", "standard_delivery_charges") or 0)
 	delivery_item = get_delivery_charge_item_code()
 	charge_map = get_delivery_charge_amounts([row.name for row in invoices], delivery_item)
 	personnel_pct_map = get_personnel_payment_percentages(

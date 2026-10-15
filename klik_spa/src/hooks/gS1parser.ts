@@ -94,18 +94,18 @@ function isParenthesesFormat(code: string): boolean {
  */
 function parseParenthesesGS1(raw: string): GS1ParsedData {
   const result: GS1ParsedData = { raw, isGS1: false }
-  
+
   try {
     // Pattern to find all (AI)value pairs where AI is 2 digits
     const pattern = /\((\d{2})\)([^\(]*)/g
     let match
-    
+
     while ((match = pattern.exec(raw)) !== null) {
       const ai = match[1]
       const value = match[2].trim()
-      
+
       if (!value) continue
-      
+
       switch (ai) {
         case '01':
           result.gtin = value
@@ -122,14 +122,14 @@ function parseParenthesesGS1(raw: string): GS1ParsedData {
         // Add other AIs as needed
       }
     }
-    
+
     if (result.gtin || result.lotNumber || result.serialNumber || result.expiryDate) {
       result.isGS1 = true
     }
   } catch (e) {
     // If parsing fails, return the default result
   }
-  
+
   return result
 }
 
@@ -143,7 +143,7 @@ export function looksLikeGS1(code: string): boolean {
   if (isParenthesesFormat(code)) {
     return true
   }
-  
+
   // Strip common symbology identifier prefixes
   const stripped = code.replace(/^\]([dCeQ][0-9A-Za-z]|d[0-9])/, '')
   return /^(01|10|17|21|00|02|11|13|15|30|37|240|241|250|251|253|254|400|401|402|403|410|411|412|413|414|415|420|421|422|710|711|712|713|714)/.test(stripped)

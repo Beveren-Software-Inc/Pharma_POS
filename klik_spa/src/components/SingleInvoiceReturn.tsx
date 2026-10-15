@@ -132,7 +132,7 @@ export default function SingleInvoiceReturn({
         const invoiceDateObj = new Date(invoiceDate);
         const today = new Date();
         const daysSinceInvoice = Math.floor((today.getTime() - invoiceDateObj.getTime()) / (1000 * 60 * 60 * 24));
-        
+
         if (daysSinceInvoice > 14) {
           // Invoice is too old - show message and return empty items
           toast.warning(`This invoice is ${daysSinceInvoice} days old. Returns are only allowed within 14 days of the invoice date.`);
@@ -176,7 +176,7 @@ export default function SingleInvoiceReturn({
         // Handle both boolean and string/number values from backend
         const isNonReturnable = item.is_non_returnable === true || item.is_non_returnable === 1 || item.is_non_returnable === "1" || item.is_non_returnable === "true";
         const isRefrigerated = item.is_refrigerated_overdue === true || item.is_refrigerated_overdue === 1 || item.is_refrigerated_overdue === "1" || item.is_refrigerated_overdue === "true";
-        
+
         // Debug logging for all items
         console.log(`Processing item ${itemCode}:`, {
           isNonReturnable,
@@ -188,7 +188,7 @@ export default function SingleInvoiceReturn({
           returnedQty,
           available_qty: qty - returnedQty
         });
-        
+
         // Skip items that cannot be returned (non-returnable group OR refrigerated item)
         if (isNonReturnable || isRefrigerated) {
           console.log(`Item ${itemCode} filtered out due to restrictions`);
