@@ -1610,9 +1610,10 @@ const handleAutoFillPayment = (methodId: string) => {
       console.error("Batch expiry check failed:", error);
     }
 
-    // Allow invoice completion with partial/zero payment only when
-    // delivery personnel is selected OR insurance is selected.
-    const allowIncompletePayment = !!selectedDeliveryPersonnel || !!selectedHealthInsurance;
+    // A delivery channel is paid later, so the tender can stay empty.
+    // Delivery personnel and insurance can also complete without the full amount.
+    const allowIncompletePayment =
+      isCompanyDelivery || !!selectedDeliveryPersonnel || !!selectedHealthInsurance;
 
     // For B2B, we don't need payment validation
     // For B2C, validate payment completion unless exception applies.
@@ -1797,27 +1798,24 @@ const handleAutoFillPayment = (methodId: string) => {
   const hasChannel = !!selection.deliveryVia;
 
   // Company delivery: channel selected, no personnel -> pay later.
-  // Leave a method the cashier already filled. Only seed an empty payment row
-  // when nothing has been entered yet.
+  // Clear every tendered amount. The cashier can type one afterwards if they collect now.
   if (hasChannel && !hasPersonnel) {
     setIsCompanyDelivery(true);
-    const hasChosenPayment = Object.values(paymentAmounts).some((amt) => (amt || 0) > 0);
-    if (!hasChosenPayment && !paymentManuallyEditedRef.current) {
-      const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
-      let mop = channel?.mode_of_payment || null;
-      if (!mop && modes.length > 0) {
-        const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
-        mop = defaultMode?.mode_of_payment || null;
-      }
-
-      if (mop) {
-        setPaymentAmounts({ [mop]: 0 });
-      } else {
-        setPaymentAmounts({});
-      }
-      setRoundOffAmount(0);
-      setRoundOffInput("0.000");
+    paymentManuallyEditedRef.current = false;
+    const channel = deliveryChannels.find((c) => c.name === selection.deliveryVia);
+    let mop = channel?.mode_of_payment || null;
+    if (!mop && modes.length > 0) {
+      const defaultMode = modes.find((mode) => mode.default === 1) || modes[0];
+      mop = defaultMode?.mode_of_payment || null;
     }
+
+    if (mop) {
+      setPaymentAmounts({ [mop]: 0 });
+    } else {
+      setPaymentAmounts({});
+    }
+    setRoundOffAmount(0);
+    setRoundOffInput("0.000");
   } else {
     // Normal (immediate) delivery: allow payments
     setIsCompanyDelivery(false);
@@ -2053,8 +2051,8 @@ const handleAutoFillPayment = (methodId: string) => {
 
   const isActionButtonDisabled = () => {
     if (invoiceSubmitted || isProcessingPayment) return true;
-    // For B2C, check if payment is complete
-    if (isB2C) return outstandingAmount > 0;
+    // A delivery channel is collected later, so an empty tender can still be completed.
+    if (isB2C && !isCompanyDelivery) return outstandingAmount > 0;
     // For B2B, no payment validation needed
     return false;
   };
