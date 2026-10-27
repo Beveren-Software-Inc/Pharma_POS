@@ -1,0 +1,25 @@
+<svg width="54" height="54" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="KLiK PoS">
+  <defs>
+    <linearGradient id="klikPosTileSubtle" x1="24" y1="8" x2="488" y2="504" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4caf50"/>
+      <stop offset="1" stop-color="#24702a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- app tile, tinted (Subtle icon style) in the KLiK PoS green -->
+  <rect width="512" height="512" rx="116" fill="url(#klikPosTileSubtle)" fill-opacity="0.16"/>
+
+  <!-- receipt -->
+  <rect x="176" y="64" width="160" height="158" rx="26" stroke="#2e7d32" stroke-width="18"/>
+  <rect x="204" y="96" width="104" height="14" rx="7" fill="#2e7d32"/>
+  <rect x="204" y="128" width="104" height="14" rx="7" fill="#2e7d32"/>
+  <rect x="204" y="160" width="68" height="14" rx="7" fill="#2e7d32"/>
+
+  <!-- register -->
+  <rect x="88" y="248" width="336" height="200" rx="48" stroke="#2e7d32" stroke-width="18"/>
+  <rect x="200" y="272" width="112" height="12" rx="6" fill="#2e7d32"/>
+  <rect x="132" y="300" width="248" height="64" rx="18" fill="#2e7d32"/>
+  <rect x="148" y="392" width="44" height="32" rx="12" fill="#2e7d32"/>
+  <rect x="234" y="392" width="44" height="32" rx="12" fill="#2e7d32"/>
+  <rect x="320" y="392" width="44" height="32" rx="12" fill="#2e7d32"/>
+</svg>

@@ -4,7 +4,11 @@ app_publisher = "Beveren Sooftware Inc"
 app_description = "KLiK PoS: A Modern Point of Sale for your Business"
 app_email = "info@beverensoftware.com"
 app_license = "mit"
-app_icon_url = "/assets/klik_pos/images/ROSE_LOGO.png"
+# The app's own mark, square and self-contained: it lives with the app instead of being taken
+# from whatever site happens to have a customer logo on it (`ROSE_LOGO.png` used to be used here,
+# so the same code showed a different - and cropped - tile on every site). `?v=` busts the long
+# asset cache; bump it whenever the artwork changes, since the file name does not.
+app_icon_url = "/assets/klik_pos/images/klik_pos_icon.svg?v=1"
 app_icon_title = "KLiK PoS"
 app_icon_route = "/klik_pos"
 
@@ -17,7 +21,10 @@ app_icon_route = "/klik_pos"
 add_to_apps_screen = [
 	{
 		"name": "klik_pos",
-		"logo": "/assets/klik_pos/images/ROSE_LOGO.png",
+		# The Apps screen draws this in a 54x54 box, stretched to fit, so it has to be square
+		# artwork. The grid (`Desktop Icons` mode) prefers
+		# `public/icons/desktop_icons/<style>/klik_pos.svg`, which ships the same mark.
+		"logo": "/assets/klik_pos/images/klik_pos_icon.svg?v=1",
 		"title": "KLiK PoS",
 		"route": "/klik_pos",
 	}
@@ -162,8 +169,16 @@ before_migrate = ["klik_pos.setup.pos_opening_entry_links.ensure_pos_opening_ent
 # See klik_pos/setup/healthcare_link_fields.py. `after_install` covers
 # `bench install-app`, `after_migrate` covers `bench migrate` and doubles as the
 # repair path for sites that already carry such a field.
-after_install = ["klik_pos.setup.healthcare_link_fields.ensure_healthcare_link_fields"]
-after_migrate = ["klik_pos.setup.healthcare_link_fields.ensure_healthcare_link_fields"]
+after_install = [
+	"klik_pos.setup.healthcare_link_fields.ensure_healthcare_link_fields",
+	"klik_pos.setup.desktop_icon.sync_klik_pos_desktop_icon",
+]
+after_migrate = [
+	"klik_pos.setup.healthcare_link_fields.ensure_healthcare_link_fields",
+	# See klik_pos/setup/desktop_icon.py: the app icon reaches the desk through two paths, and the
+	# `Desktop Icons` one is a row that is only ever seeded once, at install time.
+	"klik_pos.setup.desktop_icon.sync_klik_pos_desktop_icon",
+]
 
 # Includes in <head>
 # ------------------
