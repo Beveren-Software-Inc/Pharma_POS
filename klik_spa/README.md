@@ -1,10 +1,10 @@
-# KLiK PoS
+# Pharma POS
 
-A modern, responsive Point of Sale System built with React, TypeScript, and Vite. Designed for retail businesses with both desktop and mobile interfaces.
+Pharmacy point of sale for ERPNext, built with React, TypeScript, and Vite.
 
 ## Features
 
-- 🏪 **Complete POS System** - Full retail point of sale functionality
+- 🏪 **Pharmacy POS** - Dispensing, checkout, and in-store sales
 - 📱 **Mobile-First Design** - Responsive UI that works on all devices
 - 👥 **Customer Management** - Add, edit, and manage customer information
 - 🛒 **Cart Management** - Intuitive cart with item management

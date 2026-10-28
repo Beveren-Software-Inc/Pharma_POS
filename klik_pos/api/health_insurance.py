@@ -1,4 +1,4 @@
-# Copyright (c) 2026, KLiK PoS and contributors
+# Copyright (c) 2026, Pharma POS and contributors
 # For license information, please see license.txt
 
 """

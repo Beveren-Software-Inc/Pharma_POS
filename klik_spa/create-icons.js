@@ -3,8 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 async function createIcons() {
-	// Use ROSE_LOGO.png from app public images (favicon & PWA icons generated from it)
-	const inputFile = path.join(__dirname, "..", "public", "images", "ROSE_LOGO.png");
+	const inputFile = path.join(__dirname, "..", "public", "images", "beveren-mark.png");
 	const publicDir = path.join(__dirname, "public");
 
 	// Create different icon sizes

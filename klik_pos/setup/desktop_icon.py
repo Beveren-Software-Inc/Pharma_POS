@@ -1,10 +1,10 @@
-# Copyright (c) 2026, KLiK PoS and contributors
+# Copyright (c) 2026, Pharma POS and contributors
 # For license information, please see license.txt
 
 """
-Keep the KLiK PoS tile on the icon this app ships, on every site.
+Keep the Pharma POS tile on the icon this app ships, on every site.
 
-A site draws the KLiK PoS icon through one of two paths, depending on
+A site draws the Pharma POS icon through one of two paths, depending on
 ``Desktop Settings.desktop_page`` (the setting is per site, not per user):
 
 * ``Apps`` - the screen is built from the ``add_to_apps_screen`` hook in ``hooks.py``, and the
@@ -34,14 +34,14 @@ import frappe
 
 #: The mark, as a path the desk can load. Bump the ``?v=`` token whenever the artwork changes:
 #: ``/assets`` files are served with long cache headers and the file name stays the same.
-APP_ICON_URL = "/assets/klik_pos/images/klik_pos_icon.svg?v=1"
+APP_ICON_URL = "/assets/klik_pos/images/beveren-mark.png?v=2"
 
 #: ``Desktop Icon`` is autonamed from ``label``, so the docname of the app's tile is the title.
-DESKTOP_ICON_LABEL = "KLiK PoS"
+DESKTOP_ICON_LABEL = "Pharma POS"
 
 
 def sync_klik_pos_desktop_icon():
-	"""Point the KLiK PoS ``Desktop Icon`` row at the icon this app ships."""
+	"""Point the Pharma POS ``Desktop Icon`` row at the icon this app ships."""
 	if not frappe.db.exists("Desktop Icon", DESKTOP_ICON_LABEL):
 		return
 

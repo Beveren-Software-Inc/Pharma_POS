@@ -30,7 +30,7 @@ export default function CartPage() {
             >
               <ArrowLeft className="w-6 h-6 text-gray-600 dark:text-gray-400" />
             </button>
-            <img src="/assets/klik_pos/images/ROSE_LOGO.png" alt="KLiK PoS" className="w-8 h-8 rounded-full object-cover" />
+            <img src="/assets/klik_pos/images/beveren-mark.png" alt="Pharma POS" className="w-8 h-8 object-contain" />
           </div>
 
           <div className="text-sm text-gray-500 dark:text-gray-400">

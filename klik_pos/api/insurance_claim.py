@@ -1,4 +1,4 @@
-# Copyright (c) 2026, KLiK PoS and contributors
+# Copyright (c) 2026, Pharma POS and contributors
 # Creates Insurance Claim from POS Sales Invoice after submit (Health Insurance + approved amount).
 
 import frappe

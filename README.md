@@ -1,13 +1,12 @@
 <div align="center" markdown="1">
 
-<!-- <img src=".github/klik-logo.svg" alt="KLiK PoS logo" width="80"/> -->
-<h1>KLiK PoS</h1>
+<img src="./docs/screenshots/beveren-logo.png" alt="Beveren" width="280"/>
+
+<h1>Pharma POS</h1>
 
 [![CI](https://github.com/Beveren-Software-Inc/Pharma_POS/actions/workflows/ci.yaml/badge.svg)](https://github.com/Beveren-Software-Inc/Pharma_POS/actions/workflows/ci.yaml) <br/>
 
-
-**Modern Point of Sale for Retail Businesses**
-
+**Pharmacy point of sale for ERPNext**
 
 </div>
 
@@ -23,15 +22,15 @@
 
 ---
 
-## KLiK PoS
-KLiK PoS is a 100% open-source Point of Sale for ERPNext - simple, modern, responsive, and feature-rich system designed for retail businesses.
+## Pharma POS
+Pharma POS is a pharmacy point of sale for ERPNext. It is a modern, responsive checkout for dispensing, insurance, and in-store sales.
 
 ---
 
 ### Motivation
 The default ERPNext PoS often fall short. They lack strong UX design, miss key compliance requirements (such as ZATCA tax regulations), and have limited social media integration—resulting in a subpar overall experience. Many of ERPNext’s older POS solutions are outdated, don’t support newer versions (v15 and above), and no longer meet today’s business needs.
 
-KLiK PoS was built to close this gap—offering a simple, modern, compliant, and feature-rich POS system designed specifically for ERPNext. Our goal is to deliver a seamless, enjoyable checkout experience—whether in-store or on the go—empowering sales teams to sell smarter, stay compliant, and serve customers with speed and confidence.
+Pharma POS was built to close this gap—offering a simple, modern, compliant, and feature-rich POS system designed specifically for ERPNext. Our goal is to deliver a seamless, enjoyable checkout experience—whether in-store or on the go—empowering sales teams to sell smarter, stay compliant, and serve customers with speed and confidence.
 
 ---
 
@@ -45,7 +44,7 @@ KLiK PoS was built to close this gap—offering a simple, modern, compliant, and
 - **Customer Management**: Create or edit individual or business customers directly from PoS
 - **Payment Processing**: Support for multiple payment methods with seamless round-off (write-off) handling
 
-After installing KLiK PoS, a few extra configurations are required inside **POS Profile** and **KLiK PoS Settings** to unlock the full functionality.
+After installing Pharma POS, a few extra configurations are required inside **POS Profile** and **Pharma POS Settings** to unlock the full functionality.
 
 ### POS Profile Settings
 
@@ -118,9 +117,7 @@ Defines how items are displayed on the POS screen:
 
 ---
 ### ZATCA Compliance
-KLiK PoS is fully compliant with ZATCA regulations for B2B and B2C invoices, as well as credit notes. The system has been validated and tested with the [Beveren ZATCA Integration App](https://github.com/Beveren-Software-Inc/zatca_integration).
-
-Saudi retailers can install both applications together to achieve ZATCA Phase 2 compliance effortlessly. KLiK PoS has been successfully adopted by numerous retail businesses, including some of the largest Dates Distributor companies in the Kingdom.
+Pharmacies in Saudi Arabia can install Pharma POS with the [Beveren ZATCA Integration App](https://github.com/Beveren-Software-Inc/zatca_integration) for Phase 2 invoices and credit notes.
 
 <div align="center">
 	<img src="./docs/screenshots/ZATCA_Compliance.png" alt="Hero Image" width="100%" />
@@ -141,7 +138,7 @@ Saudi retailers can install both applications together to achieve ZATCA Phase 2 
 ## Production Setup
 
 ### Managed Hosting
-Try KLiK PoS on [Frappe Cloud](https://frappecloud.com) for a hassle-free, secure, and scalable deployment.
+Try Pharma POS on [Frappe Cloud](https://frappecloud.com) for a hassle-free, secure, and scalable deployment.
 
 ### Self Hosting
 
@@ -168,7 +165,7 @@ bench start
 ### Backend (Frappe App)
 
 1. [Install Frappe/ERPNext](https://frappeframework.com/docs/v15/user/en/installation)
-2. Install KLiK PoS as above
+2. Install Pharma POS as above
 3. Run `bench start`
 
 ### Frontend (SPA)

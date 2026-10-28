@@ -1,15 +1,15 @@
 app_name = "klik_pos"
-app_title = "KLiK PoS"
+app_title = "Pharma POS"
 app_publisher = "Beveren Sooftware Inc"
-app_description = "KLiK PoS: A Modern Point of Sale for your Business"
+app_description = "Pharma POS: A pharmacy point of sale for ERPNext"
 app_email = "info@beverensoftware.com"
 app_license = "mit"
 # The app's own mark, square and self-contained: it lives with the app instead of being taken
 # from whatever site happens to have a customer logo on it (`ROSE_LOGO.png` used to be used here,
 # so the same code showed a different - and cropped - tile on every site). `?v=` busts the long
 # asset cache; bump it whenever the artwork changes, since the file name does not.
-app_icon_url = "/assets/klik_pos/images/klik_pos_icon.svg?v=1"
-app_icon_title = "KLiK PoS"
+app_icon_url = "/assets/klik_pos/images/beveren-mark.png?v=2"
+app_icon_title = "Pharma POS"
 app_icon_route = "/klik_pos"
 
 # Apps
@@ -24,8 +24,8 @@ add_to_apps_screen = [
 		# The Apps screen draws this in a 54x54 box, stretched to fit, so it has to be square
 		# artwork. The grid (`Desktop Icons` mode) prefers
 		# `public/icons/desktop_icons/<style>/klik_pos.svg`, which ships the same mark.
-		"logo": "/assets/klik_pos/images/klik_pos_icon.svg?v=1",
-		"title": "KLiK PoS",
+		"logo": "/assets/klik_pos/images/beveren-mark.png?v=2",
+		"title": "Pharma POS",
 		"route": "/klik_pos",
 	}
 ]
