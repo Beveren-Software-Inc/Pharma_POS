@@ -1,4 +1,4 @@
-# Copyright (c) 2026, KLiK PoS and contributors
+# Copyright (c) 2026, Pharma POS and contributors
 # For license information, please see license.txt
 
 """
@@ -10,7 +10,7 @@ DocType (``frappe.core.doctype.doctype.doctype.check_link_table_options``).
 Fixture import skips that check (``frappe.flags.in_fixtures``), so a fixture may
 reference a DocType that is not installed - but Frappe re-validates *every* field
 of a DocType whenever a single Custom Field is inserted on it. That is how this
-bites: installing KLiK PoS on a site without Healthcare left
+bites: installing Pharma POS on a site without Healthcare left
 ``Sales Invoice.custom_health_insurance`` pointing at the missing
 ``Health Insurance`` DocType, and the next Custom Field created for Sales Invoice
 - ERPNext's own regional setup while it creates a Company, or the ERPNext
@@ -119,4 +119,4 @@ def remove_dangling_custom_fields(names: list):
 	"""
 	for name in names:
 		frappe.delete_doc("Custom Field", name, ignore_permissions=True, force=True, ignore_missing=True)
-		print(f"KLiK PoS: removed Custom Field '{name}' - it links to a DocType that is not installed")
+		print(f"Pharma POS: removed Custom Field '{name}' - it links to a DocType that is not installed")

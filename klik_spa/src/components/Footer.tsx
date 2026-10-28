@@ -15,8 +15,9 @@ export default function Footer() {
     <footer className="fixed bottom-0 left-20 right-0 bg-beveren-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 z-10">
       <div className="w-full py-2 flex justify-between items-center px-4">
 
-        <div className="text-sm text-beveren-600 dark:text-beveren-400 font-bold">
-          Pharma PoS
+        <div className="flex items-center gap-2 text-sm text-beveren-600 dark:text-beveren-400 font-bold">
+          <img src="/assets/klik_pos/images/beveren-mark.png" alt="" className="h-5 w-5 object-contain" />
+          Pharma POS
         </div>
 
         <div className="text-xs text-gray-600 dark:text-gray-400">

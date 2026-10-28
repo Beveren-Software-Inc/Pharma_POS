@@ -1,4 +1,4 @@
-# Copyright (c) 2026, Klik POS contributors
+# Copyright (c) 2026, Pharma POS contributors
 """Serene BRD pharmacy controls.
 
 PHA-036  A controlled ("pink prescription") medicine may not be issued without a

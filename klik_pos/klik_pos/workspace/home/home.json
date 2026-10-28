@@ -1,7 +1,7 @@
 {
  "app": "klik_pos",
  "charts": [],
- "content": "[{\"id\":\"FcIZ54cymf\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Home</span>\",\"col\":12}},{\"id\":\"r_0-ZqR6Xv\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Klik POS\",\"col\":3}}]",
+ "content": "[{\"id\":\"FcIZ54cymf\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Home</span>\",\"col\":12}},{\"id\":\"r_0-ZqR6Xv\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pharma POS\",\"col\":3}}]",
  "creation": "2026-01-26 00:00:00.000000",
  "custom_blocks": [],
  "docstatus": 0,
@@ -18,7 +18,7 @@
    "dependencies": "",
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Klik POS",
+   "label": "Pharma POS",
    "link_count": 0,
    "link_to": "",
    "link_type": "Page",
@@ -30,7 +30,7 @@
  "modified": "2026-01-26 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "KLIK POS",
- "name": "Klik POS",
+ "name": "Pharma POS",
  "number_cards": [],
  "owner": "Administrator",
  "parent_page": "",
@@ -43,11 +43,11 @@
   {
    "color": "Grey",
    "doc_view": "List",
-   "label": "Klik POS",
+   "label": "Pharma POS",
    "type": "URL",
    "url": "/klik_pos"
   }
  ],
- "title": "Klik POS",
+ "title": "Pharma POS",
  "type": "Workspace"
 }

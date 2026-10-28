@@ -1,5 +1,5 @@
 """
-Database optimization script for Klik POS invoice performance.
+Database optimization script for Pharma POS invoice performance.
 Run this script to add indexes that will significantly improve query performance.
 """
 
