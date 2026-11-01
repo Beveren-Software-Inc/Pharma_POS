@@ -1,7 +1,7 @@
 {
   "name": "klik_pos",
   "version": "1.0.0",
-  "description": "KLiK PoS: A Modern Point of Sale for your Business",
+  "description": "Pharma POS: A pharmacy point of sale for ERPNext",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

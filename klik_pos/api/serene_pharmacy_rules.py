@@ -1,4 +1,4 @@
-# Copyright (c) 2026, Klik POS contributors
+# Copyright (c) 2026, Pharma POS contributors
 """Serene BRD pharmacy rules.
 
 PHA-040  Active (undispensed) medicines return to pharmacy stock at discharge.

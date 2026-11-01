@@ -510,7 +510,7 @@ export default function PaymentDialog({
       customer_name: sharingData.name || 'there',
       invoice_total: formatCurrency(calculations.grandTotal),
       invoice_number: invoiceData?.name || '',
-      company_name: 'KLiK PoS',
+      company_name: 'Pharma POS',
       date: new Date().toLocaleDateString(),
     };
 
@@ -535,7 +535,7 @@ export default function PaymentDialog({
       vehicle: 'Delivery Vehicle',
       invoice_total: formatCurrency(calculations.grandTotal),
       invoice_number: invoiceData?.name || '',
-      company_name: 'KLiK PoS',
+      company_name: 'Pharma POS',
       date: new Date().toLocaleDateString(),
     };
 
@@ -2826,7 +2826,7 @@ const handleAutoFillPayment = (methodId: string) => {
 
                       <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
                         <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                          Subject: Your Invoice from KLiK PoS
+                          Subject: Your Invoice from Pharma POS
                         </p>
                         <div className="text-sm text-gray-900 dark:text-white">
                           <div
@@ -3046,7 +3046,7 @@ const handleAutoFillPayment = (methodId: string) => {
                         <div className="text-sm text-gray-900 dark:text-white">
                           <p>Hi {sharingData.name || party.singular}!</p>
                           <p className="mt-1">
-                            Thank you for your purchase at KLiK PoS.
+                            Thank you for your purchase at Pharma POS.
                           </p>
                           <p className="mt-1">
                             Invoice Total:{" "}
@@ -3062,7 +3062,7 @@ const handleAutoFillPayment = (methodId: string) => {
                           await sendSMSMessage({
                             mobile_no: sharingData.phone,
                             customer_name: sharingData.name,
-                            message: `Thank you for your purchase at KLiK PoS.\nInvoice Total: ${formatCurrency(calculations.grandTotal)}\nThank you!`
+                            message: `Thank you for your purchase at Pharma POS.\nInvoice Total: ${formatCurrency(calculations.grandTotal)}\nThank you!`
                           });
                           toast.success("SMS sent successfully!");
                           setSharingMode(null);
@@ -3430,7 +3430,7 @@ const handleAutoFillPayment = (methodId: string) => {
               <>
                 <div className="text-center mb-4">
                   <h4 className="font-bold text-lg text-gray-900 dark:text-white">
-                    KLiK PoS
+                    Pharma POS
                   </h4>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     {isB2B ? "Sales Invoice" : "Sales Invoice"}

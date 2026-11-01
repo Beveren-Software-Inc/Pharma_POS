@@ -788,15 +788,19 @@ def _coerce_limit_offset(limit, offset) -> tuple[int, int]:
 
 def _get_item_select_fields() -> str:
 	"""Build SELECT fields for Item query, including optional pharmacy fields."""
-	select_fields = (
-		"i.name, i.item_name, i.description, i.item_group, i.image, i.stock_uom, "
-		"i.custom_strength, i.custom_pharmaceutical_form, i.custom_number_of_pack, "
-		"i.custom_pack_size, i.custom_route_of_administration"
-	)
+	select_fields = "i.name, i.item_name, i.description, i.item_group, i.image, i.stock_uom"
 
-	# Optional pharmacy field (may not exist on all installs)
-	if frappe.db.has_column("Item", "custom_active_substances"):
-		select_fields += ", i.custom_active_substances"
+	# Pharmacy columns are added by site customizations and are not part of this app.
+	for fieldname in (
+		"custom_strength",
+		"custom_pharmaceutical_form",
+		"custom_number_of_pack",
+		"custom_pack_size",
+		"custom_route_of_administration",
+		"custom_active_substances",
+	):
+		if frappe.db.has_column("Item", fieldname):
+			select_fields += f", i.{fieldname}"
 
 	# Optional stock tracking fields (serial / batch); safe-guarded by has_column checks
 	if frappe.db.has_column("Item", "has_serial_no"):

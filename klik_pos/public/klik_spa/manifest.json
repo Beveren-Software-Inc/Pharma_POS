@@ -1,11 +1,11 @@
 {
-  "name": "KLiK PoS",
-  "short_name": "KLiK PoS",
-  "description": "Modern Point of Sale System - KLiK PoS",
+  "name": "Pharma POS",
+  "short_name": "Pharma POS",
+  "description": "Pharmacy point of sale - Pharma POS",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#2E7D32",
+  "theme_color": "#0B7FE2",
   "orientation": "portrait-primary",
   "icons": [
     {

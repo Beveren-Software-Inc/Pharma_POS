@@ -387,7 +387,7 @@ def get_print_formats_for_doctype(doctype: str):
 @frappe.whitelist()
 def search_patients(search_query: str):
 	"""
-	Search for Patients by name, file no (KLiK patient id), id number, mobile, or document name.
+	Search for Patients by name, file no (patient id), id number, mobile, or document name.
 	Returns a list of matching patients.
 	"""
 	try:

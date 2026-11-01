@@ -96,9 +96,9 @@ export default function RetailSidebar() {
         className="h-20 w-full flex items-center justify-center border-gray-100 dark:border-gray-700 cursor-pointer active:scale-90 transition-transform duration-150"
       >
         <img
-          src="/assets/klik_pos/images/ROSE_LOGO.png"
-          alt="KLiK PoS"
-          className="w-12 h-12 rounded-full object-cover pointer-events-none"
+          src="/assets/klik_pos/images/beveren-mark.png"
+          alt="Pharma POS"
+          className="w-11 h-11 object-contain pointer-events-none"
         />
       </Link>
 

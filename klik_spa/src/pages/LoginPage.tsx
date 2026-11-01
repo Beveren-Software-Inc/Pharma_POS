@@ -90,9 +90,9 @@ export default function LoginPage() {
           {/* Logo Section */}
           <div className="text-center mb-6">
             <div className="flex justify-center mb-4">
-              <img src="/assets/klik_pos/images/ROSE_LOGO.png" alt="KLiK PoS" className="w-16 h-16 rounded-full shadow-lg" />
+              <img src="/assets/klik_pos/images/beveren-wordmark.png" alt="Beveren" className="h-12 w-auto" />
             </div>
-            <h1 className="text-3xl font-bold text-beveren-800">KLiK PoS</h1>
+            <h1 className="text-2xl font-bold text-beveren-800">Pharma POS</h1>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">

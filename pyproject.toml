@@ -3,7 +3,7 @@ name = "klik_pos"
 authors = [
     { name = "Beveren Sooftware Inc", email = "info@beverensoftware.com"}
 ]
-description = "KLiK PoS: A Modern Point of Sale for your Business"
+description = "Pharma POS: A pharmacy point of sale for ERPNext"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]

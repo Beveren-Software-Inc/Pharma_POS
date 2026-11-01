@@ -4427,13 +4427,14 @@ def submit_draft_invoice(invoice_id):
 		return {"success": False, "error": str(e)}
 
 
-from klik_pos.api.pos_profile import get_pos_details
-
-
 def _set_accounting_dimensions(doc):
 	"""
 	Set accounting dimensions (Department, Cost Center, Project) from POS Profile.
 	"""
+	# Imported lazily. pos_profile imports this module at load time, so a
+	# module-level import of get_pos_details leaves pos_profile half-initialized.
+	from klik_pos.api.pos_profile import get_pos_details
+
 	# Get POS details which includes cost_center, department, project
 	pos_details = get_pos_details()
 
