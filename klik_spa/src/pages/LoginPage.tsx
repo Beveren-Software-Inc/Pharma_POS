@@ -1,16 +1,28 @@
 import type React from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useAuth } from "../hooks/useAuth"
 
 export default function LoginPage() {
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
+  const [otp, setOtp] = useState("")
+  const [tmpId, setTmpId] = useState("")
+  const [verificationPrompt, setVerificationPrompt] = useState("")
+  const [isOtpStep, setIsOtpStep] = useState(false)
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const { login } = useAuth()
+  const { login, isAuthenticated, loading: authLoading } = useAuth()
+
+  useEffect(() => {
+    if (!authLoading && isAuthenticated) {
+      //eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const from = (location.state as any)?.from?.pathname || "/pos"
+      navigate(from, { replace: true })
+    }
+  }, [authLoading, isAuthenticated, location.state, navigate])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -25,6 +37,10 @@ export default function LoginPage() {
         //eslint-disable-next-line @typescript-eslint/no-explicit-any
         const from = (location.state as any)?.from?.pathname || "/pos"
         navigate(from, { replace: true })
+      } else if (result.requires_otp && result.tmp_id) {
+        setTmpId(result.tmp_id)
+        setVerificationPrompt(result.verification?.prompt || "Enter the verification code to continue.")
+        setIsOtpStep(true)
       } else {
         // Show user-friendly error messages
         setError(getUserFriendlyErrorMessage(result.message))
@@ -32,6 +48,34 @@ export default function LoginPage() {
     } catch (err) {
       setError("An unexpected error occurred. Please try again.")
       console.error("Login error:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError("")
+
+    try {
+      const result = await login(username, password, otp, tmpId)
+
+      if (result.success) {
+        //eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const from = (location.state as any)?.from?.pathname || "/pos"
+        navigate(from, { replace: true })
+      } else if (result.requires_otp && result.tmp_id) {
+        // keep challenge alive if backend rotates tmp_id
+        setTmpId(result.tmp_id)
+        setVerificationPrompt(result.verification?.prompt || verificationPrompt)
+        setError(getUserFriendlyErrorMessage(result.message))
+      } else {
+        setError(getUserFriendlyErrorMessage(result.message))
+      }
+    } catch (err) {
+      setError("An unexpected error occurred. Please try again.")
+      console.error("OTP verify error:", err)
     } finally {
       setLoading(false)
     }
@@ -79,6 +123,19 @@ export default function LoginPage() {
     return "Login failed. Please check your credentials and try again."
   }
 
+  if (authLoading || isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-beveren-50 to-beveren-100 flex items-center justify-center">
+        <div className="text-center">
+          <img src="/assets/klik_pos/images/beveren-mark.png" alt="" className="w-14 h-14 mx-auto mb-3 object-contain" />
+          <div className="text-2xl font-bold text-beveren-700 mb-4">Pharma POS</div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-beveren-700 mx-auto"></div>
+          <p className="text-beveren-600 mt-4">Checking session...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-beveren-50 to-beveren-100 flex items-center justify-center p-4">
       {/* Background Pattern */}
@@ -95,51 +152,89 @@ export default function LoginPage() {
             <h1 className="text-2xl font-bold text-beveren-800">Pharma POS</h1>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={isOtpStep ? handleVerifyOtp : handleLogin} className="space-y-4">
             <div className="space-y-3">
-              <div className="relative">
-                <input
-                  id="username"
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="w-full px-4 py-2.5 border-2 border-beveren-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent transition-all duration-200 bg-beveren-50/50"
-                  placeholder="Username or Email"
-                  required
-                />
-                <div className="absolute inset-y-0 right-0 flex items-center pr-3">
-                  <svg className="w-5 h-5 text-beveren-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+              {!isOtpStep ? (
+                <>
+                  <div className="relative">
+                    <input
+                      id="username"
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="w-full px-4 py-2.5 border-2 border-beveren-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent transition-all duration-200 bg-beveren-50/50"
+                      placeholder="Username or Email"
+                      required
                     />
-                  </svg>
-                </div>
-              </div>
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                      <svg className="w-5 h-5 text-beveren-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                        />
+                      </svg>
+                    </div>
+                  </div>
 
-              <div className="relative">
-                <input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-2.5 border-2 border-beveren-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent transition-all duration-200 bg-beveren-50/50"
-                  placeholder="Password"
-                  required
-                />
-                <div className="absolute inset-y-0 right-0 flex items-center pr-3">
-                  <svg className="w-5 h-5 text-beveren-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                  <div className="relative">
+                    <input
+                      id="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full px-4 py-2.5 border-2 border-beveren-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent transition-all duration-200 bg-beveren-50/50"
+                      placeholder="Password"
+                      required
                     />
-                  </svg>
-                </div>
-              </div>
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                      <svg className="w-5 h-5 text-beveren-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                        />
+                      </svg>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-xl border border-beveren-200 bg-beveren-50/60 p-3">
+                    <p className="text-sm text-beveren-800 text-center">
+                      {verificationPrompt || "Enter verification code to continue."}
+                    </p>
+                  </div>
+                  <div className="relative">
+                    <input
+                      id="otp"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                      className="w-full px-4 py-2.5 border-2 border-beveren-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-beveren-500 focus:border-transparent transition-all duration-200 bg-beveren-50/50"
+                      placeholder="Enter OTP code"
+                      required
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsOtpStep(false)
+                      setOtp("")
+                      setTmpId("")
+                      setVerificationPrompt("")
+                      setError("")
+                    }}
+                    className="w-full text-sm text-beveren-700 hover:text-beveren-900 underline"
+                  >
+                    Back to username and password
+                  </button>
+                </>
+              )}
             </div>
 
             {error && (
@@ -156,10 +251,10 @@ export default function LoginPage() {
               {loading ? (
                 <div className="flex items-center justify-center">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                  <span className="ml-2">Signing In...</span>
+                  <span className="ml-2">{isOtpStep ? "Verifying..." : "Signing In..."}</span>
                 </div>
               ) : (
-                "Sign In"
+                isOtpStep ? "Verify Code" : "Sign In"
               )}
             </button>
           </form>

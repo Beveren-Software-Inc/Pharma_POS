@@ -7,6 +7,14 @@ interface ERPNextConfig {
 interface LoginResponse {
   success: boolean;
   message: string;
+  requires_otp?: boolean;
+  tmp_id?: string;
+  verification?: {
+    method?: string;
+    prompt?: string;
+    setup?: boolean;
+    token_delivery?: boolean;
+  };
   user?: {
     name: string;
     email: string;
@@ -103,21 +111,25 @@ class ERPNextAPI {
     return headers;
   }
 
-  async login(username: string, password: string): Promise<LoginResponse> {
+  async login(username: string, password: string, otp?: string, tmpId?: string): Promise<LoginResponse> {
     try {
       console.log('Attempting login to:', this.config.baseUrl);
 
       // Try the standard login endpoint first
+      const loginPayload: Record<string, string> = {
+        usr: username,
+        pwd: password
+      };
+      if (otp) loginPayload.otp = otp;
+      if (tmpId) loginPayload.tmp_id = tmpId;
+
       let response = await fetch(`${this.config.baseUrl}/api/method/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify({
-          usr: username,
-          pwd: password
-        }),
+        body: JSON.stringify(loginPayload),
         credentials: 'include'
       });
 
@@ -133,10 +145,7 @@ class ERPNextAPI {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
           },
-          body: JSON.stringify({
-            usr: username,
-            pwd: password
-          }),
+          body: JSON.stringify(loginPayload),
           credentials: 'include'
         });
         console.log('Alternative login response status:', response.status);
@@ -171,6 +180,17 @@ class ERPNextAPI {
 
       const data = await response.json();
       console.log('Login response data:', data);
+
+      // Frappe 2FA challenge response
+      if (data?.tmp_id && data?.verification) {
+        return {
+          success: false,
+          requires_otp: true,
+          tmp_id: data.tmp_id,
+          verification: data.verification,
+          message: data.verification?.prompt || 'Verification code required'
+        };
+      }
 
       // Check for different response formats
       if (data.message === 'Logged In' || data.message?.name || data.message?.email) {
@@ -328,7 +348,7 @@ class ERPNextAPI {
       const data = await response.json();
       const username = data.message;
 
-      if (!username) {
+      if (!username || username === 'Guest') {
         throw new Error('No logged user found');
       }
 
@@ -547,7 +567,9 @@ class ERPNextAPI {
 
       if (response.ok) {
         const data = await response.json();
-        return !!data.message; // Return true if we get a username
+        const username = data.message;
+        // Frappe returns "Guest" for unauthenticated cookie sessions
+        return !!username && username !== 'Guest';
       }
       return false;
     } catch (error) {

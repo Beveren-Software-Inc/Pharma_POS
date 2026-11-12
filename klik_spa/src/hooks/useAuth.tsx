@@ -14,7 +14,23 @@ interface User {
 
 interface AuthContextType {
   user: User | null
-  login: (username: string, password: string) => Promise<{ success: boolean; message: string }>
+  login: (
+    username: string,
+    password: string,
+    otp?: string,
+    tmpId?: string
+  ) => Promise<{
+    success: boolean
+    message: string
+    requires_otp?: boolean
+    tmp_id?: string
+    verification?: {
+      method?: string
+      prompt?: string
+      setup?: boolean
+      token_delivery?: boolean
+    }
+  }>
   logout: () => Promise<void>
   checkSession: () => Promise<boolean>
   loading: boolean
@@ -38,70 +54,103 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Initialize ERPNext API session
     erpnextAPI.initializeSession()
 
-    // Check if user is already logged in
-    const token = localStorage.getItem("erpnext_token")
-    const userData = localStorage.getItem("user_data")
+    const clearLocalAuth = () => {
+      localStorage.removeItem("erpnext_token")
+      localStorage.removeItem("user_data")
+      localStorage.removeItem("erpnext_sid")
+      setUser(null)
+    }
 
+    const buildUser = (freshUserData: {
+      name?: string
+      email?: string
+      full_name?: string
+      first_name?: string
+      last_name?: string
+      role?: string
+      role_profile_name?: string
+      user_image?: string
+    }, fallback?: User | null): User => ({
+      name: freshUserData.name || fallback?.name || "",
+      email: freshUserData.email || freshUserData.name || fallback?.email || "",
+      full_name:
+        freshUserData.full_name ||
+        [freshUserData.first_name, freshUserData.last_name].filter(Boolean).join(" ") ||
+        fallback?.full_name ||
+        freshUserData.name ||
+        "",
+      role: freshUserData.role_profile_name || freshUserData.role || fallback?.role || "User",
+      first_name: freshUserData.first_name,
+      last_name: freshUserData.last_name,
+      user_image: freshUserData.user_image,
+    })
 
-    if (token && userData) {
+    const bootstrapAuth = async () => {
+      const token = localStorage.getItem("erpnext_token")
+      const userData = localStorage.getItem("user_data")
+      let cachedUser: User | null = null
+
+      if (token && userData) {
+        try {
+          cachedUser = JSON.parse(userData)
+          // Optimistic UI from cache while we confirm the Frappe cookie session
+          setUser(cachedUser)
+        } catch (error) {
+          console.error("Error parsing user data:", error)
+          clearLocalAuth()
+        }
+      }
+
       try {
-        const parsedUser = JSON.parse(userData)
-
-        // First, set the user from cached data to avoid login redirect
-        setUser(parsedUser)
-
-        const refreshUserData = async () => {
-          try {
-            // First validate the session
-            const isSessionValid = await erpnextAPI.validateSession()
-            if (!isSessionValid) {
-              console.warn("Session is invalid, clearing auth data")
-              localStorage.removeItem("erpnext_token")
-              localStorage.removeItem("user_data")
-              localStorage.removeItem("erpnext_sid")
-              setUser(null)
-              return
-            }
-
-            const freshUserData = await erpnextAPI.getCurrentUserProfile()
-            if (freshUserData) {
-              const updatedUser = {
-                name: freshUserData.name || parsedUser.name,
-                email: freshUserData.email || freshUserData.name || parsedUser.email,
-                full_name: freshUserData.full_name || freshUserData.first_name + ' ' + (freshUserData.last_name || '') || parsedUser.full_name,
-                role: freshUserData.role_profile_name || freshUserData.role || parsedUser.role || "User",
-                first_name: freshUserData.first_name,
-                last_name: freshUserData.last_name,
-                user_image: freshUserData.user_image
-              }
-
-              setUser(updatedUser)
-              localStorage.setItem("user_data", JSON.stringify(updatedUser))
-            }
-          } catch (error) {
-            console.warn("Failed to refresh user data, using cached data:", error)
-            // Don't clear the user data if refresh fails - keep using cached data
+        // Reuse the active Frappe/desk session when present (same-origin cookie)
+        const isSessionValid = await erpnextAPI.validateSession()
+        if (!isSessionValid) {
+          if (cachedUser) {
+            console.warn("Session is invalid, clearing auth data")
           }
+          clearLocalAuth()
+          return
         }
 
-        // Run refresh in background without blocking authentication
-        refreshUserData()
+        const freshUserData = await erpnextAPI.getCurrentUserProfile()
+        if (freshUserData) {
+          const updatedUser = buildUser(freshUserData, cachedUser)
+          setUser(updatedUser)
+          localStorage.setItem("erpnext_token", "authenticated")
+          localStorage.setItem("user_data", JSON.stringify(updatedUser))
+        } else if (!cachedUser) {
+          clearLocalAuth()
+        }
       } catch (error) {
-        console.error("Error parsing user data:", error)
-        localStorage.removeItem("erpnext_token")
-        localStorage.removeItem("user_data")
-        localStorage.removeItem("erpnext_sid")
+        console.warn("Failed to bootstrap auth from Frappe session:", error)
+        // Keep cached POS auth only if we already had it; otherwise stay logged out
+        if (!cachedUser) {
+          clearLocalAuth()
+        }
+      } finally {
+        setLoading(false)
       }
     }
-    setLoading(false)
+
+    bootstrapAuth()
   }, [mounted])
 
-  const login = async (username: string, password: string) => {
+  const login = async (username: string, password: string, otp?: string, tmpId?: string) => {
     try {
       setLoading(true)
 
       // Use the real ERPNext API
-      const result = await erpnextAPI.login(username, password)
+      const result = await erpnextAPI.login(username, password, otp, tmpId)
+
+      if (result.requires_otp) {
+        return {
+          success: false,
+          message: result.message,
+          requires_otp: true,
+          tmp_id: result.tmp_id,
+          verification: result.verification,
+        }
+      }
 
       if (result.success && result.user) {
         console.log("Login successful:", result.user)
