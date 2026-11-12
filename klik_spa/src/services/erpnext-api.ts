@@ -1,3 +1,5 @@
+import { getCSRFToken } from "../utils/csrf";
+
 interface ERPNextConfig {
   baseUrl: string;
   apiKey: string;
@@ -111,6 +113,23 @@ class ERPNextAPI {
     return headers;
   }
 
+  /** Cookie-session headers only (no API key). Used for login/session/logout. */
+  private getSessionHeaders(includeCsrf: boolean = false): HeadersInit {
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+
+    if (includeCsrf) {
+      const csrfToken = getCSRFToken();
+      if (csrfToken) {
+        headers['X-Frappe-CSRF-Token'] = csrfToken;
+      }
+    }
+
+    return headers;
+  }
+
   async login(username: string, password: string, otp?: string, tmpId?: string): Promise<LoginResponse> {
     try {
       console.log('Attempting login to:', this.config.baseUrl);
@@ -212,6 +231,8 @@ class ERPNextAPI {
           console.log('User profile fetched:', userProfile);
 
           if (userProfile) {
+            // Page was likely rendered as Guest — refresh CSRF for the new session
+            await this.refreshCsrfToken();
             return {
               success: true,
               message: 'Login successful',
@@ -256,6 +277,7 @@ class ERPNextAPI {
           };
         }
 
+        await this.refreshCsrfToken();
         return {
           success: true,
           message: 'Login successful',
@@ -301,18 +323,81 @@ class ERPNextAPI {
     }
   }
 
+  private setClientCsrfToken(token: string): void {
+    if (typeof window !== 'undefined') {
+      (window as Window & { csrf_token?: string }).csrf_token = token;
+    }
+  }
+
+  async refreshCsrfToken(): Promise<string | null> {
+    try {
+      const response = await fetch(
+        `${this.config.baseUrl}/api/method/klik_pos.api.user.get_csrf_token`,
+        {
+          method: 'GET',
+          headers: this.getSessionHeaders(),
+          credentials: 'include',
+        }
+      );
+      if (!response.ok) return null;
+      const data = await response.json();
+      const token = typeof data.message === 'string' ? data.message : null;
+      if (token) this.setClientCsrfToken(token);
+      return token;
+    } catch (error) {
+      console.warn('Failed to refresh CSRF token:', error);
+      return null;
+    }
+  }
+
   async logout(): Promise<void> {
     try {
-      await fetch(`${this.config.baseUrl}/api/method/logout`, {
+      // Ensure CSRF is current (important after SPA login, when page token is stale)
+      await this.refreshCsrfToken();
+
+      // Must end the Frappe/desk session cookie, otherwise POS SSO will auto-login again
+      let response = await fetch(`${this.config.baseUrl}/api/method/logout`, {
         method: 'POST',
-        headers: this.getHeaders(),
-        credentials: 'include'
+        headers: this.getSessionHeaders(true),
+        credentials: 'include',
       });
+
+      // Fallback if standard logout is rejected (stale/missing CSRF)
+      if (!response.ok) {
+        console.warn('Standard logout failed, trying POS logout fallback:', response.status);
+        response = await fetch(
+          `${this.config.baseUrl}/api/method/klik_pos.api.user.logout`,
+          {
+            method: 'GET',
+            headers: this.getSessionHeaders(),
+            credentials: 'include',
+          }
+        );
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Logout failed:', response.status, errorText);
+      }
+
+      this.setClientCsrfToken('');
     } catch (error) {
       console.error('Logout error:', error);
+      // Last resort: still attempt POS logout endpoint
+      try {
+        await fetch(`${this.config.baseUrl}/api/method/klik_pos.api.user.logout`, {
+          method: 'GET',
+          headers: this.getSessionHeaders(),
+          credentials: 'include',
+        });
+      } catch (fallbackError) {
+        console.error('Logout fallback error:', fallbackError);
+      }
     } finally {
       this.sessionId = null;
       localStorage.removeItem('erpnext_sid');
+      localStorage.removeItem('erpnext_token');
+      localStorage.removeItem('user_data');
     }
   }
 
@@ -320,7 +405,7 @@ class ERPNextAPI {
     try {
       const response = await fetch(`${this.config.baseUrl}/api/method/frappe.auth.get_logged_user`, {
         method: 'GET',
-        headers: this.getHeaders(),
+        headers: this.getSessionHeaders(),
         credentials: 'include'
       });
 
@@ -337,7 +422,7 @@ class ERPNextAPI {
       // Try to get user profile using the frappe.auth.get_logged_user method first
       const response = await fetch(`${this.config.baseUrl}/api/method/frappe.auth.get_logged_user`, {
         method: 'GET',
-        headers: this.getHeaders(),
+        headers: this.getSessionHeaders(),
         credentials: 'include'
       });
 
@@ -353,9 +438,9 @@ class ERPNextAPI {
       }
 
       // Now fetch the full User document
-      const userResponse = await fetch(`${this.config.baseUrl}/api/resource/User/${username}`, {
+      const userResponse = await fetch(`${this.config.baseUrl}/api/resource/User/${encodeURIComponent(username)}`, {
         method: 'GET',
-        headers: this.getHeaders(),
+        headers: this.getSessionHeaders(),
         credentials: 'include'
       });
 
@@ -561,7 +646,8 @@ class ERPNextAPI {
     try {
       const response = await fetch(`${this.config.baseUrl}/api/method/frappe.auth.get_logged_user`, {
         method: 'GET',
-        headers: this.getHeaders(),
+        // Cookie session only — API key auth would look "logged in" even after logout
+        headers: this.getSessionHeaders(),
         credentials: 'include'
       });
 

@@ -118,6 +118,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(updatedUser)
           localStorage.setItem("erpnext_token", "authenticated")
           localStorage.setItem("user_data", JSON.stringify(updatedUser))
+          // Keep SPA CSRF in sync with the active Frappe session
+          await erpnextAPI.refreshCsrfToken()
         } else if (!cachedUser) {
           clearLocalAuth()
         }
@@ -178,11 +180,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const logout = async () => {
-    await erpnextAPI.logout()
+    // Clear local auth first so remount/bootstrap cannot revive the POS session
     setUser(null)
     localStorage.removeItem("erpnext_token")
     localStorage.removeItem("user_data")
     localStorage.removeItem("erpnext_sid")
+
+    // End the shared Frappe/desk cookie session
+    await erpnextAPI.logout()
   }
 
   // Method to check if session is still valid
