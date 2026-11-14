@@ -3,6 +3,27 @@ from frappe import _
 
 
 @frappe.whitelist()
+def get_csrf_token():
+	"""Return the current session CSRF token for the POS SPA."""
+	token = frappe.sessions.get_csrf_token()
+	# Persist for logged-in users so the next POST can validate the header.
+	if frappe.session.user != "Guest":
+		frappe.db.commit()
+	return token
+
+
+@frappe.whitelist(allow_guest=True)
+def logout():
+	"""End the current Frappe/desk session from the POS SPA.
+
+	Safe to call over GET (no CSRF) so logout still works if the SPA token is stale.
+	"""
+	frappe.local.login_manager.logout()
+	frappe.db.commit()
+	return "Logged Out"
+
+
+@frappe.whitelist()
 def get_user_roles():
 	"""
 	Get the current user's roles and determine if they have administrative privileges.
