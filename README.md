@@ -36,6 +36,22 @@ yarn dev
 
 The UI dev server is `klik_spa` and proxies API calls to the bench.
 
+### Pre-commit hooks
+
+Git hooks are **not** part of the repository (they live in `.git/hooks/`, which git
+never clones), so each clone needs them installed once. Run this after
+`bench get-app`, after re-cloning, and after `bench update` replaces the checkout:
+
+```bash
+pre-commit install
+# if `pre-commit` is not on PATH, use the bench virtualenv:
+# ../../env/bin/pre-commit install
+```
+
+Verify the hook is live with `ls -l .git/hooks/pre-commit` (it must exist and be
+executable — the default clone only ships `*.sample` files). To check the whole
+tree instead of just staged files, run `pre-commit run --all-files`.
+
 ## Support
 
 [info@beverensoftware.com](mailto:info@beverensoftware.com)

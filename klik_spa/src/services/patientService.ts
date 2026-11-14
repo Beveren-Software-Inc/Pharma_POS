@@ -834,6 +834,8 @@ export async function getOpenPharmacyPatientVisits(
     includeClosed?: boolean;
     fromDate?: string;
     toDate?: string;
+    /** Ignore the Display On Pharmacy POS flag and return visits of every visit type. */
+    allVisitTypes?: boolean;
   }
 ): Promise<OpenPharmacyPatientVisit[]> {
   try {
@@ -845,6 +847,9 @@ export async function getOpenPharmacyPatientVisits(
       params.set("include_closed", "1");
       if (opts.fromDate) params.set("from_date", opts.fromDate);
       if (opts.toDate) params.set("to_date", opts.toDate);
+    }
+    if (opts?.allVisitTypes) {
+      params.set("all_visit_types", "1");
     }
     const apiUrl = `/api/method/klik_pos.api.patient.get_open_pharmacy_patient_visits?${params.toString()}`;
     const response = await fetch(apiUrl, {

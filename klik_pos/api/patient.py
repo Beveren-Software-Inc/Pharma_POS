@@ -1340,13 +1340,17 @@ def get_open_pharmacy_patient_visits(
 	include_closed: int | str | bool = 0,
 	from_date: str | None = None,
 	to_date: str | None = None,
+	all_visit_types: int | str | bool = 0,
 ):
 	"""
-	Return Patient Visits whose visit type is flagged Display On Pharmacy POS.
+	Return Patient Visits for the Pharmacy POS visit picker.
 
-	Default: open visits only.
+	Default: open visits only, limited to visit types flagged
+	Display On Pharmacy POS.
 	With include_closed=1: also include closed visits (Completed / External Referral)
 	in the given date range (defaults to the last 7 days). Cancelled stays excluded.
+	With all_visit_types=1: ignore the Display On Pharmacy POS flag and return
+	visits of every visit type (combines with include_closed).
 	Creating a visit from POS still uses the Pharmacy visit type.
 	"""
 	try:
@@ -1359,9 +1363,15 @@ def get_open_pharmacy_patient_visits(
 			limit = 20
 
 		include_closed = bool(frappe.utils.cint(include_closed))
+		all_visit_types = bool(frappe.utils.cint(all_visit_types))
 
 		if not frappe.db.exists("DocType", "Patient Visit"):
-			return {"success": True, "visits": [], "doctype": None}
+			return {
+				"success": True,
+				"visits": [],
+				"doctype": None,
+				"all_visit_types": all_visit_types,
+			}
 
 		meta = frappe.get_meta("Patient Visit")
 		fields = {f.fieldname for f in meta.fields}
@@ -1400,7 +1410,7 @@ def get_open_pharmacy_patient_visits(
 			"docstatus": ["<", 2],
 		}
 
-		if "visit_type" in fields:
+		if "visit_type" in fields and not all_visit_types:
 			pos_types = _pos_display_visit_type_values()
 			if not pos_types:
 				return {
@@ -1408,6 +1418,7 @@ def get_open_pharmacy_patient_visits(
 					"visits": [],
 					"doctype": "Patient Visit",
 					"include_closed": include_closed,
+					"all_visit_types": all_visit_types,
 					"from_date": str(from_date) if include_closed else None,
 					"to_date": str(to_date) if include_closed else None,
 				}
@@ -1479,6 +1490,7 @@ def get_open_pharmacy_patient_visits(
 			"visits": rows,
 			"doctype": "Patient Visit",
 			"include_closed": include_closed,
+			"all_visit_types": all_visit_types,
 			"from_date": str(from_date) if include_closed else None,
 			"to_date": str(to_date) if include_closed else None,
 		}

@@ -1088,6 +1088,7 @@ export default function InpatientMedicationOrdersModal({
   const [openPharmacyVisits, setOpenPharmacyVisits] = useState<OpenPharmacyPatientVisit[]>([]);
   const [loadingOpenVisits, setLoadingOpenVisits] = useState(false);
   const [includeClosedVisits, setIncludeClosedVisits] = useState(false);
+  const [includeAllVisitTypes, setIncludeAllVisitTypes] = useState(false);
   const [closedVisitFrom, setClosedVisitFrom] = useState(() => defaultClosedVisitRange().from);
   const [closedVisitTo, setClosedVisitTo] = useState(() => defaultClosedVisitRange().to);
   const [showClosedVisitRangeModal, setShowClosedVisitRangeModal] = useState(false);
@@ -1168,6 +1169,7 @@ export default function InpatientMedicationOrdersModal({
 
   const loadOpenPharmacyVisits = useCallback(async (opts?: {
     includeClosed?: boolean;
+    allVisitTypes?: boolean;
     fromDate?: string;
     toDate?: string;
   }) => {
@@ -1178,9 +1180,11 @@ export default function InpatientMedicationOrdersModal({
     setLoadingOpenVisits(true);
     try {
       const includeClosed = opts?.includeClosed ?? includeClosedVisits;
+      const allVisitTypes = opts?.allVisitTypes ?? includeAllVisitTypes;
       const visits = await getOpenPharmacyPatientVisits(patientId, {
         limit: includeClosed ? 50 : 20,
         includeClosed,
+        allVisitTypes,
         fromDate: includeClosed ? (opts?.fromDate ?? closedVisitFrom) : undefined,
         toDate: includeClosed ? (opts?.toDate ?? closedVisitTo) : undefined,
       });
@@ -1188,7 +1192,13 @@ export default function InpatientMedicationOrdersModal({
     } finally {
       setLoadingOpenVisits(false);
     }
-  }, [patientId, isHospitalMode, includeClosedVisits, closedVisitFrom, closedVisitTo]);
+  }, [patientId, isHospitalMode, includeClosedVisits, includeAllVisitTypes, closedVisitFrom, closedVisitTo]);
+
+  const toggleAllVisitTypes = async () => {
+    const next = !includeAllVisitTypes;
+    setIncludeAllVisitTypes(next);
+    await loadOpenPharmacyVisits({ includeClosed: includeClosedVisits, allVisitTypes: next });
+  };
 
   const handleToggleUnsignedPending = async () => {
     if (!onReloadPendingOrders) return;
@@ -1214,7 +1224,7 @@ export default function InpatientMedicationOrdersModal({
     }
     setIncludeClosedVisits(true);
     setShowClosedVisitRangeModal(false);
-    await loadOpenPharmacyVisits({ includeClosed: true, fromDate: from, toDate: to });
+    await loadOpenPharmacyVisits({ includeClosed: true, allVisitTypes: includeAllVisitTypes, fromDate: from, toDate: to });
   };
 
   const clearClosedVisitFilter = async () => {
@@ -1223,7 +1233,7 @@ export default function InpatientMedicationOrdersModal({
     setClosedVisitFrom(range.from);
     setClosedVisitTo(range.to);
     setShowClosedVisitRangeModal(false);
-    await loadOpenPharmacyVisits({ includeClosed: false });
+    await loadOpenPharmacyVisits({ includeClosed: false, allVisitTypes: includeAllVisitTypes });
   };
 
   useEffect(() => {
@@ -1246,6 +1256,7 @@ export default function InpatientMedicationOrdersModal({
       setSubscriptionAlternativeDrugLabels({});
       setOpenPharmacyVisits([]);
       setIncludeClosedVisits(false);
+      setIncludeAllVisitTypes(false);
       const range = defaultClosedVisitRange();
       setClosedVisitFrom(range.from);
       setClosedVisitTo(range.to);
@@ -2407,35 +2418,55 @@ export default function InpatientMedicationOrdersModal({
                           {includeClosedVisits ? "Open & closed visits" : "Open patient visits"}
                         </h3>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                          {includeClosedVisits
+                          {(includeClosedVisits
                             ? `Open visits plus closed visits from ${closedVisitFrom} to ${closedVisitTo}`
-                            : "Reuse a visit already opened by reception — avoids duplicates"}
+                            : "Reuse a visit already opened by reception — avoids duplicates") +
+                            (includeAllVisitTypes ? " · all visit types" : "")}
                         </p>
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                      <button
-                        type="button"
-                        disabled={!patientId || loadingOpenVisits}
-                        onClick={() => {
-                          if (includeClosedVisits) {
-                            void clearClosedVisitFilter();
-                          } else {
-                            const range = defaultClosedVisitRange();
-                            setClosedVisitFrom(range.from);
-                            setClosedVisitTo(range.to);
-                            setShowClosedVisitRangeModal(true);
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          disabled={!patientId || loadingOpenVisits}
+                          onClick={() => void toggleAllVisitTypes()}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
+                            includeAllVisitTypes
+                              ? "border-violet-600 bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200"
+                              : "border-violet-600 text-violet-700 bg-white hover:bg-violet-50"
+                          }`}
+                          title={
+                            includeAllVisitTypes
+                              ? "Showing every visit type — click to show Pharmacy visit types only"
+                              : "Show every visit type, not just Pharmacy visit types"
                           }
-                        }}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
-                          includeClosedVisits
-                            ? "border-sky-600 bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
-                            : "border-sky-600 text-sky-700 bg-white hover:bg-sky-50"
-                        }`}
-                        title="Include closed visits in a date range"
-                      >
-                        {includeClosedVisits ? "Open only" : "Include closed…"}
-                      </button>
+                        >
+                          {includeAllVisitTypes ? "Pharmacy types" : "All visit types"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!patientId || loadingOpenVisits}
+                          onClick={() => {
+                            if (includeClosedVisits) {
+                              void clearClosedVisitFilter();
+                            } else {
+                              const range = defaultClosedVisitRange();
+                              setClosedVisitFrom(range.from);
+                              setClosedVisitTo(range.to);
+                              setShowClosedVisitRangeModal(true);
+                            }
+                          }}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg border-2 transition-colors whitespace-nowrap disabled:opacity-50 ${
+                            includeClosedVisits
+                              ? "border-sky-600 bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+                              : "border-sky-600 text-sky-700 bg-white hover:bg-sky-50"
+                          }`}
+                          title="Include closed visits in a date range"
+                        >
+                          {includeClosedVisits ? "Open only" : "Include closed…"}
+                        </button>
+                      </div>
                       {includeClosedVisits ? (
                         <button
                           type="button"
@@ -2458,7 +2489,11 @@ export default function InpatientMedicationOrdersModal({
                     </div>
                   ) : openPharmacyVisits.length === 0 ? (
                     <p className="text-sm text-gray-500 px-2 py-3">
-                      {includeClosedVisits
+                      {includeAllVisitTypes
+                        ? includeClosedVisits
+                          ? "No visits of any type in this date range. Create one below if needed."
+                          : "No open visits of any type for this patient. Create one below if needed."
+                        : includeClosedVisits
                         ? "No matching visits in this date range. Create one below if needed."
                         : "No open visits for this patient. Create one below if needed."}
                     </p>
@@ -2596,7 +2631,9 @@ export default function InpatientMedicationOrdersModal({
               : lastCreatedVisit?.name
               ? "Visit linked — used when you dispense"
               : openPharmacyVisits.length > 0
-              ? "Select an open visit, or create a new Pharmacy visit"
+              ? includeAllVisitTypes
+                ? "Select a visit of any type, or create a new Pharmacy visit"
+                : "Select an open visit, or create a new Pharmacy visit"
               : "Create a new encounter above"}
           </div>
           <div className="flex items-center gap-2">
