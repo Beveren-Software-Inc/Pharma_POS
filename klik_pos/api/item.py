@@ -563,14 +563,15 @@ def get_dispensing_lots_for_item(item_code: str, batch_no=None):
 	try:
 		pos_doc = get_current_pos_profile()
 		warehouse = getattr(pos_doc, "warehouse", None)
+		if not warehouse:
+			return []
 
 		filters = {
 			"item": item_code,
 			"status": ["in", ["Active", "Partially Sold"]],
 			"remaining_qty": [">", 0],
 		}
-		if warehouse:
-			filters["warehouse"] = warehouse
+		filters["warehouse"] = warehouse
 		if batch_no:
 			filters["batch_no"] = batch_no
 

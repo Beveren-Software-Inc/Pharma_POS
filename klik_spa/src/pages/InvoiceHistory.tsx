@@ -105,15 +105,38 @@ function defaultCustomRange(): { from: string; to: string } {
 export default function InvoiceHistoryPage() {
   const navigate = useNavigate();
   const isMobile = useMediaQuery("(max-width: 1024px)");
-  const [activeTab, setActiveTab] = useState("all");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [dateFilter, setDateFilter] = useState("today");
-  const [customFromDate, setCustomFromDate] = useState(() => defaultCustomRange().from);
-  const [customToDate, setCustomToDate] = useState(() => defaultCustomRange().to);
+  const filterStorageKey = "klik-pos:invoice-history-filters";
+  const [savedFilters] = useState<Record<string, unknown>>(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(filterStorageKey) ?? "{}") ?? {};
+    } catch {
+      return {};
+    }
+  });
+  const savedString = (key: string, fallback: string) =>
+    typeof savedFilters[key] === "string" ? savedFilters[key] : fallback;
+
+  const [activeTab, setActiveTab] = useState(() => savedString("activeTab", "all"));
+  const [searchTerm, setSearchTerm] = useState(() => savedString("searchTerm", ""));
+  const [dateFilter, setDateFilter] = useState(() => savedString("dateFilter", "today"));
+  const [customFromDate, setCustomFromDate] = useState(() => savedString("customFromDate", defaultCustomRange().from));
+  const [customToDate, setCustomToDate] = useState(() => savedString("customToDate", defaultCustomRange().to));
   const [exportingDispenseReport, setExportingDispenseReport] = useState(false);
-  const [showAllBranches, setShowAllBranches] = useState(false);
-  const [paymentFilter, setPaymentFilter] = useState("all");
-  const [cashierFilter, setCashierFilter] = useState("all");
+  const [showAllBranches, setShowAllBranches] = useState(() => savedFilters.showAllBranches === true);
+  const [paymentFilter, setPaymentFilter] = useState(() => savedString("paymentFilter", "all"));
+  const [cashierFilter, setCashierFilter] = useState(() => savedString("cashierFilter", "all"));
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(filterStorageKey, JSON.stringify({
+        activeTab, searchTerm, dateFilter, customFromDate, customToDate,
+        showAllBranches, paymentFilter, cashierFilter,
+      }));
+    } catch {
+      // Filters still work when session storage is unavailable.
+    }
+  }, [filterStorageKey, activeTab, searchTerm, dateFilter, customFromDate, customToDate,
+    showAllBranches, paymentFilter, cashierFilter]);
+
   const [viewMode, setViewMode] = useState<"cards" | "list">("list");
   const [selectedInvoice] = useState<SalesInvoice | null>(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
@@ -1237,6 +1260,7 @@ const getStatusBadge = (status: string) => {
                                 <tr>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Medicine</th>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Batch</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Dispensing Lot</th>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">UOM</th>
                                   <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Qty</th>
                                   <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Returned</th>
@@ -1269,6 +1293,7 @@ const getStatusBadge = (status: string) => {
                                       <div className="text-xs text-gray-500">{item.item_code}</div>
                                     </td>
                                     <td className="px-4 py-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">{item.batch_no || "—"}</td>
+                                    <td className="px-4 py-2 text-gray-600 dark:text-gray-300 whitespace-pre-line">{item.dispensing_lot || "—"}</td>
                                     <td className="px-4 py-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">{item.uom || "—"}</td>
                                     <td className="px-4 py-2 text-right text-gray-900 dark:text-white whitespace-nowrap">{item.qty ?? item.quantity}</td>
                                     <td className="px-4 py-2 text-right">
@@ -1475,6 +1500,9 @@ const getStatusBadge = (status: string) => {
                         <div className="text-xs text-gray-500">
                           {item.item_code}
                           {item.batch_no ? ` · Batch ${item.batch_no}` : ""}
+                          {isHospitalPharmacy && item.dispensing_lot ? (
+                            <div className="whitespace-pre-line">Dispensing Lot: {item.dispensing_lot}</div>
+                          ) : null}
                           {item.uom ? ` · ${item.uom}` : ""}
                           {(item.returned_qty ?? 0) > 0 ? ` · Returned ${item.returned_qty}` : ""}
                         </div>
