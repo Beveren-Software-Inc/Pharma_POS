@@ -1222,6 +1222,7 @@ def create_draft_invoice(data):
 			business_type,
 			roundoff_amount,
 			include_payments=True,
+			allow_missing_batch=True,
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
 			reference_no=reference_no,
@@ -1296,6 +1297,7 @@ def update_draft_invoice(data):
 			business_type,
 			roundoff_amount,
 			include_payments=True,
+			allow_missing_batch=True,
 			delivery_personnel=delivery_personnel,
 			delivery_via=delivery_via,
 			reference_no=reference_no,
@@ -1484,6 +1486,7 @@ def build_sales_invoice_doc(
 	insurance_amount=0.0,
 	insurance_is_credit=0,
 	existing_doc=None,
+	allow_missing_batch=False,
 ):
 	"""Main function to build a sales invoice document."""
 	if existing_doc:
@@ -1544,7 +1547,7 @@ def build_sales_invoice_doc(
 	_set_pos_profile_fields(doc, pos_profile, customer, business_type)
 
 	items = _normalize_pos_items_for_dispensing(items, pos_profile)
-	_validate_and_autofetch_batch_and_serial(items, pos_profile)
+	_validate_and_autofetch_batch_and_serial(items, pos_profile, allow_missing_batch=allow_missing_batch)
 
 	from klik_pos.api.batch_expiry import validate_pos_items_batch_expiry
 
@@ -1640,7 +1643,7 @@ def _validate_pos_dispensing_lot_sale(item, item_code, dispensing_lot_name=None)
 	validate_dispensing_lot_for_sale(_pos_item_row_for_lot_validation(item, item_code, lot, qty), lot)
 
 
-def _validate_and_autofetch_batch_and_serial(items, pos_profile):
+def _validate_and_autofetch_batch_and_serial(items, pos_profile, *, allow_missing_batch=False):
 	"""
 	Validate that all batch/serial requirements are satisfied for POS items.
 
@@ -1680,7 +1683,7 @@ def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 		)
 
 		if item_requires_dispensing_lot(item_code):
-			if has_batch_no and not batch_number:
+			if not allow_missing_batch and has_batch_no and not batch_number:
 				frappe.throw(
 					_("Batch is mandatory for Item {0}. Please select a batch before submitting.").format(
 						item_code
@@ -1696,7 +1699,7 @@ def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 			continue
 
 		if _use_dispensing_lot_mode(pos_profile):
-			if has_batch_no and not batch_number:
+			if not allow_missing_batch and has_batch_no and not batch_number:
 				frappe.throw(
 					_("Batch is mandatory for Item {0}. Please select a batch before submitting.").format(
 						item_code
@@ -1715,7 +1718,7 @@ def _validate_and_autofetch_batch_and_serial(items, pos_profile):
 			)
 
 		# Batch-number items: optionally auto-fetch, otherwise require explicit batch
-		if has_batch_no and not batch_number:
+		if not allow_missing_batch and has_batch_no and not batch_number:
 			if auto_fetch_enabled:
 				# Try to auto-pick a batch using simple FIFO strategy
 				auto_batch = _autofetch_batch_fifo(item_code, pos_profile.warehouse, item.get("quantity"))

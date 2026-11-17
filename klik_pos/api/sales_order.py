@@ -1094,15 +1094,18 @@ def _get_dispense_dn_items_by_sales_order(order_names):
 	if not order_names:
 		return {}
 
+	# Keep history available on sites without the custom Delivery Note Item field.
+	lot_column = "dni.custom_dispensing_lot" if frappe.db.has_column("Delivery Note Item", "custom_dispensing_lot") else "NULL"
 	rows = frappe.db.sql(
-		"""
+		f"""
 		SELECT
 			dni.against_sales_order AS sales_order,
 			dni.parent AS delivery_note,
 			dni.name AS dn_detail,
 			dni.so_detail,
 			dni.item_code,
-			dni.batch_no
+			dni.batch_no,
+			{lot_column} AS dispensing_lot
 		FROM `tabDelivery Note Item` dni
 		INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
 		WHERE dni.against_sales_order IN %(orders)s
@@ -1566,6 +1569,7 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None, f
 						"amount": row.amount,
 						"uom": row.get("uom"),
 						"batch_no": dn_match.batch_no if dn_match else None,
+						"dispensing_lot": dn_match.dispensing_lot if dn_match else None,
 						"returned_qty": 0,
 						"available_qty": flt(row.qty),
 					}

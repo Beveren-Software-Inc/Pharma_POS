@@ -155,6 +155,7 @@ export interface SalesInvoiceItem {
   item_group?: string
   is_non_returnable?: boolean
   is_refrigerated_overdue?: boolean
+  dispensing_lot?: string;
 }
 
 export interface SalesInvoice {
