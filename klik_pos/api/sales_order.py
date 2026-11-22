@@ -1095,7 +1095,11 @@ def _get_dispense_dn_items_by_sales_order(order_names):
 		return {}
 
 	# Keep history available on sites without the custom Delivery Note Item field.
-	lot_column = "dni.custom_dispensing_lot" if frappe.db.has_column("Delivery Note Item", "custom_dispensing_lot") else "NULL"
+	lot_column = (
+		"dni.custom_dispensing_lot"
+		if frappe.db.has_column("Delivery Note Item", "custom_dispensing_lot")
+		else "NULL"
+	)
 	rows = frappe.db.sql(
 		f"""
 		SELECT
@@ -1546,6 +1550,7 @@ def get_pos_dispense_history(limit=100, start=0, search="", cashier_name=None, f
 				"Sales Order Item",
 				filters={"parent": ["in", order_names]},
 				fields=["parent", "name", "item_code", "item_name", "qty", "rate", "amount", "uom"],
+				order_by="parent asc, idx asc",
 			)
 			for row in item_rows:
 				dn_match = None
@@ -1690,6 +1695,8 @@ def create_dispense_return(sales_order_name, return_items):
 			return_rows_by_item_code.setdefault(item.item_code, []).append(item)
 
 		filtered_items = []
+		# make_sales_return returns an unsaved DN; child rows have no .name yet.
+		# Using target_item.name would put None in seen_rows and skip every item after the first.
 		seen_rows = set()
 		for row in return_items:
 			if isinstance(row, str):
@@ -1715,7 +1722,15 @@ def create_dispense_return(sales_order_name, return_items):
 					if not target_item:
 						target_item = candidates[0]
 
-			if not target_item or target_item.name in seen_rows:
+			if not target_item:
+				continue
+
+			row_key = (
+				getattr(target_item, "dn_detail", None)
+				or getattr(target_item, "so_detail", None)
+				or id(target_item)
+			)
+			if row_key in seen_rows:
 				continue
 
 			max_returnable = abs(flt(target_item.qty))
@@ -1729,7 +1744,7 @@ def create_dispense_return(sales_order_name, return_items):
 			if hasattr(target_item, "stock_qty") and flt(target_item.conversion_factor):
 				target_item.stock_qty = target_item.qty * flt(target_item.conversion_factor)
 			filtered_items.append(target_item)
-			seen_rows.add(target_item.name)
+			seen_rows.add(row_key)
 
 		if not filtered_items:
 			frappe.throw("Select at least one item to return.")

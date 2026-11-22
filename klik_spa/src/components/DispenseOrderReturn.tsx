@@ -56,14 +56,16 @@ export default function DispenseOrderReturn({
     if (!isOpen || !order) return;
 
     const items: DispenseReturnLine[] = (order.items || [])
-      .map((item) => {
+      .map((item, index) => {
         const qty = Number(item.qty ?? item.quantity ?? 0);
         const returnedQty = Number(item.returned_qty ?? 0);
         const availableQty = Number(
           item.available_qty ?? Math.max(0, qty - returnedQty)
         );
+        const baseKey = getDispenseLineKey(item);
         return {
-          line_key: getDispenseLineKey(item),
+          // Index suffix keeps duplicate item codes (e.g. two bottle charges) distinct.
+          line_key: baseKey ? `${baseKey}::${index}` : `row-${index}`,
           item_code: item.item_code || item.id,
           item_name: item.item_name || item.name,
           so_detail: item.so_detail,
