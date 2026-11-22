@@ -1095,7 +1095,11 @@ def _get_dispense_dn_items_by_sales_order(order_names):
 		return {}
 
 	# Keep history available on sites without the custom Delivery Note Item field.
-	lot_column = "dni.custom_dispensing_lot" if frappe.db.has_column("Delivery Note Item", "custom_dispensing_lot") else "NULL"
+	lot_column = (
+		"dni.custom_dispensing_lot"
+		if frappe.db.has_column("Delivery Note Item", "custom_dispensing_lot")
+		else "NULL"
+	)
 	rows = frappe.db.sql(
 		f"""
 		SELECT
